@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Alert,
   Animated,
@@ -118,6 +119,7 @@ function clampCropOffset(
 export default function ManagePhotosScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
+  const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const isAppActive = useAppIsActive();
   const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
@@ -145,6 +147,7 @@ export default function ManagePhotosScreen() {
   // Scroll tracking
   const scrollOffsetRef = useRef(0);
   const autoScrollFrameRef = useRef<number | null>(null);
+  const pendingAddSourceRef = useRef<'library' | 'camera' | null>(null);
 
   // Anchor: finger screen position + scroll at PanResponder grant
   const dragAnchorRef = useRef({ x: 0, y: 0 });
@@ -163,7 +166,6 @@ export default function ManagePhotosScreen() {
 
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [isSourceSheetVisible, setIsSourceSheetVisible] = useState(false);
-  const [pendingAddSource, setPendingAddSource] = useState<'library' | 'camera' | null>(null);
   const [cropAsset, setCropAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [cropScale, setCropScale] = useState(1);
   const [cropOffset, setCropOffset] = useState({ x: 0, y: 0 });
@@ -199,23 +201,6 @@ export default function ManagePhotosScreen() {
       setCropOffset({ x: 0, y: 0 });
     }
   }, [cropAsset]);
-
-  useEffect(() => {
-    if (isSourceSheetVisible || !pendingAddSource) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      if (pendingAddSource === 'library') {
-        void pickFromLibrary();
-      } else if (pendingAddSource === 'camera') {
-        void takeSelfie();
-      }
-      setPendingAddSource(null);
-    }, 180);
-
-    return () => clearTimeout(timer);
-  }, [isSourceSheetVisible, pendingAddSource]);
 
   const commitPhotos = (nextPhotos: Photo[]) => {
     photosRef.current = nextPhotos;
@@ -346,23 +331,28 @@ export default function ManagePhotosScreen() {
     }
 
     try {
+      console.log('[manage-photos] opening photo library');
       const hasAccess = await ensureMediaLibraryAccess();
       if (!hasAccess) {
+        console.log('[manage-photos] photo library access not granted');
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images',
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 1,
         selectionLimit: 1,
       });
 
       if (result.canceled || !result.assets.length) {
+        console.log('[manage-photos] photo library selection canceled');
         return;
       }
+      console.log('[manage-photos] photo selected from library');
       openCropEditor(result.assets[0]);
     } catch (error) {
+      console.error('[manage-photos] could not open photo library', error);
       toast.error('Could not add photo. Please try again.');
     }
   };
@@ -374,23 +364,28 @@ export default function ManagePhotosScreen() {
     }
 
     try {
+      console.log('[manage-photos] opening selfie camera');
       const hasAccess = await ensureCameraAccess();
       if (!hasAccess) {
+        console.log('[manage-photos] camera access not granted');
         return;
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: 'images',
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 1,
         cameraType: ImagePicker.CameraType.front,
       });
 
       if (result.canceled || !result.assets.length) {
+        console.log('[manage-photos] selfie capture canceled');
         return;
       }
+      console.log('[manage-photos] selfie captured');
       openCropEditor(result.assets[0]);
     } catch (error) {
+      console.error('[manage-photos] could not open camera', error);
       toast.error('Could not open the camera. Please try again.');
     }
   };
@@ -511,14 +506,40 @@ export default function ManagePhotosScreen() {
     [cropAsset, cropFrameHeight, cropFrameWidth],
   );
 
+  const runPendingAddSource = () => {
+    const nextSource = pendingAddSourceRef.current;
+    if (!nextSource) {
+      return;
+    }
+
+    pendingAddSourceRef.current = null;
+    console.log(`[manage-photos] source sheet dismissed, launching ${nextSource}`);
+
+    if (nextSource === 'library') {
+      void pickFromLibrary();
+    } else {
+      void takeSelfie();
+    }
+  };
+
   const requestLibraryPhoto = () => {
-    setPendingAddSource('library');
+    console.log('[manage-photos] photo from gallery tapped');
+    pendingAddSourceRef.current = 'library';
     setIsSourceSheetVisible(false);
+
+    if (Platform.OS !== 'ios') {
+      runPendingAddSource();
+    }
   };
 
   const requestSelfie = () => {
-    setPendingAddSource('camera');
+    console.log('[manage-photos] take a selfie tapped');
+    pendingAddSourceRef.current = 'camera';
     setIsSourceSheetVisible(false);
+
+    if (Platform.OS !== 'ios') {
+      runPendingAddSource();
+    }
   };
 
   const handleDeletePhoto = (id: string) => {
@@ -944,6 +965,7 @@ export default function ManagePhotosScreen() {
         visible={isSourceSheetVisible}
         transparent
         animationType="fade"
+        onDismiss={runPendingAddSource}
         onRequestClose={() => setIsSourceSheetVisible(false)}
       >
         <View style={styles.modalBackdrop}>
@@ -984,25 +1006,37 @@ export default function ManagePhotosScreen() {
       </Modal>
 
       <Modal visible={!!cropAsset} animationType="fade" presentationStyle="overFullScreen" onRequestClose={cancelCrop}>
-        <View style={styles.cropModal}>
+        <View
+          style={[
+            styles.cropModal,
+            {
+              paddingTop: Math.max(insets.top, spacing.md) + spacing.xs,
+              paddingBottom: Math.max(insets.bottom, spacing.lg),
+            },
+          ]}
+        >
           <View style={styles.cropHeader}>
-            <Pressable onPress={cancelCrop} disabled={isApplyingCrop} style={styles.cropHeaderButton}>
-              <Ionicons name="chevron-back" size={26} color={colors.textPrimary} />
-            </Pressable>
+            <View style={styles.cropHeaderSide}>
+              <Pressable onPress={cancelCrop} disabled={isApplyingCrop} style={styles.cropHeaderButton}>
+                <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
+              </Pressable>
+            </View>
             <AppText variant="h3" style={styles.cropTitle}>
               Crop photo
             </AppText>
-            <Pressable
-              onPress={() => {
-                void applyCrop();
-              }}
-              disabled={isApplyingCrop}
-              style={[styles.cropDoneButton, isApplyingCrop && styles.cropDoneButtonDisabled]}
-            >
-              <AppText style={styles.cropDoneButtonText}>
-                {isApplyingCrop ? 'Saving...' : 'Use'}
-              </AppText>
-            </Pressable>
+            <View style={[styles.cropHeaderSide, styles.cropHeaderSideRight]}>
+              <Pressable
+                onPress={() => {
+                  void applyCrop();
+                }}
+                disabled={isApplyingCrop}
+                style={[styles.cropDoneButton, isApplyingCrop && styles.cropDoneButtonDisabled]}
+              >
+                <AppText style={styles.cropDoneButtonText}>
+                  {isApplyingCrop ? 'Saving...' : 'Use'}
+                </AppText>
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.cropBody}>
@@ -1284,31 +1318,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xl,
   },
   cropHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
+    justifyContent: 'center',
+    minHeight: 56,
+    marginBottom: spacing.md,
+  },
+  cropHeaderSide: {
+    width: 92,
+  },
+  cropHeaderSideRight: {
+    alignItems: 'flex-end',
   },
   cropHeaderButton: {
     width: 44,
     height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   cropTitle: {
     color: colors.textPrimary,
     fontWeight: '700',
+    flex: 1,
+    textAlign: 'center',
   },
   cropDoneButton: {
-    minWidth: 72,
+    minWidth: 88,
     borderRadius: radius.full,
     backgroundColor: colors.accentPrimary,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: 11,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1324,12 +1367,14 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.lg,
+    gap: spacing.md,
   },
   cropHint: {
     color: colors.textSecondary,
     fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
+    maxWidth: 280,
   },
   cropFrame: {
     borderRadius: radius.xl,
@@ -1349,7 +1394,12 @@ const styles = StyleSheet.create({
   },
   cropControls: {
     gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
+    marginTop: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   cropZoomRow: {
     flexDirection: 'row',
