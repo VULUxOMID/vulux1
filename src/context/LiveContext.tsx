@@ -1,0 +1,1813 @@
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from 'react';
+import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+
+import { type LiveItem } from '../features/home/LiveSection';
+import {
+  type LiveRoom,
+  type LiveUser,
+  type ChatMessage,
+  type LiveState,
+  type BoostMultiplier,
+} from '../features/liveroom/types';
+import { liveSessionUser, createChatMessage } from '../features/liveroom/liveSession';
+import { createRoomFromLive } from '../features/liveroom/roomFactory';
+import { createBackendHttpClientFromEnv } from '../data/adapters/backend/httpClient';
+import { getBackendToken } from '../utils/backendToken';
+import { getBackendTokenTemplate } from '../config/backendToken';
+import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
+import { useRepositories } from '../data/provider';
+import { useWallet } from './WalletContext';
+import { toast } from '../components/Toast';
+import type { GlobalChatMessage, SocialUser } from '../data/contracts';
+import { spacetimeDb } from '../lib/spacetime';
+
+type ExtendedLiveItem = LiveItem & {
+  ownerUserId?: string;
+  inviteOnly?: boolean;
+  bannedUserIds?: string[];
+};
+
+type LiveContextType = {
+  activeLive: LiveItem | null;
+  isMinimized: boolean;
+  switchLiveRoom: (live: LiveItem) => boolean;
+  openLive: (live: LiveItem) => void;
+  minimizeLive: () => void;
+  closeLive: () => void;
+  restoreLive: () => void;
+
+  liveState: LiveState;
+  isLiveEnding: boolean;
+  liveEndDeadlineMs: number | null;
+  liveRoom: LiveRoom | null;
+  isHost: boolean;
+  currentUser: LiveUser;
+
+  enterLiveRoom: (room: LiveRoom, asHost?: boolean) => void;
+  exitLiveRoom: () => void;
+
+  sendMessage: (text: string) => void;
+  addSystemMessage: (
+    text: string,
+    systemType?: ChatMessage['systemType'],
+    extra?: Partial<ChatMessage>,
+  ) => void;
+
+  inviteToStream: (user: LiveUser) => void;
+  kickStreamer: (user: LiveUser) => void;
+  banUser: (user: LiveUser) => void;
+  unbanUser: (user: LiveUser) => void;
+  removeFromStream: (user: LiveUser) => void;
+
+  setInviteOnly: (value: boolean) => void;
+  setTitle: (title: string) => void;
+
+  boostLive: (multiplier: BoostMultiplier) => void;
+  resetBoost: () => void;
+
+  startLive: (title: string, inviteOnly: boolean) => boolean;
+
+  toggleMic: () => void;
+};
+
+const LiveContext = createContext<LiveContextType | undefined>(undefined);
+
+function readPositiveMsEnv(name: string, fallbackMs: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+const PRESENCE_HEARTBEAT_MS = readPositiveMsEnv(
+  'EXPO_PUBLIC_LIVE_PRESENCE_HEARTBEAT_MS',
+  10_000,
+);
+
+const LIVE_OVER_CONFIRMATION_MS = 1_500;
+const LIVE_OVER_AUTO_CLOSE_MS = 5_000;
+const LIVE_OVER_TITLE = 'Live is over';
+const LIVE_STATUS_POLL_INTERVAL_MS = 2_000;
+const FUEL_DRAIN_INTERVAL_MS = 1_000;
+
+function normalizeUsername(value: string | undefined, fallback: string): string {
+  const normalized = value?.trim().toLowerCase().replace(/\s+/g, '_');
+  if (normalized && normalized.length > 0) {
+    return normalized.slice(0, 40);
+  }
+  return fallback;
+}
+
+function toLiveUserFromSocial(user: SocialUser): LiveUser {
+  const fallbackHandle = normalizeUsername(user.id, 'user');
+  return {
+    id: user.id,
+    name: user.username || user.id,
+    username: normalizeUsername(user.username, fallbackHandle),
+    age: 0,
+    verified: false,
+    country: '',
+    bio: user.statusText || '',
+    avatarUrl: user.avatarUrl || '',
+  };
+}
+
+function toHostPayload(user: LiveUser) {
+  return {
+    id: user.id,
+    username: normalizeUsername(user.username || user.name, normalizeUsername(user.id, 'host')),
+    name: user.name,
+    age: user.age,
+    country: user.country,
+    bio: user.bio,
+    verified: user.verified,
+    avatar: user.avatarUrl,
+  };
+}
+
+function toLiveUserFromHost(
+  liveId: string,
+  index: number,
+  host: LiveItem['hosts'][number],
+): LiveUser {
+  const fallbackId = `host-${liveId}-${index}`;
+  const resolvedId = typeof host.id === 'string' && host.id.trim().length > 0 ? host.id : fallbackId;
+  const resolvedName = host.name?.trim() || 'Host';
+  const resolvedUsername = normalizeUsername(host.username || resolvedName, normalizeUsername(resolvedId, 'host'));
+
+  return {
+    id: resolvedId,
+    name: resolvedName,
+    username: resolvedUsername,
+    age: host.age,
+    verified: host.verified,
+    country: host.country,
+    bio: host.bio,
+    avatarUrl: host.avatar,
+  };
+}
+
+function areLiveUsersEquivalent(a: LiveUser, b: LiveUser): boolean {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.username === b.username &&
+    a.avatarUrl === b.avatarUrl &&
+    a.isMuted === b.isMuted
+  );
+}
+
+function areLiveUserListsEquivalent(a: LiveUser[], b: LiveUser[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (!areLiveUsersEquivalent(a[i], b[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isBannedFromLiveError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes('banned from live');
+}
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    return Number.isFinite(asNumber) ? asNumber : null;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+type LiveMutationEvent = {
+  eventType: string;
+  roomId: string;
+  payload: Record<string, unknown>;
+};
+
+function buildLiveMutationEvent(
+  path: string,
+  payload: Record<string, unknown>,
+  userId: string,
+): LiveMutationEvent | null {
+  const now = Date.now();
+  const liveId = asTrimmedString(payload.liveId);
+
+  if (path === '/live/start') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_start',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_start',
+        liveId,
+        ownerUserId: userId,
+        title: asTrimmedString(payload.title) ?? 'Live',
+        inviteOnly: payload.inviteOnly === true,
+        viewers: Math.max(0, Math.floor(asFiniteNumber(payload.viewers) ?? 1)),
+        hosts: Array.isArray(payload.hosts) ? payload.hosts : [],
+        bannedUserIds: Array.isArray(payload.bannedUserIds) ? payload.bannedUserIds : [],
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/update') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_update',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_update',
+        liveId,
+        title: asTrimmedString(payload.title) ?? undefined,
+        inviteOnly: typeof payload.inviteOnly === 'boolean' ? payload.inviteOnly : undefined,
+        viewers: asFiniteNumber(payload.viewers) ?? undefined,
+        hosts: Array.isArray(payload.hosts) ? payload.hosts : undefined,
+        bannedUserIds: Array.isArray(payload.bannedUserIds) ? payload.bannedUserIds : undefined,
+        updatedByUserId: userId,
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/presence') {
+    const activity = asTrimmedString(payload.activity) ?? 'none';
+    return {
+      eventType: 'live_presence',
+      roomId: liveId ? `live:${liveId}` : `presence:${userId}`,
+      payload: {
+        eventType: 'live_presence',
+        userId,
+        activity,
+        liveId: liveId ?? undefined,
+        liveTitle: asTrimmedString(payload.liveTitle) ?? undefined,
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/ban') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_ban',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_ban',
+        liveId,
+        targetUserId: asTrimmedString(payload.targetUserId) ?? '',
+        actorUserId: userId,
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/unban') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_unban',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_unban',
+        liveId,
+        targetUserId: asTrimmedString(payload.targetUserId) ?? '',
+        actorUserId: userId,
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/end') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_end',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_end',
+        liveId,
+        actorUserId: userId,
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/boost') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_boost',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_boost',
+        liveId,
+        actorUserId: userId,
+        amount: Math.max(1, Math.floor(asFiniteNumber(payload.amount) ?? 1)),
+        createdAt: now,
+      },
+    };
+  }
+
+  if (path === '/live/event/tick') {
+    if (!liveId) return null;
+    return {
+      eventType: 'live_event_tick',
+      roomId: `live:${liveId}`,
+      payload: {
+        eventType: 'live_event_tick',
+        liveId,
+        actorUserId: userId,
+        createdAt: now,
+      },
+    };
+  }
+
+  return null;
+}
+
+function normalizeLiveUserIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  value.forEach((entry) => {
+    if (typeof entry !== 'string') return;
+    const normalized = entry.trim();
+    if (!normalized) return;
+    seen.add(normalized);
+  });
+  return Array.from(seen);
+}
+
+function areLiveUserIdListsEquivalent(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const aSet = new Set(a);
+  if (aSet.size !== b.length) return false;
+  for (const userId of b) {
+    if (!aSet.has(userId)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areChatMessagesEquivalent(a: ChatMessage[], b: ChatMessage[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].type !== b[i].type ||
+      a[i].text !== b[i].text ||
+      a[i].timestamp !== b[i].timestamp ||
+      a[i].user?.id !== b[i].user?.id ||
+      a[i].systemType !== b[i].systemType
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function toLiveChatMessage(
+  message: GlobalChatMessage,
+  resolveUser: (senderId?: string, senderName?: string) => LiveUser | undefined,
+): ChatMessage {
+  const timestamp =
+    typeof message.createdAt === 'number' && Number.isFinite(message.createdAt)
+      ? message.createdAt
+      : Date.now();
+  const senderId = typeof message.senderId === 'string' ? message.senderId : undefined;
+  const senderName = typeof message.user === 'string' ? message.user : undefined;
+  const resolvedType = message.type === 'system' ? 'system' : 'user';
+
+  return {
+    id: message.id,
+    type: resolvedType,
+    user: resolvedType === 'user' ? resolveUser(senderId, senderName) : undefined,
+    text: message.text || '',
+    timestamp,
+  };
+}
+
+const defaultLiveValue: LiveContextType = {
+  activeLive: null,
+  isMinimized: false,
+  switchLiveRoom: () => false,
+  openLive: () => { },
+  minimizeLive: () => { },
+  closeLive: () => { },
+  restoreLive: () => { },
+
+  liveState: 'LIVE_CLOSED',
+  isLiveEnding: false,
+  liveEndDeadlineMs: null,
+  liveRoom: null,
+  isHost: false,
+  currentUser: liveSessionUser,
+
+  enterLiveRoom: () => { },
+  exitLiveRoom: () => { },
+
+  sendMessage: () => { },
+  addSystemMessage: () => { },
+
+  inviteToStream: () => { },
+  kickStreamer: () => { },
+  banUser: () => { },
+  unbanUser: () => { },
+  removeFromStream: () => { },
+
+  setInviteOnly: () => { },
+  setTitle: () => { },
+  boostLive: () => { },
+  resetBoost: () => { },
+  startLive: () => false,
+  toggleMic: () => { },
+};
+
+export function LiveProvider({ children }: { children: ReactNode }) {
+  const { userId, isLoaded: isAuthLoaded, getToken } = useSessionAuth();
+  const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
+  const { fuel, consumeFuel } = useWallet();
+  const fuelRef = useRef(fuel);
+  useEffect(() => { fuelRef.current = fuel; }, [fuel]);
+
+  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
+  const tokenTemplate = useMemo(() => getBackendTokenTemplate(), []);
+
+  const [activeLive, setActiveLive] = useState<LiveItem | null>(null);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [liveEndingState, setLiveEndingState] = useState<{
+    liveId: string;
+    deadlineMs: number;
+  } | null>(null);
+
+  const [liveState, setLiveState] = useState<LiveState>('LIVE_CLOSED');
+  const [liveRoom, setLiveRoom] = useState<LiveRoom | null>(null);
+  const [isHost, setIsHost] = useState(false);
+
+  const activeLiveRef = useRef<LiveItem | null>(null);
+  const liveRoomRef = useRef<LiveRoom | null>(null);
+  const liveEndDetectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveEndAutoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearLiveEndTimers = useCallback(() => {
+    if (liveEndDetectionTimerRef.current) {
+      clearTimeout(liveEndDetectionTimerRef.current);
+      liveEndDetectionTimerRef.current = null;
+    }
+    if (liveEndAutoCloseTimerRef.current) {
+      clearTimeout(liveEndAutoCloseTimerRef.current);
+      liveEndAutoCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const [userMediaState, setUserMediaState] = useState({ isMuted: false });
+
+  const queriesEnabled = isAuthLoaded && Boolean(userId);
+
+  const socialUsers = useMemo(
+    () => (queriesEnabled ? socialRepo.listUsers({ limit: 1500 }) : []),
+    [queriesEnabled, socialRepo],
+  );
+
+  const knownLiveUsers = useMemo(
+    () => (queriesEnabled ? liveRepo.listKnownLiveUsers({ limit: 800 }) : []),
+    [liveRepo, queriesEnabled],
+  );
+
+  const currentSocialUser = useMemo(
+    () => (userId ? socialUsers.find((item) => item.id === userId) : undefined),
+    [socialUsers, userId],
+  );
+
+  const baseCurrentUser = useMemo<LiveUser>(() => {
+    if (!userId) {
+      return liveSessionUser;
+    }
+
+    const knownUser = knownLiveUsers.find((item) => item.id === userId);
+    if (knownUser) {
+      return {
+        ...knownUser,
+        id: userId,
+      };
+    }
+
+    if (currentSocialUser) {
+      return toLiveUserFromSocial(currentSocialUser);
+    }
+
+    return {
+      id: userId,
+      name: 'You',
+      username: normalizeUsername(userId, 'you'),
+      age: 0,
+      verified: false,
+      country: '',
+      bio: '',
+      avatarUrl: '',
+    };
+  }, [currentSocialUser, knownLiveUsers, userId]);
+
+  const currentUserWithMedia = useMemo(
+    () => ({
+      ...baseCurrentUser,
+      ...userMediaState,
+    }),
+    [baseCurrentUser, userMediaState],
+  );
+
+  const knownUsersById = useMemo(() => {
+    const byId = new Map<string, LiveUser>();
+
+    knownLiveUsers.forEach((user) => {
+      byId.set(user.id, {
+        ...user,
+        username: normalizeUsername(user.username, normalizeUsername(user.id, 'user')),
+      });
+    });
+
+    socialUsers.forEach((socialUser) => {
+      if (!byId.has(socialUser.id)) {
+        byId.set(socialUser.id, toLiveUserFromSocial(socialUser));
+      }
+    });
+
+    byId.set(currentUserWithMedia.id, currentUserWithMedia);
+    return byId;
+  }, [currentUserWithMedia, knownLiveUsers, socialUsers]);
+
+  const resolveLiveUser = useCallback(
+    (targetUserId?: string, fallbackName?: string): LiveUser | undefined => {
+      if (!targetUserId || targetUserId.trim().length === 0) {
+        return undefined;
+      }
+
+      if (targetUserId === currentUserWithMedia.id) {
+        return currentUserWithMedia;
+      }
+
+      const known = knownUsersById.get(targetUserId);
+      if (known) {
+        return known;
+      }
+
+      const resolvedName = fallbackName?.trim() || targetUserId;
+      return {
+        id: targetUserId,
+        name: resolvedName,
+        username: normalizeUsername(resolvedName, normalizeUsername(targetUserId, 'user')),
+        age: 0,
+        verified: false,
+        country: '',
+        bio: '',
+        avatarUrl: '',
+      };
+    },
+    [currentUserWithMedia, knownUsersById],
+  );
+
+  const selectedLiveId = liveRoom?.id ?? activeLive?.id;
+
+  useEffect(() => {
+    activeLiveRef.current = activeLive;
+  }, [activeLive]);
+
+  useEffect(() => {
+    liveRoomRef.current = liveRoom;
+  }, [liveRoom]);
+
+  useEffect(() => {
+    return () => {
+      clearLiveEndTimers();
+    };
+  }, [clearLiveEndTimers]);
+
+  const snapshotLive = useMemo<ExtendedLiveItem | undefined>(() => {
+    if (!queriesEnabled || !selectedLiveId) return undefined;
+    return liveRepo.findLiveById(selectedLiveId) as ExtendedLiveItem | undefined;
+  }, [liveRepo, queriesEnabled, selectedLiveId]);
+
+  const snapshotPresence = useMemo(
+    () =>
+      queriesEnabled && selectedLiveId
+        ? liveRepo.listPresence({ liveId: selectedLiveId, limit: 700 })
+        : [],
+    [liveRepo, queriesEnabled, selectedLiveId],
+  );
+
+  const snapshotRoomMessages = useMemo(
+    () =>
+      queriesEnabled && selectedLiveId
+        ? messagesRepo.listGlobalMessages({ roomId: selectedLiveId, limit: 700 })
+        : [],
+    [messagesRepo, queriesEnabled, selectedLiveId],
+  );
+
+  const forceCloseLiveForBan = useCallback(() => {
+    clearLiveEndTimers();
+    setLiveEndingState(null);
+    setActiveLive(null);
+    setIsMinimized(false);
+    setLiveState('LIVE_CLOSED');
+    setLiveRoom(null);
+    setIsHost(false);
+    requestBackendRefresh({
+      scopes: ['live', 'global_messages'],
+      source: 'manual',
+      reason: 'live_banned_user_forced_exit',
+    });
+  }, [clearLiveEndTimers]);
+
+  const postLiveMutation = useCallback(
+    async (path: string, payload: Record<string, unknown>): Promise<boolean> => {
+      if (!isAuthLoaded || !userId) return false;
+
+      const liveEvent = buildLiveMutationEvent(path, payload, userId);
+      if (liveEvent) {
+        try {
+          await (spacetimeDb.reducers as any).sendGlobalMessage({
+            id: `${liveEvent.eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            roomId: liveEvent.roomId,
+            item: JSON.stringify(liveEvent.payload),
+          });
+          return true;
+        } catch (error) {
+          if (__DEV__) {
+            console.warn(`[live] Spacetime live mutation failed for ${path}`, error);
+          }
+        }
+      }
+
+      if (!backendClient) return false;
+      try {
+        const token = await getBackendToken(getToken, tokenTemplate);
+        if (!token) return false;
+        backendClient.setAuth(token);
+        await backendClient.post(path, payload);
+        return true;
+      } catch (error) {
+        if (isBannedFromLiveError(error)) {
+          forceCloseLiveForBan();
+        }
+        if (__DEV__) {
+          console.warn(`[live] Failed to sync ${path}`, error);
+        }
+        return false;
+      }
+    },
+    [backendClient, forceCloseLiveForBan, getToken, isAuthLoaded, tokenTemplate, userId],
+  );
+
+  const syncLivePresence = useCallback(
+    (activity: 'hosting' | 'watching' | 'none', liveId?: string, liveTitle?: string) => {
+      const normalizedLiveTitle =
+        typeof liveTitle === 'string' && liveTitle.trim().length > 0
+          ? liveTitle.trim().slice(0, 80)
+          : undefined;
+      void postLiveMutation('/live/presence', {
+        activity,
+        liveId,
+        liveTitle: activity === 'hosting' ? normalizedLiveTitle : undefined,
+      });
+    },
+    [postLiveMutation],
+  );
+
+  const syncLiveHosts = useCallback(
+    (room: LiveRoom) => {
+      void postLiveMutation('/live/update', {
+        liveId: room.id,
+        title: room.title,
+        inviteOnly: room.inviteOnly,
+        viewers: Math.max(0, room.watchers.length + room.streamers.length),
+        hosts: room.streamers.map((streamer) => toHostPayload(streamer)),
+        bannedUserIds: room.bannedUserIds,
+      }).finally(() => {
+        requestBackendRefresh({
+          scopes: ['live'],
+          source: 'manual',
+          reason: 'live_hosts_updated',
+        });
+      });
+    },
+    [postLiveMutation],
+  );
+
+  useEffect(() => {
+    if (!liveRoom) return;
+    const roomId = liveRoom.id;
+    const isCurrentLiveEnding = liveEndingState?.liveId === roomId;
+    const hasSnapshotWithoutHosts =
+      Boolean(snapshotLive) &&
+      Array.isArray(snapshotLive?.hosts) &&
+      snapshotLive.hosts.length === 0;
+    const shouldShowLiveOverState = isCurrentLiveEnding || hasSnapshotWithoutHosts;
+
+    const nextStreamersBase =
+      shouldShowLiveOverState
+        ? []
+        : snapshotLive?.hosts && snapshotLive.hosts.length > 0
+          ? snapshotLive.hosts.map((host, index) => toLiveUserFromHost(roomId, index, host))
+          : liveRoom.streamers;
+
+    const nextStreamers = nextStreamersBase.map((streamer) =>
+      streamer.id === currentUserWithMedia.id
+        ? {
+          ...streamer,
+          ...currentUserWithMedia,
+        }
+        : streamer,
+    );
+
+    const snapshotBannedUserIds =
+      snapshotLive && Array.isArray(snapshotLive.bannedUserIds)
+        ? normalizeLiveUserIds(snapshotLive.bannedUserIds)
+        : undefined;
+
+    const hostUserIds = new Set(nextStreamers.map((streamer) => streamer.id));
+    const bannedUserIdSet = new Set(snapshotBannedUserIds ?? liveRoom.bannedUserIds ?? []);
+
+    const watchersById = new Map<string, LiveUser>();
+    snapshotPresence.forEach((presenceEntry) => {
+      if (presenceEntry.activity !== 'watching') return;
+      if (presenceEntry.liveId !== roomId) return;
+      if (hostUserIds.has(presenceEntry.userId)) return;
+      if (bannedUserIdSet.has(presenceEntry.userId)) return;
+
+      const resolvedUser = resolveLiveUser(presenceEntry.userId);
+      if (!resolvedUser) return;
+      watchersById.set(resolvedUser.id, resolvedUser);
+    });
+
+    const nextWatchers = shouldShowLiveOverState ? [] : Array.from(watchersById.values());
+
+    const backendMessages = snapshotRoomMessages
+      .map((message) =>
+        toLiveChatMessage(message, (senderId, senderName) =>
+          resolveLiveUser(senderId, senderName),
+        ),
+      )
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    setLiveRoom((prev) => {
+      if (!prev || prev.id !== roomId) return prev;
+
+      const localSystemMessages = prev.chatMessages.filter((message) => message.type === 'system');
+      const mergedMessageMap = new Map<string, ChatMessage>();
+      localSystemMessages.forEach((message) => {
+        mergedMessageMap.set(message.id, message);
+      });
+      backendMessages.forEach((message) => {
+        mergedMessageMap.set(message.id, message);
+      });
+      const nextChatMessages = Array.from(mergedMessageMap.values()).sort(
+        (a, b) => a.timestamp - b.timestamp,
+      );
+
+      const nextTitle = shouldShowLiveOverState
+        ? LIVE_OVER_TITLE
+        : typeof snapshotLive?.title === 'string'
+          ? snapshotLive.title
+          : prev.title;
+      const nextInviteOnly =
+        typeof snapshotLive?.inviteOnly === 'boolean' ? snapshotLive.inviteOnly : prev.inviteOnly;
+      const nextHostUser = shouldShowLiveOverState ? prev.hostUser : nextStreamers[0] ?? prev.hostUser;
+      const nextBannedUserIds = snapshotBannedUserIds ?? normalizeLiveUserIds(prev.bannedUserIds);
+      const previousBannedUsersById = new Map((prev.bannedUsers || []).map((user) => [user.id, user]));
+      const nextBannedUsers = nextBannedUserIds
+        .map((bannedUserId) => previousBannedUsersById.get(bannedUserId) ?? resolveLiveUser(bannedUserId))
+        .filter((entry): entry is LiveUser => Boolean(entry));
+
+      const hasChanges =
+        prev.title !== nextTitle ||
+        prev.inviteOnly !== nextInviteOnly ||
+        !areLiveUsersEquivalent(prev.hostUser, nextHostUser) ||
+        !areLiveUserListsEquivalent(prev.streamers, nextStreamers) ||
+        !areLiveUserListsEquivalent(prev.watchers, nextWatchers) ||
+        !areLiveUserIdListsEquivalent(prev.bannedUserIds || [], nextBannedUserIds) ||
+        !areChatMessagesEquivalent(prev.chatMessages, nextChatMessages);
+
+      if (!hasChanges) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        title: nextTitle,
+        inviteOnly: nextInviteOnly,
+        hostUser: nextHostUser,
+        streamers: nextStreamers,
+        watchers: nextWatchers,
+        bannedUserIds: nextBannedUserIds,
+        bannedUsers: nextBannedUsers,
+        chatMessages: nextChatMessages,
+      };
+    });
+
+    setActiveLive((prev) => {
+      if (!prev || prev.id !== roomId) return prev;
+
+      const nextTitle = shouldShowLiveOverState
+        ? LIVE_OVER_TITLE
+        : typeof snapshotLive?.title === 'string'
+          ? snapshotLive.title
+          : prev.title;
+      const nextHosts = shouldShowLiveOverState
+        ? []
+        : nextStreamers.map((streamer) => ({
+          id: streamer.id,
+          username: streamer.username,
+          name: streamer.name,
+          age: streamer.age,
+          country: streamer.country,
+          bio: streamer.bio,
+          verified: streamer.verified,
+          avatar: streamer.avatarUrl,
+        }));
+      const nextViewers = shouldShowLiveOverState ? 0 : nextWatchers.length + nextStreamers.length;
+      const nextImages = shouldShowLiveOverState
+        ? []
+        : nextStreamers.map((streamer) => streamer.avatarUrl).filter(Boolean);
+
+      const hasChanges =
+        prev.title !== nextTitle ||
+        prev.viewers !== nextViewers ||
+        prev.hosts.length !== nextHosts.length ||
+        prev.images.length !== nextImages.length;
+
+      if (!hasChanges) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        title: nextTitle,
+        viewers: nextViewers,
+        hosts: nextHosts,
+        images: nextImages,
+      };
+    });
+  }, [
+    currentUserWithMedia,
+    liveRoom,
+    resolveLiveUser,
+    snapshotLive,
+    snapshotPresence,
+    snapshotRoomMessages,
+    liveEndingState?.liveId,
+  ]);
+
+  useEffect(() => {
+    if (!userId || !liveRoom) return;
+    const snapshotOwnerId = snapshotLive?.ownerUserId;
+    const hostUserIdSet = new Set(
+      (snapshotLive?.hosts || [])
+        .map((host) => (typeof host.id === 'string' && host.id.trim().length > 0 ? host.id : null))
+        .filter((value): value is string => Boolean(value)),
+    );
+    const shouldBeHost =
+      isHost || snapshotOwnerId === userId || hostUserIdSet.has(userId) || liveRoom.hostUser.id === userId;
+    if (shouldBeHost !== isHost) {
+      setIsHost(shouldBeHost);
+    }
+  }, [isHost, liveRoom, snapshotLive, userId]);
+
+  useEffect(() => {
+    const currentLiveId = liveRoom?.id ?? activeLive?.id;
+    const hasSnapshotLive = Boolean(snapshotLive);
+    const hasSnapshotHosts = Array.isArray(snapshotLive?.hosts) && snapshotLive.hosts.length > 0;
+    const shouldCheckLiveOver = !hasSnapshotLive || !hasSnapshotHosts;
+    const isAlreadyEnding = Boolean(currentLiveId && liveEndingState?.liveId === currentLiveId);
+
+    if (!queriesEnabled || !currentLiveId || liveState === 'LIVE_CLOSED' || isHost || !shouldCheckLiveOver) {
+      if (liveEndDetectionTimerRef.current) {
+        clearTimeout(liveEndDetectionTimerRef.current);
+        liveEndDetectionTimerRef.current = null;
+      }
+      if (!shouldCheckLiveOver && isAlreadyEnding) {
+        clearLiveEndTimers();
+        setLiveEndingState(null);
+      }
+      return;
+    }
+
+    if (isAlreadyEnding) return;
+
+    if (liveEndDetectionTimerRef.current) {
+      clearTimeout(liveEndDetectionTimerRef.current);
+      liveEndDetectionTimerRef.current = null;
+    }
+
+    liveEndDetectionTimerRef.current = setTimeout(() => {
+      const latestLiveId = liveRoomRef.current?.id ?? activeLiveRef.current?.id;
+      if (!latestLiveId || latestLiveId !== currentLiveId) return;
+
+      setIsHost(false);
+      setLiveEndingState({
+        liveId: currentLiveId,
+        deadlineMs: Date.now() + LIVE_OVER_AUTO_CLOSE_MS,
+      });
+    }, LIVE_OVER_CONFIRMATION_MS);
+
+    return () => {
+      if (liveEndDetectionTimerRef.current) {
+        clearTimeout(liveEndDetectionTimerRef.current);
+        liveEndDetectionTimerRef.current = null;
+      }
+    };
+  }, [
+    activeLive?.id,
+    clearLiveEndTimers,
+    isHost,
+    liveEndingState?.liveId,
+    liveRoom?.id,
+    liveState,
+    queriesEnabled,
+    snapshotLive,
+  ]);
+
+  useEffect(() => {
+    if (!isAuthLoaded || !userId) return;
+    if (liveState === 'LIVE_CLOSED') return;
+
+    const currentLiveId = liveRoom?.id ?? activeLive?.id;
+    if (!currentLiveId) return;
+    const currentLiveTitle = liveRoom?.title ?? activeLive?.title;
+
+    const currentActivity: 'hosting' | 'watching' = isHost ? 'hosting' : 'watching';
+    syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
+    const heartbeat = setInterval(() => {
+      syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
+    }, PRESENCE_HEARTBEAT_MS);
+
+    return () => {
+      clearInterval(heartbeat);
+    };
+  }, [
+    activeLive?.id,
+    activeLive?.title,
+    isAuthLoaded,
+    isHost,
+    liveRoom?.id,
+    liveRoom?.title,
+    liveState,
+    syncLivePresence,
+    userId,
+  ]);
+
+  useEffect(() => {
+    if (!queriesEnabled) return;
+    if (liveState === 'LIVE_CLOSED') return;
+
+    const refreshLiveSnapshot = () => {
+      requestBackendRefresh({
+        scopes: ['live'],
+        source: 'manual',
+        reason: 'live_status_poll',
+      });
+    };
+
+    refreshLiveSnapshot();
+    const pollInterval = setInterval(refreshLiveSnapshot, LIVE_STATUS_POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(pollInterval);
+    };
+  }, [liveState, queriesEnabled]);
+
+  useEffect(() => {
+    if (!queriesEnabled) return;
+    if (liveState === 'LIVE_CLOSED') return;
+
+    const currentLiveId = liveRoom?.id ?? activeLive?.id;
+    if (!currentLiveId) return;
+
+    const tickLiveEvent = () => {
+      void postLiveMutation('/live/event/tick', { liveId: currentLiveId });
+    };
+
+    tickLiveEvent();
+    const interval = setInterval(tickLiveEvent, 60_000);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [activeLive?.id, liveRoom?.id, liveState, postLiveMutation, queriesEnabled]);
+
+  const closeLive = useCallback(() => {
+    const closingLiveId = liveRoom?.id ?? activeLive?.id;
+    const closingAsHost = isHost;
+
+    if (closingAsHost && closingLiveId) {
+      void postLiveMutation('/live/end', { liveId: closingLiveId });
+    }
+
+    clearLiveEndTimers();
+    setLiveEndingState(null);
+    setActiveLive(null);
+    setIsMinimized(false);
+    setLiveState('LIVE_CLOSED');
+    setLiveRoom(null);
+    setIsHost(false);
+
+    syncLivePresence('none');
+    requestBackendRefresh({
+      scopes: ['live', 'global_messages'],
+      source: 'manual',
+      reason: 'live_closed',
+    });
+  }, [activeLive?.id, clearLiveEndTimers, isHost, liveRoom?.id, postLiveMutation, syncLivePresence]);
+
+  const closeLiveRef = useRef(closeLive);
+  useEffect(() => { closeLiveRef.current = closeLive; }, [closeLive]);
+
+  useEffect(() => {
+    if (liveState === 'LIVE_CLOSED') return;
+
+    if (fuelRef.current <= 0) {
+      toast.warning('You are out of fuel. Your live session has ended.');
+      closeLiveRef.current();
+      return;
+    }
+
+    const drainInterval = setInterval(() => {
+      const consumed = consumeFuel(1);
+      if (!consumed) {
+        closeLiveRef.current();
+      }
+    }, FUEL_DRAIN_INTERVAL_MS);
+
+    return () => {
+      clearInterval(drainInterval);
+    };
+  }, [consumeFuel, liveState]);
+
+  const switchLiveRoom = useCallback(
+    (live: LiveItem): boolean => {
+      const asExtendedLive = live as ExtendedLiveItem;
+      const normalizedBannedUserIds = normalizeLiveUserIds(asExtendedLive.bannedUserIds);
+      if (userId && normalizedBannedUserIds.includes(userId)) {
+        toast.warning("You've been banned from this live.");
+        requestBackendRefresh({
+          scopes: ['live'],
+          source: 'manual',
+          reason: 'live_open_blocked_banned_user',
+        });
+        return false;
+      }
+      const hostUserIds = new Set(
+        (live.hosts || [])
+          .map((host) => (typeof host.id === 'string' && host.id.trim().length > 0 ? host.id : null))
+          .filter((value): value is string => Boolean(value)),
+      );
+      const nextIsHost = Boolean(
+        userId && (asExtendedLive.ownerUserId === userId || hostUserIds.has(userId)),
+      );
+
+      if (nextIsHost && fuel <= 0) {
+        toast.warning('You are out of fuel. Refuel before joining a live as a host.');
+        return false;
+      }
+
+      const nextRoom = {
+        ...createRoomFromLive(live, {
+          inviteOnly: asExtendedLive.inviteOnly === true,
+          initialBoostRank: null,
+          initialBoosts: 0,
+          hostUserOverride: nextIsHost ? currentUserWithMedia : undefined,
+        }),
+        bannedUserIds: normalizedBannedUserIds,
+        bannedUsers: [],
+      };
+
+      clearLiveEndTimers();
+      setLiveEndingState(null);
+      setActiveLive(live);
+      setIsMinimized(false);
+      setLiveState('LIVE_FULL');
+      setLiveRoom(nextRoom);
+      setIsHost(nextIsHost);
+      syncLivePresence(nextIsHost ? 'hosting' : 'watching', live.id, live.title);
+      requestBackendRefresh({
+        scopes: ['live', 'global_messages'],
+        source: 'manual',
+        reason: 'live_room_opened',
+      });
+      return true;
+    },
+    [clearLiveEndTimers, currentUserWithMedia, fuel, syncLivePresence, userId],
+  );
+
+  const openLive = useCallback(
+    (live: LiveItem) => {
+      switchLiveRoom(live);
+    },
+    [switchLiveRoom],
+  );
+
+  const minimizeLive = useCallback(() => {
+    if (activeLive) {
+      setIsMinimized(true);
+      setLiveState('LIVE_MINIMIZED');
+    }
+  }, [activeLive]);
+
+  useEffect(() => {
+    if (!liveEndingState) return;
+
+    const delayMs = Math.max(0, liveEndingState.deadlineMs - Date.now());
+    if (liveEndAutoCloseTimerRef.current) {
+      clearTimeout(liveEndAutoCloseTimerRef.current);
+    }
+
+    liveEndAutoCloseTimerRef.current = setTimeout(() => {
+      const currentLiveId = liveRoomRef.current?.id ?? activeLiveRef.current?.id;
+      if (currentLiveId !== liveEndingState.liveId) {
+        setLiveEndingState((current) =>
+          current?.liveId === liveEndingState.liveId ? null : current,
+        );
+        return;
+      }
+      closeLive();
+    }, delayMs);
+
+    return () => {
+      if (liveEndAutoCloseTimerRef.current) {
+        clearTimeout(liveEndAutoCloseTimerRef.current);
+        liveEndAutoCloseTimerRef.current = null;
+      }
+    };
+  }, [closeLive, liveEndingState]);
+
+  useEffect(() => {
+    if (!userId || !liveRoom) return;
+    const bannedUserIds = normalizeLiveUserIds(snapshotLive?.bannedUserIds);
+    if (!bannedUserIds.includes(userId)) return;
+    closeLive();
+  }, [closeLive, liveRoom, snapshotLive?.bannedUserIds, userId]);
+
+  const restoreLive = useCallback(() => {
+    if (activeLive) {
+      setIsMinimized(false);
+      if (isHost && fuel <= 0) {
+        toast.warning('You are out of fuel. Refuel before joining a live.');
+        return;
+      }
+
+      setLiveState('LIVE_FULL');
+    }
+  }, [activeLive, isHost, fuel]);
+
+  const enterLiveRoom = useCallback(
+    (room: LiveRoom, asHost = false) => {
+      if (asHost && fuel <= 0) {
+        toast.warning('You are out of fuel. Refuel before joining a live.');
+        return;
+      }
+
+      clearLiveEndTimers();
+      setLiveEndingState(null);
+      setLiveRoom(room);
+      setIsHost(asHost);
+      setLiveState('LIVE_FULL');
+
+      const nextActiveLive: ExtendedLiveItem = {
+        id: room.id,
+        title: room.title,
+        viewers: room.watchers.length + room.streamers.length,
+        inviteOnly: room.inviteOnly,
+        ownerUserId: asHost ? currentUserWithMedia.id : undefined,
+        images: room.streamers.map((streamer) => streamer.avatarUrl),
+        hosts: room.streamers.map((streamer) => ({
+          id: streamer.id,
+          username: streamer.username,
+          name: streamer.name,
+          age: streamer.age,
+          country: streamer.country,
+          bio: streamer.bio,
+          verified: streamer.verified,
+          avatar: streamer.avatarUrl,
+        })),
+      };
+      setActiveLive(nextActiveLive);
+
+      setIsMinimized(false);
+      syncLivePresence(asHost ? 'hosting' : 'watching', room.id, room.title);
+
+      if (asHost) {
+        void postLiveMutation('/live/start', {
+          liveId: room.id,
+          title: room.title,
+          inviteOnly: room.inviteOnly,
+          viewers: Math.max(0, room.watchers.length + room.streamers.length),
+          hosts: room.streamers.map((streamer) => toHostPayload(streamer)),
+        }).finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_started',
+          });
+        });
+      }
+    },
+    [clearLiveEndTimers, currentUserWithMedia.id, fuel, postLiveMutation, syncLivePresence],
+  );
+
+  const exitLiveRoom = useCallback(() => {
+    closeLive();
+  }, [closeLive]);
+
+  const sendMessage = useCallback(
+    (text: string) => {
+      const normalizedText = text.trim();
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!normalizedText || !currentLiveId) return;
+
+      const message = createChatMessage(normalizedText, currentUserWithMedia);
+      setLiveRoom((prev) => {
+        if (!prev || prev.id !== currentLiveId) return prev;
+        if (prev.chatMessages.some((entry) => entry.id === message.id)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          chatMessages: [...prev.chatMessages, message],
+        };
+      });
+
+      void messagesRepo
+        .sendGlobalMessage({
+          clientMessageId: message.id,
+          roomId: currentLiveId,
+          message: {
+            id: message.id,
+            user: currentUserWithMedia.name,
+            senderId: currentUserWithMedia.id,
+            text: normalizedText,
+            type: 'user',
+            createdAt: message.timestamp,
+            roomId: currentLiveId,
+          },
+        })
+        .then(() => {
+          requestBackendRefresh({
+            scopes: ['global_messages'],
+            source: 'manual',
+            reason: 'live_message_sent',
+          });
+        })
+        .catch((error) => {
+          if (isBannedFromLiveError(error)) {
+            forceCloseLiveForBan();
+            return;
+          }
+          if (__DEV__) {
+            console.warn('[live] Failed to send live chat message', error);
+          }
+        });
+    },
+    [activeLive?.id, currentUserWithMedia, forceCloseLiveForBan, liveRoom?.id, messagesRepo],
+  );
+
+  const addSystemMessage = useCallback(
+    (
+      text: string,
+      systemType?: ChatMessage['systemType'],
+      extra?: Partial<ChatMessage>,
+    ) => {
+      const message = createChatMessage(text, undefined, 'system', systemType, extra);
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          chatMessages: [...prev.chatMessages, message],
+        };
+      });
+    },
+    [],
+  );
+
+  const inviteToStream = useCallback(
+    (user: LiveUser) => {
+      if (!isHost) return;
+
+      let nextRoomSnapshot: LiveRoom | null = null;
+
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+        if (prev.streamers.some((streamer) => streamer.id === user.id)) {
+          return prev;
+        }
+
+        const newWatchers = prev.watchers.filter((watcher) => watcher.id !== user.id);
+        const newStreamers = [...prev.streamers, user];
+
+        nextRoomSnapshot = {
+          ...prev,
+          watchers: newWatchers,
+          streamers: newStreamers,
+          hostUser: newStreamers[0] ?? prev.hostUser,
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(`${user.name} joined as a co-host.`, undefined, 'system', 'join'),
+          ],
+        };
+        return nextRoomSnapshot;
+      });
+
+      setActiveLive((prev) => {
+        if (!prev) return prev;
+        if (prev.hosts.some((host) => host.id === user.id)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          hosts: [
+            ...prev.hosts,
+            {
+              id: user.id,
+              username: user.username,
+              name: user.name,
+              age: user.age,
+              country: user.country,
+              bio: user.bio,
+              verified: user.verified,
+              avatar: user.avatarUrl,
+            },
+          ],
+        };
+      });
+
+      if (nextRoomSnapshot) {
+        syncLiveHosts(nextRoomSnapshot);
+      }
+    },
+    [isHost, syncLiveHosts],
+  );
+
+  const kickStreamer = useCallback(
+    (user: LiveUser) => {
+      if (!isHost) return;
+
+      let nextRoomSnapshot: LiveRoom | null = null;
+
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+        if (user.id === prev.hostUser.id) return prev;
+
+        const newStreamers = prev.streamers.filter((streamer) => streamer.id !== user.id);
+        const alreadyWatching = prev.watchers.some((watcher) => watcher.id === user.id);
+        const newWatchers = alreadyWatching ? prev.watchers : [...prev.watchers, user];
+
+        nextRoomSnapshot = {
+          ...prev,
+          streamers: newStreamers,
+          watchers: newWatchers,
+          hostUser: newStreamers[0] ?? prev.hostUser,
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(
+              `${user.name} was removed from streaming.`,
+              undefined,
+              'system',
+              'kick',
+            ),
+          ],
+        };
+
+        return nextRoomSnapshot;
+      });
+
+      setActiveLive((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          hosts: prev.hosts.filter((host) => host.id !== user.id),
+        };
+      });
+
+      if (nextRoomSnapshot) {
+        syncLiveHosts(nextRoomSnapshot);
+      }
+    },
+    [isHost, syncLiveHosts],
+  );
+
+  const banUser = useCallback(
+    (user: LiveUser) => {
+      if (!isHost) return;
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+
+      let nextRoomSnapshot: LiveRoom | null = null;
+
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+        if (user.id === prev.hostUser.id) return prev;
+
+        const hasBannedId = prev.bannedUserIds.includes(user.id);
+        const hasBannedUser = (prev.bannedUsers || []).some((item) => item.id === user.id);
+        const newStreamers = prev.streamers.filter((streamer) => streamer.id !== user.id);
+
+        nextRoomSnapshot = {
+          ...prev,
+          streamers: newStreamers,
+          watchers: prev.watchers.filter((watcher) => watcher.id !== user.id),
+          hostUser: newStreamers[0] ?? prev.hostUser,
+          bannedUserIds: hasBannedId ? prev.bannedUserIds : [...prev.bannedUserIds, user.id],
+          bannedUsers: hasBannedUser ? prev.bannedUsers : [...(prev.bannedUsers || []), user],
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(`${user.name} was banned from the live.`, undefined, 'system', 'ban'),
+          ],
+        };
+
+        return nextRoomSnapshot;
+      });
+
+      setActiveLive((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          hosts: prev.hosts.filter((host) => host.id !== user.id),
+        };
+      });
+
+      if (nextRoomSnapshot) {
+        if (currentLiveId) {
+          void postLiveMutation('/live/ban', {
+            liveId: currentLiveId,
+            targetUserId: user.id,
+          })
+            .then((synced) => {
+              if (!synced) {
+                syncLiveHosts(nextRoomSnapshot as LiveRoom);
+              }
+            })
+            .finally(() => {
+              requestBackendRefresh({
+                scopes: ['live'],
+                source: 'manual',
+                reason: 'live_user_banned',
+              });
+            });
+        } else {
+          syncLiveHosts(nextRoomSnapshot);
+        }
+      }
+    },
+    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation, syncLiveHosts],
+  );
+
+  const unbanUser = useCallback(
+    (user: LiveUser) => {
+      if (!isHost) return;
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+
+      let nextRoomSnapshot: LiveRoom | null = null;
+
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+        if (!prev.bannedUserIds.includes(user.id)) return prev;
+
+        nextRoomSnapshot = {
+          ...prev,
+          bannedUserIds: prev.bannedUserIds.filter((userId) => userId !== user.id),
+          bannedUsers: (prev.bannedUsers || []).filter((entry) => entry.id !== user.id),
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(`${user.name} was unbanned.`, undefined, 'system'),
+          ],
+        };
+
+        return nextRoomSnapshot;
+      });
+
+      if (nextRoomSnapshot) {
+        if (currentLiveId) {
+          void postLiveMutation('/live/unban', {
+            liveId: currentLiveId,
+            targetUserId: user.id,
+          })
+            .then((synced) => {
+              if (!synced) {
+                syncLiveHosts(nextRoomSnapshot as LiveRoom);
+              }
+            })
+            .finally(() => {
+              requestBackendRefresh({
+                scopes: ['live'],
+                source: 'manual',
+                reason: 'live_user_unbanned',
+              });
+            });
+        } else {
+          syncLiveHosts(nextRoomSnapshot);
+        }
+      }
+    },
+    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation, syncLiveHosts],
+  );
+
+  const removeFromStream = useCallback(
+    (user: LiveUser) => {
+      let nextRoomSnapshot: LiveRoom | null = null;
+
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+
+        const newStreamers = prev.streamers.filter((streamer) => streamer.id !== user.id);
+        const alreadyWatching = prev.watchers.some((watcher) => watcher.id === user.id);
+        const newWatchers = alreadyWatching ? prev.watchers : [...prev.watchers, user];
+
+        nextRoomSnapshot = {
+          ...prev,
+          streamers: newStreamers,
+          watchers: newWatchers,
+          hostUser: newStreamers[0] ?? prev.hostUser,
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(`${user.name} left the stream.`, undefined, 'system', 'leave'),
+          ],
+        };
+
+        return nextRoomSnapshot;
+      });
+
+      setActiveLive((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          hosts: prev.hosts.filter((host) => host.id !== user.id),
+        };
+      });
+
+      if (nextRoomSnapshot) {
+        syncLiveHosts(nextRoomSnapshot);
+      }
+    },
+    [syncLiveHosts],
+  );
+
+  const setInviteOnly = useCallback(
+    (value: boolean) => {
+      if (!isHost) return;
+
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      setLiveRoom((prev) => (prev ? { ...prev, inviteOnly: value } : null));
+      if (currentLiveId) {
+        void postLiveMutation('/live/update', {
+          liveId: currentLiveId,
+          inviteOnly: value,
+        }).finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_updated',
+          });
+        });
+      }
+    },
+    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation],
+  );
+
+  const setTitle = useCallback(
+    (title: string) => {
+      if (!isHost) return;
+
+      const normalizedTitle = title.trim().slice(0, 80);
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      setLiveRoom((prev) => (prev ? { ...prev, title: normalizedTitle } : null));
+      setActiveLive((prev) => (prev ? { ...prev, title: normalizedTitle } : null));
+      if (currentLiveId) {
+        syncLivePresence('hosting', currentLiveId, normalizedTitle);
+        void postLiveMutation('/live/update', {
+          liveId: currentLiveId,
+          title: normalizedTitle,
+        }).finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_updated',
+          });
+        });
+      }
+    },
+    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation, syncLivePresence],
+  );
+
+  const boostLive = useCallback(
+    (multiplier: BoostMultiplier) => {
+      setLiveRoom((prev) => {
+        if (!prev) return prev;
+
+        const newBoosts = prev.totalBoosts + multiplier;
+        const newRank = Math.max(1, (prev.boostRank || 10) - Math.floor(multiplier / 5));
+
+        return {
+          ...prev,
+          totalBoosts: newBoosts,
+          boostRank: newRank,
+          chatMessages: [
+            ...prev.chatMessages,
+            createChatMessage(
+              `You just boosted the live. ${multiplier}x ⚡`,
+              undefined,
+              'system',
+              'boost',
+              { boostAmount: multiplier },
+            ),
+          ],
+        };
+      });
+
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (currentLiveId) {
+        void postLiveMutation('/live/boost', {
+          liveId: currentLiveId,
+          amount: multiplier,
+        }).finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_boosted',
+          });
+        });
+      }
+    },
+    [activeLive?.id, liveRoom?.id, postLiveMutation],
+  );
+
+  const resetBoost = useCallback(() => {
+    setLiveRoom((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        totalBoosts: 0,
+        boostRank: null,
+        chatMessages: [
+          ...prev.chatMessages,
+          createChatMessage(`⏰ Boost expired! Your live dropped from the rankings.`, undefined, 'system'),
+        ],
+      };
+    });
+  }, []);
+
+  const startLive = useCallback(
+    (title: string, inviteOnly: boolean): boolean => {
+      if (fuel <= 0) {
+        toast.warning('You are out of fuel. Refuel before starting a live.');
+        return false;
+      }
+
+      const normalizedTitle = title.trim().slice(0, 80);
+      if (normalizedTitle.length < 3) {
+        toast.warning('Add a live title (at least 3 characters).');
+        return false;
+      }
+
+      const liveId = `live-${Date.now()}`;
+      const hostUser = currentUserWithMedia;
+
+      const newRoom: LiveRoom = {
+        id: liveId,
+        title: normalizedTitle,
+        inviteOnly,
+        hostUser,
+        streamers: [hostUser],
+        watchers: [],
+        chatMessages: [
+          createChatMessage(`${hostUser.name} started the live!`, undefined, 'system', 'join'),
+        ],
+        boostRank: null,
+        totalBoosts: 0,
+        bannedUserIds: [],
+        bannedUsers: [],
+        createdAt: Date.now(),
+      };
+
+      clearLiveEndTimers();
+      setLiveEndingState(null);
+      setLiveRoom(newRoom);
+      setIsHost(true);
+      setLiveState('LIVE_FULL');
+
+      const nextActiveLive: ExtendedLiveItem = {
+        id: newRoom.id,
+        title: newRoom.title,
+        viewers: 1,
+        ownerUserId: hostUser.id,
+        inviteOnly,
+        images: [hostUser.avatarUrl],
+        hosts: [
+          {
+            id: hostUser.id,
+            username: hostUser.username,
+            name: hostUser.name,
+            age: hostUser.age,
+            country: hostUser.country,
+            bio: hostUser.bio,
+            verified: hostUser.verified,
+            avatar: hostUser.avatarUrl,
+          },
+        ],
+      };
+      setActiveLive(nextActiveLive);
+
+      setIsMinimized(false);
+      syncLivePresence('hosting', newRoom.id, newRoom.title);
+
+      void postLiveMutation('/live/start', {
+        liveId: newRoom.id,
+        title: newRoom.title,
+        inviteOnly,
+        viewers: 1,
+        hosts: [toHostPayload(hostUser)],
+      }).finally(() => {
+        requestBackendRefresh({
+          scopes: ['live'],
+          source: 'manual',
+          reason: 'live_started',
+        });
+      });
+      return true;
+    },
+    [clearLiveEndTimers, currentUserWithMedia, fuel, postLiveMutation, syncLivePresence],
+  );
+
+  const toggleMic = useCallback(() => {
+    setUserMediaState((prev) => ({
+      ...prev,
+      isMuted: !prev.isMuted,
+    }));
+  }, []);
+
+  const isLiveEnding = Boolean(liveRoom && liveEndingState?.liveId === liveRoom.id);
+  const liveEndDeadlineMs = isLiveEnding ? liveEndingState?.deadlineMs ?? null : null;
+
+  return (
+    <LiveContext.Provider
+      value={{
+        activeLive,
+        isMinimized,
+        switchLiveRoom,
+        openLive,
+        minimizeLive,
+        closeLive,
+        restoreLive,
+
+        liveState,
+        isLiveEnding,
+        liveEndDeadlineMs,
+        liveRoom,
+        isHost,
+        currentUser: currentUserWithMedia,
+
+        enterLiveRoom,
+        exitLiveRoom,
+        sendMessage,
+        addSystemMessage,
+        inviteToStream,
+        kickStreamer,
+        banUser,
+        unbanUser,
+        removeFromStream,
+        setInviteOnly,
+        setTitle,
+        boostLive,
+        resetBoost,
+        startLive,
+
+        toggleMic,
+      }}
+    >
+      {children}
+    </LiveContext.Provider>
+  );
+}
+
+export function useLive() {
+  const context = useContext(LiveContext);
+  if (!context) {
+    if (__DEV__) {
+      console.warn('useLive must be used within a LiveProvider. Using default values.');
+    }
+    return defaultLiveValue;
+  }
+  return context;
+}

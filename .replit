@@ -1,0 +1,54 @@
+modules = ["nodejs-20"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+EXPO_PUBLIC_DATA_SOURCE = "backend"
+EXPO_PUBLIC_SPACETIMEDB_URI = "wss://maincloud.spacetimedb.com"
+EXPO_PUBLIC_SPACETIMEDB_NAME = "vulu-spacetime"
+EXPO_PUBLIC_BACKEND_TIMEOUT_MS = "15000"
+EXPO_PUBLIC_BACKEND_REHYDRATE_MS = "30000"
+EXPO_PUBLIC_ENABLE_REALTIME = "true"
+EXPO_PUBLIC_FAST_FALLBACK_REFRESH_MS = "800"
+EXPO_PUBLIC_FULL_FALLBACK_REFRESH_MS = "45000"
+EXPO_PUBLIC_APP_ENV = "production"
+EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE = "vulu-backend"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Serve frontend"
+
+[[workflows.workflow]]
+name = "Serve frontend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx --yes serve dist -l 5000 --no-clipboard --cors --single"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[deployment]
+deploymentTarget = "static"
+run = ["npx", "--yes", "serve", "dist", "-l", "5000", "--no-clipboard", "--cors", "--single"]
+build = ["npm", "run", "build"]
+publicDir = "dist"

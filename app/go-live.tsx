@@ -1,0 +1,478 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  StyleSheet,
+  TextInput,
+  Pressable,
+  Switch,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as ScreenOrientation from 'expo-screen-orientation';
+
+import { AppText } from '../src/components';
+import { colors, radius, spacing } from '../src/theme';
+import { hapticTap } from '../src/utils/haptics';
+import { useWallet } from '../src/context/WalletContext';
+import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
+import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
+import { useLive } from '../src/context/LiveContext';
+
+const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
+
+export default function GoLiveScreen() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { startLive, activeLive, liveRoom } = useLive();
+  const { fuel, addFuel, gems, cash, spendGems, spendCash } = useWallet();
+
+  const [title, setTitle] = useState('');
+  const [inviteOnly, setInviteOnly] = useState(false);
+  const [showFuelSheet, setShowFuelSheet] = useState(false);
+  const [pendingStart, setPendingStart] = useState(false);
+  const normalizedTitle = title.trim();
+  const canStartLive = normalizedTitle.length >= 3 && fuel > 0 && !pendingStart;
+  const startDisabledHint =
+    fuel <= 0
+      ? 'You are out of fuel. Tap Live Fuel to refuel.'
+      : normalizedTitle.length < 3
+        ? 'Title must be at least 3 characters.'
+        : null;
+
+  // Lock orientation to portrait
+  useEffect(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    return () => {
+      ScreenOrientation.unlockAsync();
+    };
+  }, []);
+
+  const handleStartLive = () => {
+    hapticTap();
+    const didStartLive = startLive(normalizedTitle, inviteOnly);
+    if (!didStartLive) {
+      return;
+    }
+    setPendingStart(true);
+  };
+
+  useEffect(() => {
+    if (!pendingStart) return;
+    if (!activeLive || !liveRoom) return;
+
+    setPendingStart(false);
+    router.replace('/live');
+  }, [activeLive, liveRoom, pendingStart, router]);
+
+  const handleClose = () => {
+    hapticTap();
+    router.back();
+  };
+
+  const handleFillFuel = (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
+    const cost = FUEL_COSTS[amount];
+    const canAfford = paymentType === 'gems' ? gems >= cost.gems : cash >= cost.cash;
+
+    if (!canAfford) {
+      // You could add a toast here
+      return;
+    }
+
+    if (fuel < MAX_FUEL_MINUTES) {
+      const actualFill = Math.min(amount, MAX_FUEL_MINUTES - fuel);
+      const success = paymentType === 'gems' ? spendGems(cost.gems) : spendCash(cost.cash);
+
+      if (success) {
+        addFuel(actualFill);
+        setShowFuelSheet(false);
+      }
+    }
+  };
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Background Gradient */}
+      <LinearGradient
+        colors={[colors.background, '#1a1a2a']}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardView}
+      >
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: insets.bottom + spacing.lg },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <Pressable style={styles.closeButton} onPress={handleClose}>
+              <Ionicons name="close" size={28} color={colors.textSecondary} />
+            </Pressable>
+            <AppText style={styles.headerTitle}>Go Live</AppText>
+            <View style={{ width: 44 }} />
+          </View>
+
+          <View style={styles.mainContent}>
+            <View style={styles.iconContainer}>
+              <LinearGradient
+                colors={[colors.accentPrimary, colors.accentPrimarySoft]}
+                style={styles.iconGradient}
+              >
+                <Ionicons name="radio-outline" size={48} color="#fff" />
+              </LinearGradient>
+            </View>
+
+            <AppText style={styles.description}>
+              Start streaming to your followers and build your community
+            </AppText>
+
+            {/* Title Input */}
+            <View style={styles.inputSection}>
+              <AppText style={styles.inputLabel}>Live Title</AppText>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.titleInput}
+                  placeholder="What's your live about?"
+                  placeholderTextColor={colors.textMuted}
+                  value={title}
+                  onChangeText={setTitle}
+                  maxLength={50}
+                />
+                <AppText style={styles.charCount}>{title.length}/50</AppText>
+              </View>
+            </View>
+
+            {/* Invite Only Toggle */}
+            <View style={styles.toggleSection}>
+              <View style={styles.toggleInfo}>
+                <View style={styles.toggleIcon}>
+                  <Ionicons name="lock-closed-outline" size={20} color={colors.accentPrimary} />
+                </View>
+                <View style={styles.toggleText}>
+                  <AppText style={styles.toggleLabel}>Invite Only</AppText>
+                  <AppText style={styles.toggleDescription}>
+                    Only invited friends can join
+                  </AppText>
+                </View>
+              </View>
+              <Switch
+                value={inviteOnly}
+                onValueChange={(value) => {
+                  hapticTap();
+                  setInviteOnly(value);
+                }}
+                trackColor={{ false: colors.surfaceAlt, true: colors.accentPrimary }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <Pressable
+              style={[styles.fuelWidget, fuel <= 0 && styles.fuelWidgetEmpty]}
+              onPress={() => {
+                hapticTap();
+                setShowFuelSheet(true);
+              }}
+            >
+              <View style={styles.fuelWidgetInfo}>
+                <View
+                  style={[styles.fuelIconContainer, fuel <= 0 && styles.fuelIconContainerEmpty]}
+                >
+                  <Ionicons
+                    name={fuel > 0 ? 'flame' : 'flame-outline'}
+                    size={20}
+                    color={fuel > 0 ? colors.accentPremium : colors.accentWarning}
+                  />
+                </View>
+                <View style={styles.fuelWidgetText}>
+                  <AppText style={styles.fuelLabel}>Live Fuel</AppText>
+                  <AppText
+                    style={[styles.fuelDescription, fuel <= 0 && styles.fuelDescriptionEmpty]}
+                  >
+                    {fuel > 0 ? `${fuel} minutes remaining` : 'Out of fuel. Tap to refuel!'}
+                  </AppText>
+                </View>
+              </View>
+
+              <View style={styles.fuelAddButton}>
+                <Ionicons name="add" size={20} color="#fff" />
+              </View>
+            </Pressable>
+          </View>
+
+          {/* Start Live Button */}
+          <View style={styles.footer}>
+            <Pressable
+              style={[styles.startButton, !canStartLive && styles.startButtonDisabled]}
+              onPress={handleStartLive}
+              disabled={!canStartLive}
+            >
+              <LinearGradient
+                colors={GO_LIVE_BUTTON_GRADIENT}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.startButtonGradient}
+              >
+                <AppText style={styles.startButtonText}>Start Live</AppText>
+                <Ionicons name="arrow-forward" size={20} color="#fff" />
+              </LinearGradient>
+            </Pressable>
+            {startDisabledHint ? (
+              <AppText style={styles.validationHint}>{startDisabledHint}</AppText>
+            ) : null}
+          </View>
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+      <FuelSheet
+        visible={showFuelSheet}
+        onClose={() => setShowFuelSheet(false)}
+        onFill={handleFillFuel}
+        currentFuel={fuel}
+        userGems={gems}
+        userCash={cash}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  closeButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.xl,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  mainContent: {
+    paddingHorizontal: spacing.xl,
+    flex: 1,
+  },
+  iconContainer: {
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+    marginTop: spacing.md,
+  },
+  iconGradient: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.accentPrimary,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  description: {
+    textAlign: 'center',
+    color: colors.textSecondary,
+    fontSize: 15,
+    marginBottom: spacing.xl * 1.5,
+    lineHeight: 22,
+  },
+
+  // Input Section
+  inputSection: {
+    marginBottom: spacing.xl,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+    marginLeft: spacing.xs,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    height: 56,
+  },
+  titleInput: {
+    flex: 1,
+    height: '100%',
+    fontSize: 16,
+    color: colors.textPrimary,
+  },
+  charCount: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginLeft: spacing.sm,
+  },
+
+  // Toggle Section
+  toggleSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+  },
+  toggleInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+  },
+  toggleIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(78, 205, 196, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toggleText: {
+    gap: 2,
+    flex: 1,
+  },
+  toggleLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  toggleDescription: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+
+  // Fuel Widget
+  fuelWidget: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.xl,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    marginTop: spacing.md,
+  },
+  fuelWidgetEmpty: {
+    borderColor: 'rgba(255, 170, 0, 0.3)',
+    backgroundColor: 'rgba(255, 170, 0, 0.05)',
+  },
+  fuelWidgetInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+  },
+  fuelIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(154, 42, 191, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fuelIconContainerEmpty: {
+    backgroundColor: 'rgba(255, 170, 0, 0.1)',
+  },
+  fuelWidgetText: {
+    flex: 1,
+  },
+  fuelLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  fuelDescription: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  fuelDescriptionEmpty: {
+    color: colors.accentWarning,
+    fontWeight: '500',
+  },
+  fuelAddButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+
+  // Footer
+  footer: {
+    paddingHorizontal: spacing.xl,
+    marginTop: spacing.xl * 2,
+  },
+  startButton: {
+    borderRadius: radius.xl,
+    overflow: 'hidden',
+    shadowColor: '#3B82F6',
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  startButtonDisabled: {
+    opacity: 0.55,
+  },
+  startButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    gap: spacing.sm,
+  },
+  startButtonText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  validationHint: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    textAlign: 'center',
+    color: colors.textMuted,
+  },
+});
