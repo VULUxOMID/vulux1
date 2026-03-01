@@ -40,6 +40,8 @@ type LiveContextType = {
   switchLiveRoom: (live: LiveItem) => boolean;
   openLive: (live: LiveItem) => void;
   minimizeLive: () => void;
+  leaveLive: () => void;
+  endLive: () => void;
   closeLive: () => void;
   restoreLive: () => void;
 
@@ -349,6 +351,8 @@ const defaultLiveValue: LiveContextType = {
   switchLiveRoom: () => false,
   openLive: () => { },
   minimizeLive: () => { },
+  leaveLive: () => { },
+  endLive: () => { },
   closeLive: () => { },
   restoreLive: () => { },
 
@@ -1056,14 +1060,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     };
   }, [activeLive?.id, liveRoom?.id, liveState, postLiveMutation, queriesEnabled]);
 
-  const closeLive = useCallback(() => {
-    const closingLiveId = liveRoom?.id ?? activeLive?.id;
-    const closingAsHost = isHost;
-
-    if (closingAsHost && closingLiveId) {
-      void postLiveMutation('/live/end', { liveId: closingLiveId });
-    }
-
+  const finalizeLiveClose = useCallback((refreshReason: string) => {
     clearLiveEndTimers();
     setLiveEndingState(null);
     setActiveLive(null);
@@ -1072,13 +1069,37 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     setLiveRoom(null);
     setIsHost(false);
 
-    syncLivePresence('none');
+    void syncLivePresence('none');
     requestBackendRefresh({
       scopes: ['live', 'global_messages'],
       source: 'manual',
-      reason: 'live_closed',
+      reason: refreshReason,
     });
-  }, [activeLive?.id, clearLiveEndTimers, isHost, liveRoom?.id, postLiveMutation, syncLivePresence]);
+  }, [clearLiveEndTimers, syncLivePresence]);
+
+  const leaveLive = useCallback(() => {
+    finalizeLiveClose('live_left');
+  }, [finalizeLiveClose]);
+
+  const endLive = useCallback(() => {
+    const closingLiveId = liveRoom?.id ?? activeLive?.id;
+    if (closingLiveId) {
+      void postLiveMutation('/live/end', { liveId: closingLiveId }).then((result) => {
+        if (!result.ok && result.code !== 'not_found') {
+          toast.error(result.message);
+        }
+      });
+    }
+    finalizeLiveClose('live_ended_by_host');
+  }, [activeLive?.id, finalizeLiveClose, liveRoom?.id, postLiveMutation]);
+
+  const closeLive = useCallback(() => {
+    if (isHost) {
+      endLive();
+      return;
+    }
+    leaveLive();
+  }, [endLive, isHost, leaveLive]);
 
   const closeLiveRef = useRef(closeLive);
   useEffect(() => { closeLiveRef.current = closeLive; }, [closeLive]);
@@ -1858,6 +1879,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         switchLiveRoom,
         openLive,
         minimizeLive,
+        leaveLive,
+        endLive,
         closeLive,
         restoreLive,
 

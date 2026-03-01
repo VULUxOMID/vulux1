@@ -70,7 +70,8 @@ type ActiveSheet =
   | 'fuel'
   | 'profileViews'
   | 'kickConfirm'
-  | 'endLive'
+  | 'switchLive'
+  | 'exitLive'
   | 'inviteToStream'
   | 'hostOptions';  // Unified: Settings + Report + Invite
 
@@ -117,9 +118,34 @@ export default function LiveScreen() {
     spendGems,
     spendCash,
   } = useWallet();
+  const {
+    activeLive,
+    liveRoom,
+    liveState,
+    isLiveEnding,
+    liveEndDeadlineMs,
+    isHost,
+    minimizeLive,
+    leaveLive,
+    endLive,
+    sendMessage,
+    inviteToStream,
+    kickStreamer,
+    banUser,
+    unbanUser,
+    boostLive,
+    resetBoost,
+    switchLiveRoom,
+    toggleMic,
+    currentUser,
+    setTitle,
+  } = useLive();
+  const subscriptionLiveId = liveRoom?.id ?? activeLive?.id ?? routeLiveId;
   const isProfileOpen = useRef(false);
   const isSheetOpen = useRef(false);
   const autoJoinAttemptedLiveIdRef = useRef<string | null>(null);
+  const hasVisitedLiveSessionRef = useRef(false);
+  const hasHandledClosedNavigationRef = useRef(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const keyboardAnimatedHeight = useRef(new Animated.Value(0)).current;
 
@@ -139,12 +165,12 @@ export default function LiveScreen() {
   }, [queriesEnabled]);
 
   useEffect(() => {
-    if (!queriesEnabled || !routeLiveId) {
+    if (!queriesEnabled || !subscriptionLiveId) {
       return;
     }
-    return subscribeLive(routeLiveId);
-  }, [queriesEnabled, routeLiveId]);
-  
+    return subscribeLive(subscriptionLiveId);
+  }, [queriesEnabled, subscriptionLiveId]);
+
   // Track profile open state in ref for pan responder
   useEffect(() => {
     isProfileOpen.current = !!selectedUser;
@@ -183,28 +209,14 @@ export default function LiveScreen() {
     };
   }, []);
 
-  const {
-    activeLive,
-    liveRoom,
-    liveState,
-    isLiveEnding,
-    liveEndDeadlineMs,
-    isHost,
-    minimizeLive,
-    sendMessage,
-    inviteToStream,
-    kickStreamer,
-    banUser,
-    unbanUser,
-    boostLive,
-    resetBoost,
-    switchLiveRoom,
-    toggleMic,
-    currentUser,
-    setTitle,
-  } = useLive();
-
   const [liveEndSecondsLeft, setLiveEndSecondsLeft] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeLive && liveRoom) {
+      hasVisitedLiveSessionRef.current = true;
+      hasHandledClosedNavigationRef.current = false;
+    }
+  }, [activeLive, liveRoom]);
 
   useEffect(() => {
     if (!isLiveEnding || !liveEndDeadlineMs) {
@@ -276,8 +288,10 @@ export default function LiveScreen() {
     if (!routeLiveId) return;
     if (activeLive || liveRoom) return;
     if (autoJoinAttemptedLiveIdRef.current !== routeLiveId) return;
+    if (hasHandledClosedNavigationRef.current) return;
 
     const timeout = setTimeout(() => {
+      hasHandledClosedNavigationRef.current = true;
       if (router.canGoBack()) {
         router.back();
       } else {
@@ -733,7 +747,7 @@ export default function LiveScreen() {
     // Small delay to allow sheet to dismiss before showing modal
     // preventing modal conflict on iOS
     setTimeout(() => {
-      setActiveSheet('endLive');
+      setActiveSheet('switchLive');
     }, 500);
     
     hapticTap();
@@ -769,6 +783,26 @@ export default function LiveScreen() {
     setNextLiveId(null);
   }, [nextLiveId, switchLiveRoom, liveLeaderboard, lives]);
 
+  const handlePostLiveNavigation = useCallback(() => {
+    if (hasHandledClosedNavigationRef.current) return;
+    hasHandledClosedNavigationRef.current = true;
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  }, [router]);
+
+  const handleConfirmLeaveOrEnd = useCallback(() => {
+    setActiveSheet(null);
+    if (isHost) {
+      endLive();
+    } else {
+      leaveLive();
+    }
+    handlePostLiveNavigation();
+  }, [endLive, handlePostLiveNavigation, isHost, leaveLive]);
+
   const handleFillFuel = useCallback((amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
     // Deduct currency
     let success = false;
@@ -796,6 +830,17 @@ export default function LiveScreen() {
   const dismissKeyboard = useCallback(() => {
     Keyboard.dismiss();
   }, []);
+
+  useEffect(() => {
+    if (!hasVisitedLiveSessionRef.current) return;
+    if (activeLive || liveRoom) return;
+    if (liveState !== 'LIVE_CLOSED') return;
+
+    const timeout = setTimeout(() => {
+      handlePostLiveNavigation();
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [activeLive, handlePostLiveNavigation, liveRoom, liveState]);
 
   if (!isAuthLoaded) {
     return (
@@ -890,6 +935,10 @@ export default function LiveScreen() {
             viewerCount={viewerCount}
             profileViewCount={1137}
             onMinimize={handleMinimize}
+            onExitPress={() => {
+              hapticTap();
+              setActiveSheet('exitLive');
+            }}
             onViewersPress={() => {
               hapticTap();
               setActiveSheet('participants');
@@ -902,6 +951,7 @@ export default function LiveScreen() {
             showMediaControls={true}
             isMuted={!!currentUser?.isMuted}
             onToggleMic={toggleMic}
+            isHost={isHost}
             fuelMinutes={fuel}
             isFuelDraining={true}
             onFuelPress={() => {
@@ -1098,14 +1148,25 @@ export default function LiveScreen() {
         />
 
         <EndLiveModal
-          visible={activeSheet === 'endLive'}
+          visible={activeSheet === 'switchLive'}
           onClose={() => {
             setActiveSheet(null);
             setNextLiveId(null);
           }}
           onEndLive={handleConfirmSwitchLive}
           isHost={false} // Always treat as viewer when switching via leaderboard
-          confirmText="Yes, Confirm"
+          title="Switch Live?"
+          subtitle="You will leave this live and join the selected live."
+          confirmText="Switch Live"
+        />
+
+        <EndLiveModal
+          visible={activeSheet === 'exitLive'}
+          onClose={() => {
+            setActiveSheet(null);
+          }}
+          onEndLive={handleConfirmLeaveOrEnd}
+          isHost={isHost}
         />
 
         <ProfileViewsModal

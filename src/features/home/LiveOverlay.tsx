@@ -8,22 +8,37 @@ import { NAV_BAR_HEIGHT } from '../../components/navigation/layoutConstants';
 import { MiniHostsGrid } from '../live/components/MiniHostsGrid';
 
 export function LiveOverlay() {
-  const { activeLive, isMinimized, restoreLive, closeLive, isHost } = useLive();
+  const {
+    activeLive,
+    isMinimized,
+    restoreLive,
+    leaveLive,
+    endLive,
+    isHost,
+    isLiveEnding,
+  } = useLive();
 
   const handleClose = useCallback(() => {
     if (isHost) {
       Alert.alert(
-        'Leave Live?',
-        'You will leave as host. If another host stays, the live keeps running.',
+        'End Live?',
+        'Ending now will stop the live for everyone.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Leave', style: 'destructive', onPress: closeLive },
+          { text: 'End Live', style: 'destructive', onPress: endLive },
         ]
       );
     } else {
-      closeLive();
+      Alert.alert(
+        'Leave Live?',
+        'You will leave this live. The stream keeps running for others.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Leave Live', style: 'destructive', onPress: leaveLive },
+        ],
+      );
     }
-  }, [isHost, closeLive]);
+  }, [endLive, isHost, leaveLive]);
 
   if (!activeLive) return null;
 
@@ -33,11 +48,24 @@ export function LiveOverlay() {
       onOpen={restoreLive}
       activeLive={activeLive}
       visible={isMinimized}
+      isEnding={isLiveEnding}
     />
   );
 }
 
-function MiniLiveFloating({ onClose, onOpen, activeLive, visible }: { onClose: () => void; onOpen: () => void; activeLive: any; visible: boolean }) {
+function MiniLiveFloating({
+  onClose,
+  onOpen,
+  activeLive,
+  visible,
+  isEnding,
+}: {
+  onClose: () => void;
+  onOpen: () => void;
+  activeLive: any;
+  visible: boolean;
+  isEnding: boolean;
+}) {
   const { width, height } = Dimensions.get('window');
   const router = useRouter();
 
@@ -228,6 +256,13 @@ function MiniLiveFloating({ onClose, onOpen, activeLive, visible }: { onClose: (
         <MiniHostsGrid hosts={hosts} fallbackImage={activeLive.images?.[0]} />
       </View>
 
+      {isEnding ? (
+        <View style={styles.endingBadge} pointerEvents="none">
+          <Ionicons name="videocam-off-outline" size={12} color="#fff" />
+          <Animated.Text style={styles.endingBadgeText}>Live ended</Animated.Text>
+        </View>
+      ) : null}
+
     </Animated.View>
   );
 }
@@ -280,5 +315,26 @@ const styles = StyleSheet.create({
   miniGridContainer: {
     flex: 1,
     backgroundColor: colors.textOnLight,
+  },
+  endingBadge: {
+    position: 'absolute',
+    left: spacing.sm,
+    right: spacing.sm,
+    bottom: spacing.sm,
+    borderRadius: radius.lg,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  endingBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
