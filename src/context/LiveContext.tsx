@@ -1182,6 +1182,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!queriesEnabled) return;
     if (liveState === 'LIVE_CLOSED') return;
+    if (!isHost) return;
 
     const currentLiveId = liveRoom?.id ?? activeLive?.id;
     if (!currentLiveId) return;
@@ -1195,7 +1196,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     return () => {
       clearInterval(interval);
     };
-  }, [activeLive?.id, liveRoom?.id, liveState, postLiveMutation, queriesEnabled]);
+  }, [activeLive?.id, isHost, liveRoom?.id, liveState, postLiveMutation, queriesEnabled]);
 
   const finalizeLiveClose = useCallback((refreshReason: string) => {
     clearLiveEndTimers();
@@ -1220,14 +1221,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   const endLive = useCallback(() => {
     const closingLiveId = liveRoom?.id ?? activeLive?.id;
-    if (closingLiveId) {
-      void postLiveMutation('/live/end', { liveId: closingLiveId }).then((result) => {
-        if (!result.ok && result.code !== 'not_found') {
-          toast.error(result.message);
-        }
-      });
+    if (!closingLiveId) {
+      finalizeLiveClose('live_ended_by_host');
+      return;
     }
-    finalizeLiveClose('live_ended_by_host');
+
+    void postLiveMutation('/live/end', { liveId: closingLiveId }).then((result) => {
+      if (!result.ok && result.code !== 'not_found') {
+        toast.error(result.message);
+        return;
+      }
+      finalizeLiveClose('live_ended_by_host');
+    });
   }, [activeLive?.id, finalizeLiveClose, liveRoom?.id, postLiveMutation]);
 
   const closeLive = useCallback(() => {
