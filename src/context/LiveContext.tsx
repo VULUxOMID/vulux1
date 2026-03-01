@@ -31,6 +31,7 @@ type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
   inviteOnly?: boolean;
   bannedUserIds?: string[];
+  invitedUserIds?: string[];
 };
 
 type LiveContextType = {
@@ -95,6 +96,7 @@ const LIVE_OVER_AUTO_CLOSE_MS = 5_000;
 const LIVE_OVER_TITLE = 'Live is over';
 const LIVE_STATUS_POLL_INTERVAL_MS = 2_000;
 const FUEL_DRAIN_INTERVAL_MS = 1_000;
+const LIVE_CHAT_MAX_MESSAGES = 200;
 
 function normalizeUsername(value: string | undefined, fallback: string): string {
   const normalized = value?.trim().toLowerCase().replace(/\s+/g, '_');
@@ -173,9 +175,41 @@ function areLiveUserListsEquivalent(a: LiveUser[], b: LiveUser[]): boolean {
   return true;
 }
 
-function isBannedFromLiveError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return error.message.toLowerCase().includes('banned from live');
+type LiveAccessRejectionReason = 'invite_only' | 'banned' | 'live_ended';
+
+function resolveLiveAccessRejectionReasonFromError(error: unknown): LiveAccessRejectionReason | null {
+  if (!(error instanceof Error)) return null;
+  const message = error.message.toLowerCase();
+
+  if (message.includes('invite only')) return 'invite_only';
+  if (
+    message.includes("you're banned") ||
+    message.includes('you are banned') ||
+    message.includes('banned from live')
+  ) {
+    return 'banned';
+  }
+  if (message.includes('live has ended') || message.includes('already ended') || message.includes('not found')) {
+    return 'live_ended';
+  }
+
+  return null;
+}
+
+function resolveLiveAccessRejectionReasonFromMutation(
+  result: LiveMutationResult,
+): LiveAccessRejectionReason | null {
+  if (result.ok) return null;
+  if (result.code === 'invite_only') return 'invite_only';
+  if (result.code === 'banned') return 'banned';
+  if (result.code === 'live_ended' || result.code === 'not_found') return 'live_ended';
+  return null;
+}
+
+function messageForLiveAccessRejectionReason(reason: LiveAccessRejectionReason): string {
+  if (reason === 'invite_only') return 'Invite only';
+  if (reason === 'banned') return "You're banned";
+  return 'Live has ended';
 }
 
 function asTrimmedString(value: unknown): string | null {
@@ -245,6 +279,47 @@ function areChatMessagesEquivalent(a: ChatMessage[], b: ChatMessage[]): boolean 
     }
   }
   return true;
+}
+
+function compareChatMessages(a: ChatMessage, b: ChatMessage): number {
+  const byTimestamp = a.timestamp - b.timestamp;
+  if (byTimestamp !== 0) {
+    return byTimestamp;
+  }
+  return a.id.localeCompare(b.id);
+}
+
+function appendBoundedChatMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
+  const nextMessages = [...messages, message].sort(compareChatMessages);
+  if (nextMessages.length <= LIVE_CHAT_MAX_MESSAGES) {
+    return nextMessages;
+  }
+  return nextMessages.slice(nextMessages.length - LIVE_CHAT_MAX_MESSAGES);
+}
+
+function mergeLiveChatMessages(
+  localMessages: ChatMessage[],
+  backendMessages: ChatMessage[],
+): ChatMessage[] {
+  const backendMessageIds = new Set(backendMessages.map((message) => message.id));
+  const mergedMessages = new Map<string, ChatMessage>();
+
+  localMessages.forEach((message) => {
+    if (message.type !== 'system' && backendMessageIds.has(message.id)) {
+      return;
+    }
+    mergedMessages.set(message.id, message);
+  });
+
+  backendMessages.forEach((message) => {
+    mergedMessages.set(message.id, message);
+  });
+
+  const orderedMessages = Array.from(mergedMessages.values()).sort(compareChatMessages);
+  if (orderedMessages.length <= LIVE_CHAT_MAX_MESSAGES) {
+    return orderedMessages;
+  }
+  return orderedMessages.slice(orderedMessages.length - LIVE_CHAT_MAX_MESSAGES);
 }
 
 function toLiveChatMessage(
@@ -481,12 +556,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const snapshotRoomMessages = useMemo(
     () =>
       queriesEnabled && selectedLiveId
-        ? messagesRepo.listGlobalMessages({ roomId: selectedLiveId, limit: 700 })
+        ? messagesRepo.listGlobalMessages({ roomId: selectedLiveId, limit: LIVE_CHAT_MAX_MESSAGES })
         : [],
     [messagesRepo, queriesEnabled, selectedLiveId],
   );
 
-  const forceCloseLiveForBan = useCallback(() => {
+  const forceCloseLiveForAccessRejection = useCallback((reason: LiveAccessRejectionReason) => {
     clearLiveEndTimers();
     setLiveEndingState(null);
     setActiveLive(null);
@@ -497,9 +572,22 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     requestBackendRefresh({
       scopes: ['live', 'global_messages'],
       source: 'manual',
-      reason: 'live_banned_user_forced_exit',
+      reason:
+        reason === 'banned'
+          ? 'live_banned_user_forced_exit'
+          : reason === 'invite_only'
+            ? 'live_invite_only_forced_exit'
+            : 'live_ended_forced_exit',
     });
   }, [clearLiveEndTimers]);
+
+  const handleLiveAccessRejection = useCallback(
+    (reason: LiveAccessRejectionReason) => {
+      toast.warning(messageForLiveAccessRejectionReason(reason));
+      forceCloseLiveForAccessRejection(reason);
+    },
+    [forceCloseLiveForAccessRejection],
+  );
 
   const postLiveMutation = useCallback(
     async (path: string, payload: Record<string, unknown>): Promise<LiveMutationResult> => {
@@ -641,9 +729,17 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         activity,
         liveId,
         liveTitle: activity === 'hosting' ? normalizedLiveTitle : undefined,
+      }).then((result) => {
+        if (activity !== 'none') {
+          const rejectionReason = resolveLiveAccessRejectionReasonFromMutation(result);
+          if (rejectionReason) {
+            handleLiveAccessRejection(rejectionReason);
+          }
+        }
+        return result;
       });
     },
-    [postLiveMutation],
+    [handleLiveAccessRejection, postLiveMutation],
   );
 
   const syncLiveHosts = useCallback(
@@ -714,28 +810,23 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
     const nextWatchers = shouldShowLiveOverState ? [] : Array.from(watchersById.values());
 
+    const normalizedRoomId = roomId.trim().toLowerCase();
     const backendMessages = snapshotRoomMessages
+      .filter((message) => {
+        const messageRoomId = typeof message.roomId === 'string' ? message.roomId.trim().toLowerCase() : '';
+        return messageRoomId === normalizedRoomId;
+      })
       .map((message) =>
         toLiveChatMessage(message, (senderId, senderName) =>
           resolveLiveUser(senderId, senderName),
         ),
       )
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .sort(compareChatMessages);
 
     setLiveRoom((prev) => {
       if (!prev || prev.id !== roomId) return prev;
 
-      const localSystemMessages = prev.chatMessages.filter((message) => message.type === 'system');
-      const mergedMessageMap = new Map<string, ChatMessage>();
-      localSystemMessages.forEach((message) => {
-        mergedMessageMap.set(message.id, message);
-      });
-      backendMessages.forEach((message) => {
-        mergedMessageMap.set(message.id, message);
-      });
-      const nextChatMessages = Array.from(mergedMessageMap.values()).sort(
-        (a, b) => a.timestamp - b.timestamp,
-      );
+      const nextChatMessages = mergeLiveChatMessages(prev.chatMessages, backendMessages);
 
       const nextTitle = shouldShowLiveOverState
         ? LIVE_OVER_TITLE
@@ -908,9 +999,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const currentLiveTitle = liveRoom?.title ?? activeLive?.title;
 
     const currentActivity: 'hosting' | 'watching' = isHost ? 'hosting' : 'watching';
-    syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
+    void syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
     const heartbeat = setInterval(() => {
-      syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
+      void syncLivePresence(currentActivity, currentLiveId, currentLiveTitle);
     }, PRESENCE_HEARTBEAT_MS);
 
     return () => {
@@ -1058,7 +1149,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setLiveState('LIVE_FULL');
       setLiveRoom(nextRoom);
       setIsHost(nextIsHost);
-      syncLivePresence(nextIsHost ? 'hosting' : 'watching', live.id, live.title);
+      void syncLivePresence(nextIsHost ? 'hosting' : 'watching', live.id, live.title);
       requestBackendRefresh({
         scopes: ['live', 'global_messages'],
         source: 'manual',
@@ -1163,7 +1254,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setActiveLive(nextActiveLive);
 
       setIsMinimized(false);
-      syncLivePresence(asHost ? 'hosting' : 'watching', room.id, room.title);
+      void syncLivePresence(asHost ? 'hosting' : 'watching', room.id, room.title);
 
       if (asHost) {
         void postLiveMutation('/live/start', {
@@ -1208,7 +1299,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         }
         return {
           ...prev,
-          chatMessages: [...prev.chatMessages, message],
+          chatMessages: appendBoundedChatMessage(prev.chatMessages, message),
         };
       });
 
@@ -1234,8 +1325,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           });
         })
         .catch((error) => {
-          if (isBannedFromLiveError(error)) {
-            forceCloseLiveForBan();
+          const rejectionReason = resolveLiveAccessRejectionReasonFromError(error);
+          if (rejectionReason) {
+            handleLiveAccessRejection(rejectionReason);
             return;
           }
           if (__DEV__) {
@@ -1243,7 +1335,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           }
         });
     },
-    [activeLive?.id, currentUserWithMedia, forceCloseLiveForBan, liveRoom?.id, messagesRepo],
+    [activeLive?.id, currentUserWithMedia, handleLiveAccessRejection, liveRoom?.id, messagesRepo],
   );
 
   const addSystemMessage = useCallback(
@@ -1257,7 +1349,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (!prev) return prev;
         return {
           ...prev,
-          chatMessages: [...prev.chatMessages, message],
+          chatMessages: appendBoundedChatMessage(prev.chatMessages, message),
         };
       });
     },
@@ -1284,10 +1376,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           watchers: newWatchers,
           streamers: newStreamers,
           hostUser: newStreamers[0] ?? prev.hostUser,
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(`${user.name} joined as a co-host.`, undefined, 'system', 'join'),
-          ],
+          ),
         };
         return nextRoomSnapshot;
       });
@@ -1341,15 +1433,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           streamers: newStreamers,
           watchers: newWatchers,
           hostUser: newStreamers[0] ?? prev.hostUser,
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(
               `${user.name} was removed from streaming.`,
               undefined,
               'system',
               'kick',
             ),
-          ],
+          ),
         };
 
         return nextRoomSnapshot;
@@ -1392,10 +1484,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           hostUser: newStreamers[0] ?? prev.hostUser,
           bannedUserIds: hasBannedId ? prev.bannedUserIds : [...prev.bannedUserIds, user.id],
           bannedUsers: hasBannedUser ? prev.bannedUsers : [...(prev.bannedUsers || []), user],
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(`${user.name} was banned from the live.`, undefined, 'system', 'ban'),
-          ],
+          ),
         };
 
         return nextRoomSnapshot;
@@ -1450,10 +1542,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ...prev,
           bannedUserIds: prev.bannedUserIds.filter((userId) => userId !== user.id),
           bannedUsers: (prev.bannedUsers || []).filter((entry) => entry.id !== user.id),
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(`${user.name} was unbanned.`, undefined, 'system'),
-          ],
+          ),
         };
 
         return nextRoomSnapshot;
@@ -1501,10 +1593,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           streamers: newStreamers,
           watchers: newWatchers,
           hostUser: newStreamers[0] ?? prev.hostUser,
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(`${user.name} left the stream.`, undefined, 'system', 'leave'),
-          ],
+          ),
         };
 
         return nextRoomSnapshot;
@@ -1556,7 +1648,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setLiveRoom((prev) => (prev ? { ...prev, title: normalizedTitle } : null));
       setActiveLive((prev) => (prev ? { ...prev, title: normalizedTitle } : null));
       if (currentLiveId) {
-        syncLivePresence('hosting', currentLiveId, normalizedTitle);
+        void syncLivePresence('hosting', currentLiveId, normalizedTitle);
         void postLiveMutation('/live/update', {
           liveId: currentLiveId,
           title: normalizedTitle,
@@ -1584,8 +1676,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ...prev,
           totalBoosts: newBoosts,
           boostRank: newRank,
-          chatMessages: [
-            ...prev.chatMessages,
+          chatMessages: appendBoundedChatMessage(
+            prev.chatMessages,
             createChatMessage(
               `You just boosted the live. ${multiplier}x ⚡`,
               undefined,
@@ -1593,7 +1685,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
               'boost',
               { boostAmount: multiplier },
             ),
-          ],
+          ),
         };
       });
 
@@ -1622,10 +1714,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         ...prev,
         totalBoosts: 0,
         boostRank: null,
-        chatMessages: [
-          ...prev.chatMessages,
+        chatMessages: appendBoundedChatMessage(
+          prev.chatMessages,
           createChatMessage(`⏰ Boost expired! Your live dropped from the rankings.`, undefined, 'system'),
-        ],
+        ),
       };
     });
   }, []);

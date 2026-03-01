@@ -300,6 +300,7 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   public_profile_summary: ['social', 'search'],
   public_leaderboard: ['leaderboard'],
   public_live_discovery: ['live', 'search'],
+  public_live_presence_item: ['live'],
   global_message_item: ['global_messages', 'messages'],
   track: ['music'],
   artist: ['music'],
@@ -319,6 +320,7 @@ const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
   public_profile_summary: ['publicProfileSummary'],
   public_leaderboard: ['publicLeaderboard'],
   public_live_discovery: ['publicLiveDiscovery'],
+  public_live_presence_item: ['publicLivePresenceItem', 'public_live_presence_item'],
   global_message_item: ['globalMessageItem', 'global_message_item'],
   track: ['track'],
   artist: ['artist'],
@@ -796,6 +798,9 @@ function buildMessageViewQueryVariants(
   targetId: string,
   targetColumns: string[],
   windowCursor?: SpacetimeMessageWindowCursor,
+  options?: {
+    includeFullViewFallback?: boolean;
+  },
 ): string[] {
   const limit = normalizeChatLimit(windowCursor?.limit);
   const escapedTargetId = escapeSqlLiteral(targetId);
@@ -817,6 +822,7 @@ function buildMessageViewQueryVariants(
   const temporalColumns = ['created_at', 'updated_at'];
   const queries: string[] = [];
   const baseTargetColumns = uniqueStrings(targetColumns);
+  const includeFullViewFallback = options?.includeFullViewFallback ?? true;
 
   // SpacetimeDB subscriptions only support: SELECT * FROM table [WHERE ...]
   // No ORDER BY, no LIMIT — use WHERE temporal filters for windowing instead.
@@ -837,7 +843,9 @@ function buildMessageViewQueryVariants(
   }
 
   // Fallback: subscribe to entire view (no LIMIT)
-  queries.push(`SELECT * FROM ${viewName}`);
+  if (includeFullViewFallback) {
+    queries.push(`SELECT * FROM ${viewName}`);
+  }
   return uniqueStrings(queries);
 }
 
@@ -1332,13 +1340,39 @@ export function subscribeLive(liveId: string): () => void {
   const normalizedLiveId = liveId.trim();
   const keyLiveId = normalizedLiveId.length > 0 ? normalizedLiveId : 'unknown';
   const baseViews = ['public_profile_summary', 'my_friendships', 'my_notifications'];
-  const allViews = [...baseViews, 'public_live_discovery'];
+  const allViews = [...baseViews, 'public_live_discovery', 'public_live_presence_item', 'global_message_item'];
   const baseQueries = buildViewSelectQueries(baseViews);
   const liveQueries = uniqueStrings([
     `SELECT * FROM public_live_discovery WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
     'SELECT * FROM public_live_discovery',
   ]);
-  const querySets = liveQueries.map((liveQuery) => [...baseQueries, liveQuery]);
+  const presenceQueries = uniqueStrings([
+    `SELECT * FROM public_live_presence_item WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
+    'SELECT * FROM public_live_presence_item',
+  ]);
+  const liveMessageQueryVariants = buildMessageViewQueryVariants(
+    'global_message_item',
+    keyLiveId,
+    ['room_id'],
+    {
+      limit: 220,
+      windowMs: 24 * 60 * 60 * 1000,
+    },
+    {
+      // Live-room chat should remain room-scoped and avoid pulling full global history.
+      includeFullViewFallback: false,
+    },
+  );
+  const querySets = liveQueries.flatMap((liveQuery) =>
+    presenceQueries.flatMap((presenceQuery) =>
+      liveMessageQueryVariants.map((messageQuery) => [
+        ...baseQueries,
+        liveQuery,
+        presenceQuery,
+        messageQuery,
+      ]),
+    ),
+  );
   const spec = buildScopedSubscriptionSpec(
     'live',
     `live:${keyLiveId}`,
