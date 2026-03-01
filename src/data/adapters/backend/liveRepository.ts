@@ -11,6 +11,7 @@ type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
   inviteOnly?: boolean;
   bannedUserIds?: string[];
+  invitedUserIds?: string[];
 };
 
 function asString(value: unknown): string | null {
@@ -119,6 +120,7 @@ function parseLiveRow(row: any): ExtendedLiveItem | null {
     ownerUserId: asString(item.ownerUserId) ?? undefined,
     inviteOnly: asBoolean(item.inviteOnly) ?? false,
     bannedUserIds: parseStringArray(item.bannedUserIds),
+    invitedUserIds: parseStringArray(item.invitedUserIds),
   };
 }
 
@@ -140,6 +142,52 @@ function parseKnownLiveUserRow(row: any): LiveUser | null {
     verified: asBoolean(item.verified) ?? false,
     avatarUrl: asString(item.avatarUrl) ?? asString(item.avatar) ?? '',
   };
+}
+
+const LIVE_PRESENCE_FRESHNESS_WINDOW_MS = (() => {
+  const raw = process.env.EXPO_PUBLIC_LIVE_PRESENCE_TTL_MS?.trim();
+  if (!raw) return 30_000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+})();
+
+type PresenceItem = {
+  userId: string;
+  liveId: string;
+  activity: 'hosting' | 'watching';
+  liveTitle?: string;
+  updatedAt: number;
+};
+
+function normalizePresenceRow(
+  entry: Partial<PresenceItem> & {
+    userId?: unknown;
+    liveId?: unknown;
+    activity?: unknown;
+    liveTitle?: unknown;
+    updatedAt?: unknown;
+  },
+): PresenceItem | null {
+  const userId = asString(entry.userId);
+  const liveId = asString(entry.liveId);
+  const activityRaw = asString(entry.activity);
+  const activity = activityRaw === 'hosting' ? 'hosting' : activityRaw === 'watching' ? 'watching' : null;
+  if (!userId || !liveId || !activity) {
+    return null;
+  }
+
+  return {
+    userId,
+    liveId,
+    activity,
+    liveTitle: asString(entry.liveTitle) ?? undefined,
+    updatedAt: readTimestampMs(entry.updatedAt),
+  };
+}
+
+function applyFreshPresenceFilter<T extends { updatedAt: number }>(presence: T[]): T[] {
+  const cutoffMs = Date.now() - LIVE_PRESENCE_FRESHNESS_WINDOW_MS;
+  return presence.filter((entry) => entry.updatedAt >= cutoffMs);
 }
 
 function getSpacetimeLives(): ExtendedLiveItem[] {
@@ -212,14 +260,23 @@ function getSpacetimeKnownLiveUsers(): LiveUser[] {
 }
 
 function getSpacetimePresence() {
-  // livePresenceItem is private in schema. Presence must come from backend snapshot.
-  return [] as Array<{
-    userId: string;
-    liveId: string;
-    activity: 'hosting' | 'watching';
-    liveTitle?: string;
-    updatedAt: number;
-  }>;
+  const dbView = spacetimeDb.db as any;
+  const rows: any[] = Array.from(
+    dbView?.publicLivePresenceItem?.iter?.() ??
+    dbView?.public_live_presence_item?.iter?.() ??
+    [],
+  );
+
+  return rows
+    .map((row) =>
+      normalizePresenceRow({
+        userId: row?.userId ?? row?.user_id,
+        liveId: row?.liveId ?? row?.live_id,
+        activity: row?.activity,
+        updatedAt: row?.updatedAt ?? row?.updated_at,
+      }),
+    )
+    .filter((entry): entry is PresenceItem => Boolean(entry));
 }
 
 export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepository {
@@ -281,16 +338,17 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
       return applyCursorPage(Array.from(byId.values()), request);
     },
     listPresence(request) {
-      const byUserId = new Map<string, (typeof snapshot.livePresence)[number]>();
+      const byUserId = new Map<string, PresenceItem>();
       for (const row of snapshot.livePresence) {
-        if (!row?.userId) continue;
-        byUserId.set(row.userId, row);
+        const normalized = normalizePresenceRow(row);
+        if (!normalized) continue;
+        byUserId.set(normalized.userId, normalized);
       }
       for (const row of getSpacetimePresence()) {
         byUserId.set(row.userId, row);
       }
 
-      let presence = Array.from(byUserId.values());
+      let presence = applyFreshPresenceFilter(Array.from(byUserId.values()));
 
       if (Array.isArray(request?.userIds)) {
         const normalizedUserIds = new Set(

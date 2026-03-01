@@ -11,6 +11,8 @@ type EndLiveModalProps = {
   onEndLive: () => void;
   isHost: boolean;
   confirmText?: string;
+  title?: string;
+  subtitle?: string;
 };
 
 export function EndLiveModal({
@@ -19,6 +21,8 @@ export function EndLiveModal({
   onEndLive,
   isHost,
   confirmText,
+  title,
+  subtitle,
 }: EndLiveModalProps) {
   const handleEndLive = () => {
     hapticTap();
@@ -43,12 +47,13 @@ export function EndLiveModal({
 
           {/* Title & Description */}
           <AppText variant="h3" style={styles.title}>
-            End Live?
+            {title || (isHost ? 'End Live?' : 'Leave Live?')}
           </AppText>
           <AppText style={styles.subtitle}>
-            {isHost
-              ? 'You are the host. Leaving will end the live stream for everyone.'
-              : 'Are you sure you want to leave this live?'}
+            {subtitle ||
+              (isHost
+                ? 'Ending now will stop the live for everyone.'
+                : 'You will leave this live. The stream keeps running for others.')}
           </AppText>
 
           {/* Actions */}
@@ -68,7 +73,7 @@ export function EndLiveModal({
               onPress={handleEndLive}
             >
               <AppText style={styles.endText}>
-                {confirmText || (isHost ? 'End Live' : 'Leave')}
+                {confirmText || (isHost ? 'End Live' : 'Leave Live')}
               </AppText>
             </Pressable>
           </View>

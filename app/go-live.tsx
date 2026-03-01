@@ -35,6 +35,7 @@ export default function GoLiveScreen() {
   const [inviteOnly, setInviteOnly] = useState(false);
   const [showFuelSheet, setShowFuelSheet] = useState(false);
   const [pendingStart, setPendingStart] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
   const canStartLive = normalizedTitle.length >= 3 && fuel > 0 && !pendingStart;
   const startDisabledHint =
@@ -52,13 +53,21 @@ export default function GoLiveScreen() {
     };
   }, []);
 
-  const handleStartLive = () => {
+  const handleStartLive = async () => {
+    if (pendingStart) return;
     hapticTap();
-    const didStartLive = startLive(normalizedTitle, inviteOnly);
-    if (!didStartLive) {
-      return;
-    }
     setPendingStart(true);
+    setStartError(null);
+    try {
+      const startResult = await startLive(normalizedTitle, inviteOnly);
+      if (!startResult.ok) {
+        setPendingStart(false);
+        setStartError(startResult.message);
+      }
+    } catch {
+      setPendingStart(false);
+      setStartError('Unable to start live right now. Please try again.');
+    }
   };
 
   useEffect(() => {
@@ -66,6 +75,7 @@ export default function GoLiveScreen() {
     if (!activeLive || !liveRoom) return;
 
     setPendingStart(false);
+    setStartError(null);
     router.replace('/live');
   }, [activeLive, liveRoom, pendingStart, router]);
 
@@ -147,7 +157,12 @@ export default function GoLiveScreen() {
                   placeholder="What's your live about?"
                   placeholderTextColor={colors.textMuted}
                   value={title}
-                  onChangeText={setTitle}
+                  onChangeText={(value) => {
+                    setTitle(value);
+                    if (startError) {
+                      setStartError(null);
+                    }
+                  }}
                   maxLength={50}
                 />
                 <AppText style={styles.charCount}>{title.length}/50</AppText>
@@ -172,6 +187,9 @@ export default function GoLiveScreen() {
                 onValueChange={(value) => {
                   hapticTap();
                   setInviteOnly(value);
+                  if (startError) {
+                    setStartError(null);
+                  }
                 }}
                 trackColor={{ false: colors.surfaceAlt, true: colors.accentPrimary }}
                 thumbColor="#fff"
@@ -228,7 +246,9 @@ export default function GoLiveScreen() {
                 <Ionicons name="arrow-forward" size={20} color="#fff" />
               </LinearGradient>
             </Pressable>
-            {startDisabledHint ? (
+            {startError ? (
+              <AppText style={styles.validationHintError}>{startError}</AppText>
+            ) : startDisabledHint ? (
               <AppText style={styles.validationHint}>{startDisabledHint}</AppText>
             ) : null}
           </View>
@@ -474,5 +494,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     color: colors.textMuted,
+  },
+  validationHintError: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    textAlign: 'center',
+    color: colors.accentDanger,
   },
 });

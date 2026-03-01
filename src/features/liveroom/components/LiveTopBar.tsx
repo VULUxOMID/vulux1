@@ -13,12 +13,14 @@ type LiveTopBarProps = {
   viewerCount: number;
   profileViewCount?: number;
   onMinimize: () => void;
+  onExitPress?: () => void;
   onViewersPress: () => void;
   onProfileViewsPress: () => void;
   topInset: number;
   showMediaControls?: boolean;
   isMuted?: boolean;
   onToggleMic?: () => void;
+  isHost?: boolean;
   // Fuel info (Premium GemPlus)
   fuelMinutes?: number;
   isFuelDraining?: boolean;
@@ -30,12 +32,14 @@ export function LiveTopBar({
   viewerCount,
   profileViewCount = 0,
   onMinimize,
+  onExitPress,
   onViewersPress,
   onProfileViewsPress,
   topInset,
   showMediaControls = false,
   isMuted = false,
   onToggleMic,
+  isHost = false,
   fuelMinutes = 0,
   isFuelDraining = false,
   onFuelPress,
@@ -114,6 +118,27 @@ export function LiveTopBar({
             </Pressable>
           </>
         )}
+        {onExitPress ? (
+          <Pressable
+            onPress={() => {
+              hapticTap();
+              onExitPress();
+            }}
+            style={styles.blurContainer}
+          >
+            <BlurView
+              intensity={20}
+              tint="dark"
+              style={[styles.iconButton, styles.exitButton, isHost && styles.exitButtonDanger]}
+            >
+              <Ionicons
+                name={isHost ? 'stop-circle-outline' : 'exit-outline'}
+                size={18}
+                color="#fff"
+              />
+            </BlurView>
+          </Pressable>
+        ) : null}
         {/* Profile Views - Eye icon */}
         <Pressable
           onPress={() => {
@@ -203,6 +228,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'transparent',
+  },
+  exitButton: {
+    backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.25)',
+  },
+  exitButtonDanger: {
+    backgroundColor: Platform.OS === 'android' ? 'rgba(255,59,48,0.35)' : 'rgba(255,59,48,0.22)',
   },
   countText: {
     color: '#fff',
