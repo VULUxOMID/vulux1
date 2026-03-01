@@ -1350,19 +1350,10 @@ export function subscribeLive(liveId: string): () => void {
     `SELECT * FROM public_live_presence_item WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
     'SELECT * FROM public_live_presence_item',
   ]);
-  const liveMessageQueryVariants = buildMessageViewQueryVariants(
-    'global_message_item',
-    keyLiveId,
-    ['room_id'],
-    {
-      limit: 220,
-      windowMs: 24 * 60 * 60 * 1000,
-    },
-    {
-      // Live-room chat should remain room-scoped and avoid pulling full global history.
-      includeFullViewFallback: false,
-    },
-  );
+  // Room-scoped only: avoid temporal filters that can trigger parser errors on some servers.
+  const liveMessageQueryVariants = [
+    `SELECT * FROM global_message_item WHERE room_id = '${escapeSqlLiteral(keyLiveId)}'`,
+  ];
   const querySets = liveQueries.flatMap((liveQuery) =>
     presenceQueries.flatMap((presenceQuery) =>
       liveMessageQueryVariants.map((messageQuery) => [
