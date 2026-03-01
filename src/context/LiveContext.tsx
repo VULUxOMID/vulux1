@@ -527,6 +527,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   const activeLiveRef = useRef<LiveItem | null>(null);
   const liveRoomRef = useRef<LiveRoom | null>(null);
+  const liveRoomMessageScopeRef = useRef<string | null>(null);
   const liveStartInFlightRef = useRef(false);
   const liveEndDetectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveEndAutoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -901,8 +902,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (!liveRoom) return;
+    if (!liveRoom) {
+      liveRoomMessageScopeRef.current = null;
+      return;
+    }
     const roomId = liveRoom.id;
+    const didSwitchLiveRoom = liveRoomMessageScopeRef.current !== roomId;
+    if (didSwitchLiveRoom) {
+      liveRoomMessageScopeRef.current = roomId;
+    }
     const isCurrentLiveEnding = liveEndingState?.liveId === roomId;
     const hasSnapshotWithoutHosts =
       Boolean(snapshotLive) &&
@@ -967,7 +975,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     setLiveRoom((prev) => {
       if (!prev || prev.id !== roomId) return prev;
 
-      const nextChatMessages = mergeLiveChatMessages(prev.chatMessages, backendMessages);
+      const nextChatMessages = didSwitchLiveRoom
+        ? mergeLiveChatMessages([], backendMessages)
+        : mergeLiveChatMessages(prev.chatMessages, backendMessages);
 
       const nextTitle = shouldShowLiveOverState
         ? LIVE_OVER_TITLE
