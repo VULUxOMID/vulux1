@@ -347,6 +347,15 @@ export const spacetimedb = schema({
     liveItem: table({ public: false }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
     liveBoostLeaderboardItem: table({ public: true }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
     knownLiveUserItem: table({ public: true }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
+    publicLivePresenceItem: table(
+        { public: true },
+        {
+            userId: t.string().primaryKey(),
+            liveId: t.string().index(),
+            activity: t.string(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     livePresenceItem: table(
         {
             public: false,

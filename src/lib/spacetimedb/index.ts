@@ -95,6 +95,7 @@ import PublicLeaderboardRow from "./public_leaderboard_table";
 import PublicLeaderboardItemRow from "./public_leaderboard_item_table";
 import PublicLiveDiscoveryRow from "./public_live_discovery_table";
 import PublicLiveDiscoveryItemRow from "./public_live_discovery_item_table";
+import PublicLivePresenceItemRow from "./public_live_presence_item_table";
 import PublicProfileSummaryRow from "./public_profile_summary_table";
 import PublicProfileSummaryItemRow from "./public_profile_summary_item_table";
 import SocialUserItemRow from "./social_user_item_table";
@@ -558,6 +559,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, PublicLiveDiscoveryRow),
+  publicLivePresenceItem: __table({
+    name: 'public_live_presence_item',
+    indexes: [
+      { name: 'liveId', algorithm: 'btree', columns: [
+        'liveId',
+      ] },
+      { name: 'userId', algorithm: 'btree', columns: [
+        'userId',
+      ] },
+    ],
+    constraints: [
+      { name: 'public_live_presence_item_user_id_key', constraint: 'unique', columns: ['userId'] },
+    ],
+  }, PublicLivePresenceItemRow),
   publicProfileSummary: __table({
     name: 'public_profile_summary',
     indexes: [
@@ -652,4 +667,3 @@ export class DbConnection extends __DbConnectionImpl<typeof REMOTE_MODULE> {
     return new SubscriptionBuilder(this);
   };
 }
-
