@@ -1452,6 +1452,9 @@ function upsertPublicLiveDiscoveryItem(
 ): void {
   const hosts = normalizeHostList(item.hosts);
   const primaryHost = hosts[0] ?? {};
+  const viewerCount = toNonNegativeInt(item.viewers);
+  const endedAt = toNonNegativeInt(item.endedAt);
+  const shouldHideFromDiscovery = endedAt > 0 || (hosts.length === 0 && viewerCount === 0);
 
   const hostUserId =
     readString(primaryHost.id) ??
@@ -1478,13 +1481,17 @@ function upsertPublicLiveDiscoveryItem(
     ctx.db.publicLiveDiscoveryItem.liveId.delete(liveId);
   }
 
+  if (shouldHideFromDiscovery) {
+    return;
+  }
+
   ctx.db.publicLiveDiscoveryItem.insert({
     liveId,
     hostUserId,
     hostUsername,
     hostAvatarUrl,
     title: readString(item.title) ?? 'Live',
-    viewerCount: toNonNegativeInt(item.viewers),
+    viewerCount,
   });
 }
 
@@ -2289,6 +2296,11 @@ function applyLiveEnd(ctx: any, payload: JsonRecord): void {
     if (readString(item.liveId) === liveId) {
       deleteLivePresenceItem(ctx, row.userId);
     }
+  }
+
+  const boostRow = ctx.db.liveBoostLeaderboardItem.id.find(liveId);
+  if (boostRow) {
+    ctx.db.liveBoostLeaderboardItem.id.delete(liveId);
   }
 }
 
