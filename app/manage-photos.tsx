@@ -56,6 +56,8 @@ const SCROLL_SPEED = 15;
 const MAX_PHOTOS = 12;
 const CROP_MAX_SCALE = 3;
 const CROP_FRAME_RATIO = PHOTO_HEIGHT / PHOTO_SIZE;
+const PROFILE_UPLOAD_TARGET_WIDTH = 960;
+const PROFILE_UPLOAD_JPEG_QUALITY = 0.78;
 
 const REORDER_LAYOUT_ANIM = {
   duration: 300,
@@ -341,9 +343,9 @@ export default function ManagePhotosScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: 'images',
         allowsEditing: false,
-        quality: 1,
+        quality: 0.85,
         selectionLimit: 1,
       });
 
@@ -374,9 +376,9 @@ export default function ManagePhotosScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: 'images',
         allowsEditing: false,
-        quality: 1,
+        quality: 0.85,
         cameraType: ImagePicker.CameraType.front,
       });
 
@@ -423,6 +425,39 @@ export default function ManagePhotosScreen() {
     setCropAsset(null);
   };
 
+  const finalizePendingPhotoUpload = async (pendingPhotoId: string, localUri: string) => {
+    try {
+      const uploadedPhoto = await uploadMediaAsset({
+        getToken,
+        uri: localUri,
+        contentType: 'image/jpeg',
+        mediaType: 'profile',
+      });
+      console.log('[manage-photos] upload flow -> r2 upload complete');
+
+      const finalizedPhotoId = `photo-${Date.now()}`;
+      const nextPhotos: Photo[] = photosRef.current.map((photo) =>
+        photo.id === pendingPhotoId
+          ? {
+              id: finalizedPhotoId,
+              uri: uploadedPhoto.publicUrl,
+            }
+          : photo,
+      );
+      commitPhotos(nextPhotos);
+      console.log('[manage-photos] upload flow -> photo available in UI');
+      toast.success('Photo uploaded');
+    } catch (error) {
+      const rollbackPhotos = photosRef.current.filter((photo) => photo.id !== pendingPhotoId);
+      commitPhotos(rollbackPhotos);
+      const message = error instanceof Error ? error.message : 'Could not save that photo. Please try again.';
+      toast.error(message);
+      if (__DEV__) {
+        console.warn('[manage-photos] Failed to save cropped photo', error);
+      }
+    }
+  };
+
   const applyCrop = async () => {
     if (!cropAsset || !cropMetrics || isApplyingCrop) {
       return;
@@ -437,7 +472,7 @@ export default function ManagePhotosScreen() {
         ((displayWidth - cropFrameWidth) / 2 - cropOffset.x) * (sourceWidth / displayWidth);
       const originY =
         ((displayHeight - cropFrameHeight) / 2 - cropOffset.y) * (sourceHeight / displayHeight);
-      const outputWidth = 1200;
+      const outputWidth = Math.max(720, Math.min(PROFILE_UPLOAD_TARGET_WIDTH, Math.round(cropWidth)));
       const outputHeight = Math.round(outputWidth * (cropFrameHeight / cropFrameWidth));
 
       const cropped = await ImageManipulator.manipulateAsync(
@@ -459,31 +494,26 @@ export default function ManagePhotosScreen() {
           },
         ],
         {
-          compress: 0.9,
+          compress: PROFILE_UPLOAD_JPEG_QUALITY,
           format: ImageManipulator.SaveFormat.JPEG,
         },
       );
 
       console.log('[manage-photos] upload flow -> cropped asset ready');
-      const uploadedPhoto = await uploadMediaAsset({
-        getToken,
-        uri: cropped.uri,
-        contentType: 'image/jpeg',
-        mediaType: 'profile',
-      });
-      console.log('[manage-photos] upload flow -> r2 upload complete');
-
+      const pendingPhotoId = `photo-pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const nextPhotos: Photo[] = [
-        ...photos,
+        ...photosRef.current,
         {
-          id: `photo-${Date.now()}`,
-          uri: uploadedPhoto.publicUrl,
+          id: pendingPhotoId,
+          uri: cropped.uri,
         },
       ];
       commitPhotos(nextPhotos);
       setCropAsset(null);
-      console.log('[manage-photos] upload flow -> photo available in UI');
-      toast.success('Photo added');
+      toast.info('Uploading photo…');
+
+      // Let the user continue instantly while upload + persistence complete in background.
+      void finalizePendingPhotoUpload(pendingPhotoId, cropped.uri);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not save that photo. Please try again.';
       toast.error(message);

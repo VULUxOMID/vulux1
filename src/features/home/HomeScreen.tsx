@@ -44,7 +44,7 @@ export default function HomeScreen() {
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { userProfile } = useUserProfile();
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
-  const { messages: messagesRepo, live: liveRepo } = useRepositories();
+  const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
   const queriesEnabled =
     isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const lives = useMemo<LiveItem[]>(
@@ -59,6 +59,42 @@ export default function HomeScreen() {
     () => (queriesEnabled ? messagesRepo.listMentionUsers({ limit: 240 }) : []),
     [messagesRepo, queriesEnabled],
   );
+  const globalChatNotificationCount = useMemo(() => {
+    if (!queriesEnabled) return 0;
+
+    const unreadActivity = notificationsRepo.listNotifications({
+      unreadOnly: true,
+      types: ['activity'],
+      limit: 240,
+      userId: userId ?? undefined,
+    });
+
+    return unreadActivity.reduce((count, notification) => {
+      if (notification.type !== 'activity') return count;
+      if (notification.activityType !== 'mention' && notification.activityType !== 'reply') {
+        return count;
+      }
+
+      const metadata = notification.metadata ?? {};
+      const conversationKey =
+        typeof metadata.conversationKey === 'string' ? metadata.conversationKey.trim() : '';
+      if (conversationKey.length > 0) {
+        return count;
+      }
+
+      const chatId = typeof metadata.chatId === 'string' ? metadata.chatId.trim().toLowerCase() : '';
+      if (chatId.length > 0 && chatId !== 'global') {
+        return count;
+      }
+
+      const roomId = typeof metadata.roomId === 'string' ? metadata.roomId.trim().toLowerCase() : '';
+      if (roomId.length > 0 && roomId !== 'global') {
+        return count;
+      }
+
+      return count + 1;
+    }, 0);
+  }, [notificationsRepo, queriesEnabled, userId]);
   const liveIds = useMemo(() => new Set(lives.map((live) => live.id)), [lives]);
   const friendIds = useMemo(() => friends.map((friend) => friend.id), [friends]);
   const livePresence = useMemo(
@@ -415,7 +451,7 @@ export default function HomeScreen() {
           onOpenChat={() => setShowChat(true)}
           onAnnounceWinner={handleWinnerAnnouncement}
           friends={friends}
-          messageCount={globalMessages.length}
+          messageCount={globalChatNotificationCount}
           isChatOpen={showChat}
         />
         <LiveSection lives={lives} />

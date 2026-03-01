@@ -3,7 +3,7 @@ import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
 import { postSafe } from './httpMutations';
-import { spacetimeDb } from '../../../lib/spacetime';
+import { getSpacetimeTelemetrySnapshot, spacetimeDb } from '../../../lib/spacetime';
 import { requestBackendRefresh } from './refreshBus';
 
 type UnknownRecord = Record<string, unknown>;
@@ -25,6 +25,26 @@ function asFiniteNumber(value: unknown): number | null {
     return Number.isFinite(asNumber) ? asNumber : null;
   }
   return null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Unknown social write error';
+  }
 }
 
 function readTimestampMs(value: unknown): number {
@@ -387,42 +407,62 @@ export function createBackendSocialRepository(
       const status = normalizeSocialStatus(request.status);
       const nextStatusText = asString(request.statusText);
 
-      try {
-        const reducers = spacetimeDb.reducers as any;
-        const id = `social-status-${request.userId}-${Date.now()}`;
-        if (typeof reducers?.setSocialStatus === 'function') {
-          await reducers.setSocialStatus({
-            id,
-            userId: request.userId,
-            status,
-            statusText: nextStatusText,
-            lastSeen: status === 'recent' || status === 'offline' ? nowIso : null,
-            username: null,
-            avatarUrl: null,
-          });
-        } else {
-          await reducers.sendGlobalMessage({
-            id,
-            roomId: `social:${request.userId}`,
-            item: JSON.stringify({
-              eventType: 'social_status',
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const reducers = spacetimeDb.reducers as any;
+          const id = `social-status-${request.userId}-${Date.now()}`;
+          if (typeof reducers?.setSocialStatus === 'function') {
+            await reducers.setSocialStatus({
+              id,
               userId: request.userId,
               status,
-              isLive: status === 'live',
-              isOnline: statusIsOnline(status),
-              statusText: nextStatusText ?? undefined,
-              lastSeen: status === 'recent' || status === 'offline' ? nowIso : undefined,
-            }),
+              statusText: nextStatusText,
+              lastSeen: status === 'recent' || status === 'offline' ? nowIso : null,
+              username: null,
+              avatarUrl: null,
+            });
+          } else if (typeof reducers?.sendGlobalMessage === 'function') {
+            await reducers.sendGlobalMessage({
+              id,
+              roomId: `social:${request.userId}`,
+              item: JSON.stringify({
+                eventType: 'social_status',
+                userId: request.userId,
+                status,
+                isLive: status === 'live',
+                isOnline: statusIsOnline(status),
+                statusText: nextStatusText ?? undefined,
+                lastSeen: status === 'recent' || status === 'offline' ? nowIso : undefined,
+              }),
+            });
+          } else {
+            throw new Error('SpacetimeDB reducers unavailable for social status.');
+          }
+
+          requestBackendRefresh({
+            scopes: ['social', 'friendships'],
+            source: 'manual',
+            reason: 'social_status_updated_spacetimedb',
           });
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 3) {
+            await delay(250 * (attempt + 1));
+          }
         }
-        requestBackendRefresh({
-          scopes: ['social', 'friendships'],
-          source: 'manual',
-          reason: 'social_status_updated_spacetimedb',
+      }
+
+      if (__DEV__) {
+        const telemetry = getSpacetimeTelemetrySnapshot();
+        console.warn('[data/social] Failed to persist status via SpacetimeDB', {
+          userId: request.userId,
+          status,
+          error: describeError(lastError),
+          connectionState: telemetry.connectionState,
+          subscriptionState: telemetry.subscriptionState,
         });
-        return;
-      } catch {
-        // Fallback for legacy API deployments.
       }
 
       await postSafe(client, '/social/update-status', request);
@@ -431,41 +471,62 @@ export function createBackendSocialRepository(
       if (!request.userId) return;
 
       const status: 'live' | 'online' | 'recent' = request.isLive ? 'live' : 'online';
-      try {
-        const reducers = spacetimeDb.reducers as any;
-        const id = `social-live-${request.userId}-${Date.now()}`;
-        if (typeof reducers?.setSocialStatus === 'function') {
-          await reducers.setSocialStatus({
-            id,
-            userId: request.userId,
-            status,
-            statusText: null,
-            lastSeen: request.isLive ? null : new Date().toISOString(),
-            username: null,
-            avatarUrl: null,
-          });
-        } else {
-          await reducers.sendGlobalMessage({
-            id,
-            roomId: `social:${request.userId}`,
-            item: JSON.stringify({
-              eventType: 'social_status',
+
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const reducers = spacetimeDb.reducers as any;
+          const id = `social-live-${request.userId}-${Date.now()}`;
+          if (typeof reducers?.setSocialStatus === 'function') {
+            await reducers.setSocialStatus({
+              id,
               userId: request.userId,
               status,
-              isLive: request.isLive,
-              isOnline: request.isLive || status === 'online',
-              lastSeen: request.isLive ? undefined : new Date().toISOString(),
-            }),
+              statusText: null,
+              lastSeen: request.isLive ? null : new Date().toISOString(),
+              username: null,
+              avatarUrl: null,
+            });
+          } else if (typeof reducers?.sendGlobalMessage === 'function') {
+            await reducers.sendGlobalMessage({
+              id,
+              roomId: `social:${request.userId}`,
+              item: JSON.stringify({
+                eventType: 'social_status',
+                userId: request.userId,
+                status,
+                isLive: request.isLive,
+                isOnline: request.isLive || status === 'online',
+                lastSeen: request.isLive ? undefined : new Date().toISOString(),
+              }),
+            });
+          } else {
+            throw new Error('SpacetimeDB reducers unavailable for live status.');
+          }
+
+          requestBackendRefresh({
+            scopes: ['social', 'friendships'],
+            source: 'manual',
+            reason: 'social_live_updated_spacetimedb',
           });
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 3) {
+            await delay(250 * (attempt + 1));
+          }
         }
-        requestBackendRefresh({
-          scopes: ['social', 'friendships'],
-          source: 'manual',
-          reason: 'social_live_updated_spacetimedb',
+      }
+
+      if (__DEV__) {
+        const telemetry = getSpacetimeTelemetrySnapshot();
+        console.warn('[data/social] Failed to persist live status via SpacetimeDB', {
+          userId: request.userId,
+          isLive: request.isLive,
+          error: describeError(lastError),
+          connectionState: telemetry.connectionState,
+          subscriptionState: telemetry.subscriptionState,
         });
-        return;
-      } catch {
-        // Fallback for legacy API deployments.
       }
 
       await postSafe(client, '/social/set-live', request);

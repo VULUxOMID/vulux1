@@ -308,7 +308,7 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   my_identity: ['identity'],
   my_roles: ['roles'],
   my_profile: ['profile'],
-  my_account_state: ['wallet'],
+  my_account_state: ['wallet', 'profile'],
   my_notifications: ['notifications', 'counts'],
   my_friendships: ['friendships', 'social', 'search', 'counts'],
   my_conversations: ['messages', 'conversations', 'counts'],

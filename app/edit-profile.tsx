@@ -54,6 +54,10 @@ export default function EditProfileScreen() {
 
   // Auto-save changes
   useEffect(() => {
+    if (displayName === userProfile.name && bio === userProfile.bio) {
+      return;
+    }
+
     const timer = setTimeout(() => {
       updateUserProfile({
         name: displayName,
@@ -62,7 +66,7 @@ export default function EditProfileScreen() {
     }, 500); // Debounce auto-save
 
     return () => clearTimeout(timer);
-  }, [displayName, bio, updateUserProfile]);
+  }, [bio, displayName, updateUserProfile, userProfile.bio, userProfile.name]);
 
   const photos = userProfile.photos;
 

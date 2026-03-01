@@ -71,23 +71,32 @@ async function requestSignedUploadTarget(
     throw new Error('Upload signer not configured');
   }
 
+  const presignUrl = `${baseUrl.replace(/\/+$/, '')}/presign`;
   console.log('[upload] presign -> requesting');
-  const response = await fetch(
-    `${baseUrl.replace(/\/+$/, '')}/presign`,
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+  let response: Response;
+  try {
+    response = await fetch(
+      presignUrl,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          contentType,
+          mediaType,
+          size,
+        }),
       },
-      body: JSON.stringify({
-        contentType,
-        mediaType,
-        size,
-      }),
-    },
-  );
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown network error';
+    throw new Error(
+      `Could not reach upload signer at ${presignUrl}. Start backend signer and confirm your phone can access your Mac on port 3000. (${reason})`,
+    );
+  }
 
   const payload = await parseSignerJson(response);
   if (!response.ok) {

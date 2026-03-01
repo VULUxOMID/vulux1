@@ -7,7 +7,7 @@ import { AppScreen, PillTabs } from '../../components';
 import type { PillTabItem } from '../../components';
 import { useAuth, useFriends, useWallet } from '../../context';
 import { useUserProfile } from '../../context/UserProfileContext';
-import { useLeaderboardRepo, useNotificationsRepo } from '../../data/provider';
+import { useLeaderboardRepo, useNotificationsRepo, useSocialRepo } from '../../data/provider';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
@@ -39,6 +39,7 @@ export default function ProfileScreen() {
   const { friends } = useFriends();
   const notificationsRepo = useNotificationsRepo();
   const leaderboardRepo = useLeaderboardRepo();
+  const socialRepo = useSocialRepo();
   const { userProfile, updateUserProfile } = useUserProfile();
   const { gems, cash, fuel } = useWallet();
   const router = useRouter();
@@ -114,6 +115,29 @@ export default function ProfileScreen() {
     hapticTap();
     setShowStatusModal(true);
   };
+
+  const handleStatusApply = useCallback(
+    (status: 'online' | 'busy' | 'offline', statusMessage?: string) => {
+      updateUserProfile({ presenceStatus: status, statusMessage });
+
+      if (!userId) {
+        return;
+      }
+
+      void socialRepo
+        .updateUserStatus({
+          userId,
+          status,
+          statusText: statusMessage,
+        })
+        .catch((error) => {
+          if (__DEV__) {
+            console.warn('[profile] Failed to persist social status', error);
+          }
+        });
+    },
+    [socialRepo, updateUserProfile, userId],
+  );
 
   const handleFriendsPress = useCallback(() => {
     hapticTap();
@@ -239,7 +263,7 @@ export default function ProfileScreen() {
         value={userProfile.presenceStatus}
         initialStatusMessage={userProfile.statusMessage}
         onClose={() => setShowStatusModal(false)}
-        onApply={(status, statusMessage) => updateUserProfile({ presenceStatus: status, statusMessage })}
+        onApply={handleStatusApply}
       />
     </AppScreen>
   );

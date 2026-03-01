@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { useAuth as useSessionAuth, useUser as useSessionUser } from '../auth/spacetimeSession';
@@ -7,7 +7,6 @@ import { createBackendRepositories, EMPTY_BACKEND_SNAPSHOT } from './adapters/ba
 import { upsertAccountState } from './adapters/backend/accountState';
 import { subscribeBackendRefresh } from './adapters/backend/refreshBus';
 import {
-  announceSpacetimeUserProfile,
   connectSpacetimeDB,
   disconnectSpacetimeDB,
   subscribeSpacetimeDataChanges,
@@ -35,74 +34,24 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     createBackendRepositories(EMPTY_BACKEND_SNAPSHOT, null, userId ?? null),
   );
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-  const lastAnnouncedProfileFingerprintRef = useRef<string | null>(null);
   const lastSyncedAccountFingerprintRef = useRef<string | null>(null);
+  const accountStateRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [accountStateRetryNonce, setAccountStateRetryNonce] = useState(0);
 
-  const sessionUsername = sessionUser?.username?.trim() ?? '';
-  const sessionFullName = sessionUser?.fullName?.trim() ?? '';
   const sessionPrimaryEmail = sessionUser?.primaryEmailAddress?.emailAddress?.trim() ?? '';
   const sessionPrimaryPhone = sessionUser?.primaryPhoneNumber?.phoneNumber?.trim() ?? '';
-  const sessionAvatarUrl = sessionUser?.imageUrl?.trim() ?? '';
 
   const refreshRepositories = useCallback(() => {
     setRepositories(createBackendRepositories(EMPTY_BACKEND_SNAPSHOT, null, userId ?? null));
   }, [userId]);
 
-  const profileAnnouncement = useMemo(() => {
-    if (!isAuthLoaded || !isUserLoaded || !isSignedIn || !userId) {
-      return null;
-    }
-
-    const username =
-      sessionUsername ||
-      sessionFullName ||
-      sessionPrimaryEmail.split('@')[0] ||
-      userId;
-    const displayName = sessionFullName || username;
-
-    return {
-      userId,
-      username,
-      displayName,
-      avatarUrl: sessionAvatarUrl,
-    };
-  }, [
-    sessionAvatarUrl,
-    sessionFullName,
-    sessionPrimaryEmail,
-    sessionUsername,
-    isAuthLoaded,
-    isSignedIn,
-    isUserLoaded,
-    userId,
-  ]);
-
-  const announceCurrentUserProfile = useCallback(() => {
-    if (!profileAnnouncement) {
+  const clearAccountStateRetryTimer = useCallback(() => {
+    if (!accountStateRetryTimerRef.current) {
       return;
     }
-
-    const { userId: profileUserId, username, displayName, avatarUrl } = profileAnnouncement;
-    const fingerprint = JSON.stringify([profileUserId, username, displayName, avatarUrl]);
-    if (lastAnnouncedProfileFingerprintRef.current === fingerprint) {
-      return;
-    }
-
-    lastAnnouncedProfileFingerprintRef.current = fingerprint;
-    void announceSpacetimeUserProfile({
-      userId: profileUserId,
-      username,
-      displayName,
-      avatarUrl,
-    }).catch((error) => {
-      if (__DEV__) {
-        console.warn('[data/spacetimedb] Failed to announce profile', error);
-      }
-      if (lastAnnouncedProfileFingerprintRef.current === fingerprint) {
-        lastAnnouncedProfileFingerprintRef.current = null;
-      }
-    });
-  }, [profileAnnouncement]);
+    clearTimeout(accountStateRetryTimerRef.current);
+    accountStateRetryTimerRef.current = null;
+  }, []);
 
   useEffect(() => {
     refreshRepositories();
@@ -113,6 +62,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       if (!isSignedIn) {
         lastSyncedAccountFingerprintRef.current = null;
       }
+      clearAccountStateRetryTimer();
       return;
     }
 
@@ -131,7 +81,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     void (async () => {
-      await upsertAccountState(
+      const persisted = await upsertAccountState(
         null,
         getToken,
         {
@@ -146,7 +96,18 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       );
 
       if (!cancelled) {
-        lastSyncedAccountFingerprintRef.current = fingerprint;
+        if (persisted) {
+          clearAccountStateRetryTimer();
+          lastSyncedAccountFingerprintRef.current = fingerprint;
+          return;
+        }
+
+        if (!accountStateRetryTimerRef.current) {
+          accountStateRetryTimerRef.current = setTimeout(() => {
+            accountStateRetryTimerRef.current = null;
+            setAccountStateRetryNonce((value) => value + 1);
+          }, 2_000);
+        }
       }
     })();
 
@@ -154,6 +115,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [
+    accountStateRetryNonce,
+    clearAccountStateRetryTimer,
     emailVerified,
     getToken,
     isAuthLoaded,
@@ -164,6 +127,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     sessionUser?.id,
     userId,
   ]);
+
+  useEffect(() => () => {
+    clearAccountStateRetryTimer();
+  }, [clearAccountStateRetryTimer]);
 
   useEffect(() => {
     if (!isAuthLoaded || !isSignedIn) {
@@ -181,7 +148,6 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
     if (isForegroundAppState(appStateRef.current)) {
       connectSpacetimeDB();
-      announceCurrentUserProfile();
       refreshRepositories();
     }
 
@@ -200,7 +166,6 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
       if (!wasForeground && isForeground) {
         connectSpacetimeDB();
-        announceCurrentUserProfile();
         refreshRepositories();
       } else if (!isForeground) {
         disconnectSpacetimeDB();
@@ -218,14 +183,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       unsubscribeSpacetimeDataChanges();
       disconnectSpacetimeDB();
     };
-  }, [announceCurrentUserProfile, isAuthLoaded, isSignedIn, refreshRepositories]);
-
-  useEffect(() => {
-    if (!isForegroundAppState(appStateRef.current)) {
-      return;
-    }
-    announceCurrentUserProfile();
-  }, [announceCurrentUserProfile]);
+  }, [isAuthLoaded, isSignedIn, refreshRepositories]);
 
   return <DataContext.Provider value={repositories}>{children}</DataContext.Provider>;
 }

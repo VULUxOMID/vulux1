@@ -12,20 +12,40 @@ import {
 } from 'react-native';
 
 import { AppScreen, AppText } from '../src/components';
+import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
 import { useUserProfile } from '../src/context/UserProfileContext';
+import { useSocialRepo } from '../src/data/provider';
 import { colors, radius, spacing } from '../src/theme';
 
 export default function SetStatusScreen() {
     const router = useRouter();
+    const { userId } = useSessionAuth();
+    const socialRepo = useSocialRepo();
     const { userProfile, updateUserProfile } = useUserProfile();
     const [statusMessage, setStatusMessage] = useState(userProfile.statusMessage || '');
 
     const handleSave = () => {
         const trimmedMessage = statusMessage.trim();
+        const nextStatusMessage = trimmedMessage.length > 0 ? trimmedMessage : undefined;
+        const nextPresenceStatus = userProfile.presenceStatus;
+
         updateUserProfile({
-            presenceStatus: userProfile.presenceStatus,
-            statusMessage: trimmedMessage.length > 0 ? trimmedMessage : undefined
+            presenceStatus: nextPresenceStatus,
+            statusMessage: nextStatusMessage,
         });
+
+        if (userId) {
+            void socialRepo.updateUserStatus({
+                userId,
+                status: nextPresenceStatus,
+                statusText: nextStatusMessage,
+            }).catch((error) => {
+                if (__DEV__) {
+                    console.warn('[profile] Failed to persist status message', error);
+                }
+            });
+        }
+
         router.back();
     };
 
