@@ -49,6 +49,77 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function firstDefinedString(values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = readString(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function isLikelyOpaqueUserId(value: string | null | undefined): boolean {
+  const normalized = readString(value);
+  if (!normalized) return false;
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^[0-9a-f]{32,64}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^[0-9A-HJKMNP-TV-Z]{26}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^user_[0-9A-Za-z]+$/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shortUserId(value: string | null | undefined): string | null {
+  const normalized = readString(value);
+  if (!normalized) return null;
+  if (normalized.length <= 10) return normalized;
+  return normalized.slice(0, 8);
+}
+
+function resolveFriendlyUserLabel(
+  userId: string | null | undefined,
+  preferredValues: unknown[],
+): string {
+  let firstReadableCandidate: string | null = null;
+
+  for (const value of preferredValues) {
+    const normalized = readString(value);
+    if (!normalized) continue;
+
+    if (!firstReadableCandidate) {
+      firstReadableCandidate = normalized;
+    }
+
+    if (!isLikelyOpaqueUserId(normalized)) {
+      return normalized;
+    }
+  }
+
+  if (firstReadableCandidate && !isLikelyOpaqueUserId(firstReadableCandidate)) {
+    return firstReadableCandidate;
+  }
+
+  const shortId = shortUserId(userId);
+  if (shortId) {
+    return `User ${shortId}`;
+  }
+
+  return 'Unknown';
+}
+
 function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
@@ -1167,6 +1238,12 @@ function refreshPublicProfileSummaryItem(ctx: any, userId: string): void {
   });
 }
 
+function readPublicProfileSummaryItem(ctx: any, userId: string | null | undefined) {
+  const normalizedUserId = readString(userId);
+  if (!normalizedUserId) return null;
+  return ctx.db.publicProfileSummaryItem.userId.find(normalizedUserId) ?? null;
+}
+
 function readAccountStateItem(ctx: any, userId: string): JsonRecord {
   const row = ctx.db.accountStateItem.userId.find(userId);
   if (!row) return {};
@@ -1380,14 +1457,21 @@ function upsertPublicLiveDiscoveryItem(
     readString(primaryHost.id) ??
     readString(item.ownerUserId) ??
     readString(item.hostUserId);
-  const hostUsername =
-    readString(primaryHost.username) ??
-    readString(primaryHost.name) ??
-    readString(item.hostUsername) ??
-    hostUserId;
-  const hostAvatarUrl =
-    readString(primaryHost.avatar) ??
-    readString(item.hostAvatarUrl);
+  const profileSummary = readPublicProfileSummaryItem(ctx, hostUserId);
+  const profileUsername = readString(profileSummary?.username);
+  const profileAvatarUrl = readString(profileSummary?.avatarUrl);
+
+  const hostUsername = resolveFriendlyUserLabel(hostUserId, [
+    readString(primaryHost.username),
+    readString(primaryHost.name),
+    readString(item.hostUsername),
+    profileUsername,
+  ]);
+  const hostAvatarUrl = firstDefinedString([
+    readString(primaryHost.avatar),
+    readString(item.hostAvatarUrl),
+    profileAvatarUrl,
+  ]);
 
   const existing = ctx.db.publicLiveDiscoveryItem.liveId.find(liveId);
   if (existing) {
@@ -1521,20 +1605,39 @@ function updateKnownLiveUsersFromHosts(ctx: any, hosts: JsonRecord[]): void {
     const userId = readString(host.id);
     if (!userId) return;
 
+    const profileSummary = readPublicProfileSummaryItem(ctx, userId);
+    const profileUsername = readString(profileSummary?.username);
+    const profileAvatarUrl = readString(profileSummary?.avatarUrl);
+
     const existing = ctx.db.knownLiveUserItem.id.find(userId);
     if (existing) {
       ctx.db.knownLiveUserItem.id.delete(userId);
     }
 
+    const username = resolveFriendlyUserLabel(userId, [
+      readString(host.username),
+      readString(host.name),
+      profileUsername,
+    ]);
+    const name = resolveFriendlyUserLabel(userId, [
+      readString(host.name),
+      readString(host.username),
+      profileUsername,
+    ]);
+    const avatarUrl = firstDefinedString([
+      readString(host.avatar),
+      profileAvatarUrl,
+    ]) ?? '';
+
     const item = {
       id: userId,
-      username: readString(host.username) ?? readString(host.name) ?? userId,
-      name: readString(host.name) ?? userId,
+      username,
+      name,
       age: toNonNegativeInt(host.age),
       country: readString(host.country) ?? '',
       bio: readString(host.bio) ?? '',
       verified: readBoolean(host.verified) ?? false,
-      avatarUrl: readString(host.avatar) ?? '',
+      avatarUrl,
       updatedAt: nowMs(ctx),
     };
 

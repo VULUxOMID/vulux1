@@ -108,12 +108,128 @@ function normalizeUsername(value: string | undefined, fallback: string): string 
   return fallback;
 }
 
+function isLikelyOpaqueUserId(value: string | undefined): boolean {
+  const normalized = value?.trim();
+  if (!normalized) return false;
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^[0-9a-f]{32,64}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^[0-9A-HJKMNP-TV-Z]{26}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (/^user_[0-9A-Za-z]+$/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shortUserId(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  if (normalized.length <= 10) return normalized;
+  return normalized.slice(0, 8);
+}
+
+function resolveFriendlyDisplayName(value: string | undefined, userId?: string): string {
+  const normalizedValue = value?.trim();
+  if (normalizedValue && !isLikelyOpaqueUserId(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const shortId = shortUserId(userId);
+  if (shortId) {
+    return `User ${shortId}`;
+  }
+
+  return 'Unknown';
+}
+
+function resolveFriendlyUsername(
+  value: string | undefined,
+  displayName: string,
+  userId?: string,
+): string {
+  const normalizedValue = value?.trim();
+  if (normalizedValue && !isLikelyOpaqueUserId(normalizedValue)) {
+    return normalizeUsername(normalizedValue, normalizeUsername(displayName, 'user'));
+  }
+
+  const shortId = shortUserId(userId);
+  if (shortId) {
+    return `user_${shortId.toLowerCase()}`;
+  }
+
+  return normalizeUsername(displayName, 'user');
+}
+
+function isGenericDisplayLabel(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return true;
+  return normalized === 'unknown' || normalized.startsWith('user ');
+}
+
+function shouldPreferMappedValue(currentValue: string | undefined, mappedValue: string | undefined): boolean {
+  const normalizedMapped = mappedValue?.trim();
+  if (!normalizedMapped || isLikelyOpaqueUserId(normalizedMapped)) {
+    return false;
+  }
+
+  const normalizedCurrent = currentValue?.trim();
+  if (!normalizedCurrent) {
+    return true;
+  }
+
+  if (isLikelyOpaqueUserId(normalizedCurrent) || isGenericDisplayLabel(normalizedCurrent)) {
+    return true;
+  }
+
+  return false;
+}
+
+function withFriendlyLiveUser(user: LiveUser): LiveUser {
+  const name = resolveFriendlyDisplayName(user.name, user.id);
+  const username = resolveFriendlyUsername(user.username, name, user.id);
+  return {
+    ...user,
+    name,
+    username,
+  };
+}
+
+function mergeMappedUserIdentity(base: LiveUser, mapped?: LiveUser): LiveUser {
+  if (!mapped) {
+    return withFriendlyLiveUser(base);
+  }
+
+  const preferredName = shouldPreferMappedValue(base.name, mapped.name)
+    ? mapped.name
+    : base.name;
+  const preferredUsername = shouldPreferMappedValue(base.username, mapped.username)
+    ? mapped.username
+    : base.username;
+
+  return withFriendlyLiveUser({
+    ...base,
+    name: preferredName ?? base.name,
+    username: preferredUsername ?? base.username,
+    avatarUrl: base.avatarUrl || mapped.avatarUrl,
+  });
+}
+
 function toLiveUserFromSocial(user: SocialUser): LiveUser {
-  const fallbackHandle = normalizeUsername(user.id, 'user');
+  const friendlyName = resolveFriendlyDisplayName(user.username ?? undefined, user.id);
   return {
     id: user.id,
-    name: user.username || user.id,
-    username: normalizeUsername(user.username, fallbackHandle),
+    name: friendlyName,
+    username: resolveFriendlyUsername(user.username, friendlyName, user.id),
     age: 0,
     verified: false,
     country: '',
@@ -123,15 +239,19 @@ function toLiveUserFromSocial(user: SocialUser): LiveUser {
 }
 
 function toHostPayload(user: LiveUser) {
+  const normalized = withFriendlyLiveUser(user);
   return {
-    id: user.id,
-    username: normalizeUsername(user.username || user.name, normalizeUsername(user.id, 'host')),
-    name: user.name,
-    age: user.age,
-    country: user.country,
-    bio: user.bio,
-    verified: user.verified,
-    avatar: user.avatarUrl,
+    id: normalized.id,
+    username: normalizeUsername(
+      normalized.username || normalized.name,
+      normalizeUsername(normalized.id, 'host'),
+    ),
+    name: normalized.name,
+    age: normalized.age,
+    country: normalized.country,
+    bio: normalized.bio,
+    verified: normalized.verified,
+    avatar: normalized.avatarUrl,
   };
 }
 
@@ -142,10 +262,10 @@ function toLiveUserFromHost(
 ): LiveUser {
   const fallbackId = `host-${liveId}-${index}`;
   const resolvedId = typeof host.id === 'string' && host.id.trim().length > 0 ? host.id : fallbackId;
-  const resolvedName = host.name?.trim() || 'Host';
-  const resolvedUsername = normalizeUsername(host.username || resolvedName, normalizeUsername(resolvedId, 'host'));
+  const resolvedName = resolveFriendlyDisplayName(host.name?.trim() || host.username?.trim(), resolvedId);
+  const resolvedUsername = resolveFriendlyUsername(host.username, resolvedName, resolvedId);
 
-  return {
+  return withFriendlyLiveUser({
     id: resolvedId,
     name: resolvedName,
     username: resolvedUsername,
@@ -154,7 +274,7 @@ function toLiveUserFromHost(
     country: host.country,
     bio: host.bio,
     avatarUrl: host.avatar,
-  };
+  });
 }
 
 function areLiveUsersEquivalent(a: LiveUser, b: LiveUser): boolean {
@@ -482,19 +602,33 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const byId = new Map<string, LiveUser>();
 
     knownLiveUsers.forEach((user) => {
-      byId.set(user.id, {
+      byId.set(user.id, withFriendlyLiveUser({
         ...user,
-        username: normalizeUsername(user.username, normalizeUsername(user.id, 'user')),
-      });
+        username: resolveFriendlyUsername(user.username, user.name, user.id),
+      }));
     });
 
     socialUsers.forEach((socialUser) => {
-      if (!byId.has(socialUser.id)) {
-        byId.set(socialUser.id, toLiveUserFromSocial(socialUser));
+      const fromSocial = withFriendlyLiveUser(toLiveUserFromSocial(socialUser));
+      const existing = byId.get(socialUser.id);
+      if (!existing) {
+        byId.set(socialUser.id, fromSocial);
+        return;
       }
+
+      byId.set(
+        socialUser.id,
+        mergeMappedUserIdentity(
+          {
+            ...existing,
+            avatarUrl: existing.avatarUrl || fromSocial.avatarUrl,
+          },
+          fromSocial,
+        ),
+      );
     });
 
-    byId.set(currentUserWithMedia.id, currentUserWithMedia);
+    byId.set(currentUserWithMedia.id, withFriendlyLiveUser(currentUserWithMedia));
     return byId;
   }, [currentUserWithMedia, knownLiveUsers, socialUsers]);
 
@@ -505,25 +639,25 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       }
 
       if (targetUserId === currentUserWithMedia.id) {
-        return currentUserWithMedia;
+        return withFriendlyLiveUser(currentUserWithMedia);
       }
 
       const known = knownUsersById.get(targetUserId);
       if (known) {
-        return known;
+        return withFriendlyLiveUser(known);
       }
 
-      const resolvedName = fallbackName?.trim() || targetUserId;
-      return {
+      const resolvedName = resolveFriendlyDisplayName(fallbackName?.trim(), targetUserId);
+      return withFriendlyLiveUser({
         id: targetUserId,
         name: resolvedName,
-        username: normalizeUsername(resolvedName, normalizeUsername(targetUserId, 'user')),
+        username: resolveFriendlyUsername(undefined, resolvedName, targetUserId),
         age: 0,
         verified: false,
         country: '',
         bio: '',
         avatarUrl: '',
-      };
+      });
     },
     [currentUserWithMedia, knownUsersById],
   );
@@ -783,14 +917,17 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ? snapshotLive.hosts.map((host, index) => toLiveUserFromHost(roomId, index, host))
           : liveRoom.streamers;
 
-    const nextStreamers = nextStreamersBase.map((streamer) =>
-      streamer.id === currentUserWithMedia.id
-        ? {
-          ...streamer,
+    const nextStreamers = nextStreamersBase.map((streamer) => {
+      const mappedUser = resolveLiveUser(streamer.id, streamer.name);
+      const mergedUser = mergeMappedUserIdentity(streamer, mappedUser);
+      if (mergedUser.id === currentUserWithMedia.id) {
+        return withFriendlyLiveUser({
+          ...mergedUser,
           ...currentUserWithMedia,
-        }
-        : streamer,
-    );
+        });
+      }
+      return mergedUser;
+    });
 
     const snapshotBannedUserIds =
       snapshotLive && Array.isArray(snapshotLive.bannedUserIds)
@@ -1152,8 +1289,33 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
+      const resolvedHosts = (live.hosts || []).map((host) => {
+        const normalizedHostId =
+          typeof host.id === 'string' && host.id.trim().length > 0 ? host.id.trim() : undefined;
+        const mappedUser = normalizedHostId
+          ? resolveLiveUser(normalizedHostId, host.name || host.username)
+          : undefined;
+        const resolvedName = mappedUser?.name ?? resolveFriendlyDisplayName(host.name || host.username, normalizedHostId);
+        const resolvedUsername =
+          mappedUser?.username ??
+          resolveFriendlyUsername(host.username, resolvedName, normalizedHostId);
+
+        return {
+          ...host,
+          id: normalizedHostId ?? host.id,
+          name: resolvedName,
+          username: resolvedUsername,
+          avatar: host.avatar || mappedUser?.avatarUrl || '',
+        };
+      });
+
+      const liveWithResolvedHosts: LiveItem = {
+        ...live,
+        hosts: resolvedHosts,
+      };
+
       const nextRoom = {
-        ...createRoomFromLive(live, {
+        ...createRoomFromLive(liveWithResolvedHosts, {
           inviteOnly: asExtendedLive.inviteOnly === true,
           initialBoostRank: null,
           initialBoosts: 0,
@@ -1165,7 +1327,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
       clearLiveEndTimers();
       setLiveEndingState(null);
-      setActiveLive(live);
+      setActiveLive(liveWithResolvedHosts);
       setIsMinimized(false);
       setLiveState('LIVE_FULL');
       setLiveRoom(nextRoom);
@@ -1178,7 +1340,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       });
       return true;
     },
-    [clearLiveEndTimers, currentUserWithMedia, fuel, syncLivePresence, userId],
+    [clearLiveEndTimers, currentUserWithMedia, fuel, resolveLiveUser, syncLivePresence, userId],
   );
 
   const openLive = useCallback(
@@ -1777,7 +1939,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       liveStartInFlightRef.current = true;
       try {
         const liveId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const hostUser = currentUserWithMedia;
+        const hostUser = withFriendlyLiveUser(currentUserWithMedia);
         const hosts = [toHostPayload(hostUser)];
 
         const startResult = await postLiveMutation('/live/start', {
