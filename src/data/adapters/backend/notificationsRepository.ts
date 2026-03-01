@@ -2,7 +2,6 @@ import type { NotificationsRepository } from '../../contracts';
 import { applyCursorPage } from './query';
 import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
-import { postSafe } from './httpMutations';
 import { spacetimeDb } from '../../../lib/spacetime';
 import { requestBackendRefresh } from './refreshBus';
 
@@ -120,17 +119,6 @@ function parseJsonRecord(value: unknown): UnknownRecord {
 
 function buildPairKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join('::');
-}
-
-async function postRequired(
-  client: BackendHttpClient | null,
-  path: string,
-  body: unknown,
-): Promise<void> {
-  if (!client) {
-    throw new Error(`Backend API unavailable for ${path}`);
-  }
-  await client.post(path, body);
 }
 
 function isIdentityLikeName(userId: string, value: string | null | undefined): boolean {
@@ -447,7 +435,7 @@ function readNotificationRowsFromTable(
 
 export function createBackendNotificationsRepository(
   snapshot: BackendSnapshot,
-  client: BackendHttpClient | null,
+  _client: BackendHttpClient | null,
   viewerUserId: string | null = null,
 ): NotificationsRepository {
   const fallbackUsers = snapshot.socialUsers.map((user) => ({
@@ -570,7 +558,6 @@ export function createBackendNotificationsRepository(
         source: 'manual',
         reason: 'notification_mark_read_local',
       });
-      await postSafe(client, '/notifications/mark-read', request);
     },
     async markAllRead() {
       const states = buildFriendRequestStateMap(buildKnownUserDirectory(fallbackUsers));
@@ -584,7 +571,6 @@ export function createBackendNotificationsRepository(
         source: 'manual',
         reason: 'notification_mark_all_read_local',
       });
-      await postSafe(client, '/notifications/mark-all-read', {});
     },
     async deleteNotification(request) {
       if (!request.notificationId) return;
@@ -594,12 +580,10 @@ export function createBackendNotificationsRepository(
         source: 'manual',
         reason: 'notification_delete_local',
       });
-      await postSafe(client, '/notifications/delete', request);
     },
     async respondToFriendRequest(request) {
       if (!request.notificationId || !viewerUserId) {
-        await postRequired(client, '/notifications/respond-friend-request', request);
-        return;
+        throw new Error('Viewer identity is required to respond to a friend request.');
       }
 
       const userDirectory = buildKnownUserDirectory(fallbackUsers);
@@ -608,8 +592,7 @@ export function createBackendNotificationsRepository(
         buildFriendRequestStateMap(userDirectory).get(request.notificationId) ??
         findFriendRequestStateInNotificationTable(request.notificationId, viewerUserId, userDirectory);
       if (!state) {
-        await postRequired(client, '/notifications/respond-friend-request', request);
-        return;
+        throw new Error('Friend request state was not found in SpacetimeDB.');
       }
 
       const toUserId = state.fromUserId === viewerUserId ? state.toUserId : state.fromUserId;
@@ -649,18 +632,18 @@ export function createBackendNotificationsRepository(
           reason: 'friend_request_response_spacetimedb',
         });
         return;
-      } catch {
-        // Fallback for legacy API deployments.
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to respond to friend request via SpacetimeDB', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to respond to friend request.');
       }
-
-      await postRequired(client, '/notifications/respond-friend-request', request);
     },
     async sendFriendRequest(request) {
       if (!request.toUserId) return;
 
       const fromUserId = asString(request.fromUserId) ?? viewerUserId;
       if (!fromUserId || fromUserId === request.toUserId) {
-        await postRequired(client, '/notifications/send-friend-request', request);
         return;
       }
 
@@ -722,19 +705,19 @@ export function createBackendNotificationsRepository(
           reason: 'friend_request_sent_spacetimedb',
         });
         return;
-      } catch {
-        // Fallback for legacy API deployments.
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to send friend request via SpacetimeDB', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to send friend request.');
       }
-
-      await postRequired(client, '/notifications/send-friend-request', request);
     },
     async removeFriendRelationship(request) {
       if (!request.otherUserId) return;
 
       const actorUserId = asString(request.userId) ?? viewerUserId;
       if (!actorUserId) {
-        await postRequired(client, '/notifications/remove-friend-relationship', request);
-        return;
+        throw new Error('Viewer identity is required to remove a friend relationship.');
       }
 
       const pairKey = buildPairKey(actorUserId, request.otherUserId);
@@ -792,11 +775,12 @@ export function createBackendNotificationsRepository(
           reason: 'friend_relationship_removed_spacetimedb',
         });
         return;
-      } catch {
-        // Fallback for legacy API deployments.
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to remove friend relationship via SpacetimeDB', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to remove friend relationship.');
       }
-
-      await postRequired(client, '/notifications/remove-friend-relationship', request);
     },
   };
 }

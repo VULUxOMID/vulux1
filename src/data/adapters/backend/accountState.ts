@@ -1,5 +1,3 @@
-import { getBackendToken } from '../../../utils/backendToken';
-import { getBackendTokenTemplate } from '../../../config/backendToken';
 import type { BackendHttpClient } from './httpClient';
 import { spacetimeDb } from '../../../lib/spacetime';
 
@@ -14,13 +12,38 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function parseJsonRecord(value: unknown): UnknownRecord {
+  if (typeof value !== 'string') {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return asRecord(parsed);
+  } catch {
+    return {};
+  }
+}
+
 function parseStateFromSpacetime(userId: string | null | undefined): UnknownRecord | null {
   const normalizedUserId = asString(userId);
   if (!normalizedUserId) return null;
 
-  // accountStateItem is private in Spacetime schema; reads must go through
-  // authenticated backend endpoints.
-  return null;
+  const dbView = spacetimeDb.db as any;
+  const rows: any[] = Array.from(dbView?.myAccountState?.iter?.() ?? dbView?.my_account_state?.iter?.() ?? []);
+  const matchingRow =
+    rows.find((row) => {
+      const rowUserId = asString(row?.userId ?? row?.user_id);
+      return !rowUserId || rowUserId === normalizedUserId;
+    }) ?? rows[0];
+
+  if (!matchingRow) {
+    return null;
+  }
+
+  const rawState = matchingRow?.state ?? matchingRow?.item;
+  const parsedState = parseJsonRecord(rawState);
+  return Object.keys(parsedState).length > 0 ? parsedState : {};
 }
 
 async function writeStateToSpacetime(
@@ -53,42 +76,17 @@ async function writeStateToSpacetime(
   }
 }
 
-async function getAuthedClient(
-  client: BackendHttpClient | null,
-  getToken: BackendGetToken,
-): Promise<BackendHttpClient | null> {
-  if (!client) return null;
-  const tokenTemplate = getBackendTokenTemplate();
-  const token = await getBackendToken(getToken, tokenTemplate);
-  if (!token) return null;
-  client.setAuth(token);
-  return client;
-}
-
 export async function fetchAccountState(
-  client: BackendHttpClient | null,
-  getToken: BackendGetToken,
+  _client: BackendHttpClient | null,
+  _getToken: BackendGetToken,
   userId?: string | null,
 ): Promise<UnknownRecord | null> {
-  const spacetimeState = parseStateFromSpacetime(userId ?? null);
-  if (spacetimeState) {
-    return spacetimeState;
-  }
-
-  const authedClient = await getAuthedClient(client, getToken);
-  if (!authedClient) return null;
-
-  try {
-    const payload = await authedClient.get<unknown>('/account/state');
-    return asRecord(asRecord(payload).state);
-  } catch {
-    return null;
-  }
+  return parseStateFromSpacetime(userId ?? null);
 }
 
 export async function upsertAccountState(
-  client: BackendHttpClient | null,
-  getToken: BackendGetToken,
+  _client: BackendHttpClient | null,
+  _getToken: BackendGetToken,
   updates: UnknownRecord,
   userId?: string | null,
 ): Promise<void> {
@@ -102,12 +100,7 @@ export async function upsertAccountState(
     }
   }
 
-  const authedClient = await getAuthedClient(client, getToken);
-  if (!authedClient) return;
-
-  try {
-    await authedClient.post('/account/state/upsert', { updates });
-  } catch {
-    // Ignore legacy API failures when Spacetime is primary.
+  if (__DEV__) {
+    console.warn('[data/account-state] Failed to write account state to SpacetimeDB');
   }
 }

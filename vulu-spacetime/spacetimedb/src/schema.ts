@@ -174,6 +174,34 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    auditLogItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            actorUserId: t.string().index(),
+            item: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
+    moderationActionItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            actorUserId: t.string().index(),
+            targetUserId: t.string().index(),
+            item: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
+    withdrawalRequestItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            userId: t.string().index(),
+            item: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
     users: table(
         { public: false },
         {

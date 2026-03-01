@@ -11,7 +11,6 @@ import { Friend } from '../ActivitiesRow';
 import { HomePillCard } from './HomePillCard';
 import { useWallet } from '../../../context';
 import { EventEntryModal } from './EventEntryModal';
-import { createBackendHttpClientFromEnv } from '../../../data/adapters/backend/httpClient';
 import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
@@ -40,7 +39,6 @@ export type EventWidgetProps = {
 
 export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
   const { getToken, isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
-  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
   const { cash, spendCash } = useWallet();
   const drawDurationMs = EVENT_DRAW_MINUTES * 60 * 1000;
   const entryCost = EVENT_ENTRY_COST;
@@ -104,7 +102,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     setEventHydrated(false);
 
     const hydrateEventState = async () => {
-      const accountState = await fetchBackendAccountState(backendClient, getToken, userId);
+      const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
 
       const eventState =
@@ -134,10 +132,10 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     return () => {
       active = false;
     };
-  }, [backendClient, getToken, isAuthLoaded, isSignedIn, userId]);
+  }, [getToken, isAuthLoaded, isSignedIn, userId]);
 
   useEffect(() => {
-    if (!eventHydrated || !isAuthLoaded || !isSignedIn || !userId || !backendClient) {
+    if (!eventHydrated || !isAuthLoaded || !isSignedIn || !userId) {
       return;
     }
 
@@ -146,7 +144,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     }
 
     persistTimerRef.current = setTimeout(() => {
-      void upsertBackendAccountState(backendClient, getToken, {
+      void upsertBackendAccountState(null, getToken, {
         eventWidget: {
           entries,
           hasEntered,
@@ -163,7 +161,6 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
       }
     };
   }, [
-    backendClient,
     entries,
     eventHydrated,
     getToken,

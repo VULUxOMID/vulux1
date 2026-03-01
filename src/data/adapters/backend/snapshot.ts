@@ -188,7 +188,7 @@ export async function loadBackendSnapshotForUser(
   if (!client) {
     if (__DEV__) {
       console.warn(
-        '[data/backend] EXPO_PUBLIC_API_BASE_URL is missing. Using empty data snapshot.',
+        '[data/backend] Legacy admin API is not configured. Using empty data snapshot.',
       );
     }
     return EMPTY_BACKEND_SNAPSHOT;

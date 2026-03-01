@@ -40,6 +40,14 @@ export const Artist = __t.object("Artist", {
 });
 export type Artist = __Infer<typeof Artist>;
 
+export const AuditLogItem = __t.object("AuditLogItem", {
+  id: __t.string(),
+  actorUserId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type AuditLogItem = __Infer<typeof AuditLogItem>;
+
 export const ConversationItem = __t.object("ConversationItem", {
   id: __t.string(),
   ownerUserId: __t.string(),
@@ -110,6 +118,15 @@ export const MentionUserItem = __t.object("MentionUserItem", {
 });
 export type MentionUserItem = __Infer<typeof MentionUserItem>;
 
+export const ModerationActionItem = __t.object("ModerationActionItem", {
+  id: __t.string(),
+  actorUserId: __t.string(),
+  targetUserId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ModerationActionItem = __Infer<typeof ModerationActionItem>;
+
 export const MyAccountState = __t.object("MyAccountState", {});
 export type MyAccountState = __Infer<typeof MyAccountState>;
 
@@ -157,6 +174,21 @@ export type MyFriendshipRow = __Infer<typeof MyFriendshipRow>;
 export const MyFriendships = __t.object("MyFriendships", {});
 export type MyFriendships = __Infer<typeof MyFriendships>;
 
+export const MyIdentity = __t.object("MyIdentity", {});
+export type MyIdentity = __Infer<typeof MyIdentity>;
+
+export const MyIdentityRow = __t.object("MyIdentityRow", {
+  id: __t.string(),
+  vuluUserId: __t.string(),
+  provider: __t.string(),
+  issuer: __t.string(),
+  subject: __t.string(),
+  email: __t.option(__t.string()),
+  emailVerified: __t.bool(),
+  createdAt: __t.timestamp(),
+});
+export type MyIdentityRow = __Infer<typeof MyIdentityRow>;
+
 export const MyNotificationRow = __t.object("MyNotificationRow", {
   id: __t.string(),
   userId: __t.string(),
@@ -167,6 +199,28 @@ export type MyNotificationRow = __Infer<typeof MyNotificationRow>;
 
 export const MyNotifications = __t.object("MyNotifications", {});
 export type MyNotifications = __Infer<typeof MyNotifications>;
+
+export const MyProfile = __t.object("MyProfile", {});
+export type MyProfile = __Infer<typeof MyProfile>;
+
+export const MyProfileRow = __t.object("MyProfileRow", {
+  userId: __t.string(),
+  profile: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type MyProfileRow = __Infer<typeof MyProfileRow>;
+
+export const MyRoleRow = __t.object("MyRoleRow", {
+  id: __t.string(),
+  vuluUserId: __t.string(),
+  role: __t.string(),
+  grantedAt: __t.timestamp(),
+  grantedBy: __t.option(__t.string()),
+});
+export type MyRoleRow = __Infer<typeof MyRoleRow>;
+
+export const MyRoles = __t.object("MyRoles", {});
+export type MyRoles = __Infer<typeof MyRoles>;
 
 export const NotificationItem = __t.object("NotificationItem", {
   id: __t.string(),
@@ -283,6 +337,19 @@ export const Track = __t.object("Track", {
 });
 export type Track = __Infer<typeof Track>;
 
+export const UserIdentity = __t.object("UserIdentity", {
+  id: __t.string(),
+  vuluUserId: __t.string(),
+  provider: __t.string(),
+  issuer: __t.string(),
+  subject: __t.string(),
+  email: __t.option(__t.string()),
+  emailVerified: __t.bool(),
+  lookupKey: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type UserIdentity = __Infer<typeof UserIdentity>;
+
 export const UserProfileItem = __t.object("UserProfileItem", {
   userId: __t.string(),
   profile: __t.string(),
@@ -290,10 +357,38 @@ export const UserProfileItem = __t.object("UserProfileItem", {
 });
 export type UserProfileItem = __Infer<typeof UserProfileItem>;
 
+export const UserRole = __t.object("UserRole", {
+  id: __t.string(),
+  vuluUserId: __t.string(),
+  role: __t.string(),
+  grantedAt: __t.timestamp(),
+  grantedBy: __t.option(__t.string()),
+});
+export type UserRole = __Infer<typeof UserRole>;
+
+export const Users = __t.object("Users", {
+  vuluUserId: __t.string(),
+  createdAt: __t.timestamp(),
+  displayName: __t.string(),
+  avatar: __t.option(__t.string()),
+  isBanned: __t.bool(),
+  banStatus: __t.string(),
+  banReason: __t.option(__t.string()),
+});
+export type Users = __Infer<typeof Users>;
+
 export const VideoItem = __t.object("VideoItem", {
   id: __t.string(),
   item: __t.string(),
   updatedAt: __t.timestamp(),
 });
 export type VideoItem = __Infer<typeof VideoItem>;
+
+export const WithdrawalRequestItem = __t.object("WithdrawalRequestItem", {
+  id: __t.string(),
+  userId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type WithdrawalRequestItem = __Infer<typeof WithdrawalRequestItem>;
 

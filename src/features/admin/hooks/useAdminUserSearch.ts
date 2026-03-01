@@ -11,8 +11,8 @@ function trim(value: string | undefined): string | undefined {
 
 function getAdminUsersUrl(searchParams: URLSearchParams) {
   const configuredBaseUrl =
-    trim(process.env.EXPO_PUBLIC_API_BASE_URL) ??
-    trim(process.env.EXPO_PUBLIC_BACKEND_API_URL) ??
+    trim(process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL) ??
+    trim(process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL) ??
     trim(process.env.EXPO_PUBLIC_API_URL) ??
     'http://localhost:5000/api';
   const normalizedBaseUrl = configuredBaseUrl.replace(/\/+$/, '');

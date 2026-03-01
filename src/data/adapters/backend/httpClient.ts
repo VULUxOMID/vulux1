@@ -7,8 +7,8 @@ function trim(value: string | undefined): string | undefined {
 
 function getBackendBaseUrlFromEnv(): string {
   return (
-    trim(process.env.EXPO_PUBLIC_API_BASE_URL) ??
-    trim(process.env.EXPO_PUBLIC_BACKEND_API_URL) ??
+    trim(process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL) ??
+    trim(process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL) ??
     ''
   );
 }
@@ -80,16 +80,31 @@ export function createBackendHttpClientFromEnv(): BackendHttpClient | null {
       const url = `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}${buildQueryString(
         options?.params,
       )}`;
-      const response = await fetch(url, {
-        method,
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: method === 'GET' ? undefined : JSON.stringify(options?.body ?? {}),
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method,
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
+          body: method === 'GET' ? undefined : JSON.stringify(options?.body ?? {}),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const isAbortError =
+          typeof error === 'object' &&
+          error !== null &&
+          'name' in error &&
+          (error as { name?: string }).name === 'AbortError';
+
+        if (isAbortError) {
+          throw new Error('Backend request timed out');
+        }
+
+        throw new Error(`Could not reach backend at ${baseUrl}`);
+      }
 
       const payload = await parseJsonSafely(response);
       if (!response.ok) {
@@ -124,4 +139,3 @@ export function createBackendHttpClientFromEnv(): BackendHttpClient | null {
     },
   };
 }
-

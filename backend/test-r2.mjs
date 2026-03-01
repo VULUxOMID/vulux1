@@ -16,7 +16,7 @@ console.log('R2 configured:', isR2Configured);
 if (isR2Configured) {
   try {
     const objectKey = 'test/sample.txt';
-    const url = await generatePresignedUrl(objectKey);
+    const url = await generatePresignedUrl({ objectKey });
     console.log('✅ Presigned URL generated successfully');
     console.log('URL length:', url.length);
     console.log('URL starts with:', url.substring(0, 50) + '...');

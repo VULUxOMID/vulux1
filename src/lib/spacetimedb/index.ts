@@ -34,6 +34,8 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AppendAuditLogReducer from "./append_audit_log_reducer";
+import AppendModerationActionReducer from "./append_moderation_action_reducer";
 import BanLiveUserReducer from "./ban_live_user_reducer";
 import BoostLiveReducer from "./boost_live_reducer";
 import CreateUserProfileReducer from "./create_user_profile_reducer";
@@ -54,6 +56,7 @@ import SetLivePresenceReducer from "./set_live_presence_reducer";
 import SetSocialStatusReducer from "./set_social_status_reducer";
 import SetUserRoleReducer from "./set_user_role_reducer";
 import StartLiveReducer from "./start_live_reducer";
+import SubmitWithdrawalRequestReducer from "./submit_withdrawal_request_reducer";
 import TickLiveEventReducer from "./tick_live_event_reducer";
 import UnbanLiveUserReducer from "./unban_live_user_reducer";
 import UpdateLiveReducer from "./update_live_reducer";
@@ -66,6 +69,7 @@ import * as ResolveOrCreateUserIdentitySyncProcedure from "./resolve_or_create_u
 import AccountStateItemRow from "./account_state_item_table";
 import AdminWalletCreditTransactionRow from "./admin_wallet_credit_transaction_table";
 import ArtistRow from "./artist_table";
+import AuditLogItemRow from "./audit_log_item_table";
 import ConversationItemRow from "./conversation_item_table";
 import FriendshipRow from "./friendship_table";
 import GlobalMessageItemRow from "./global_message_item_table";
@@ -75,6 +79,7 @@ import LiveBoostLeaderboardItemRow from "./live_boost_leaderboard_item_table";
 import LiveItemRow from "./live_item_table";
 import LivePresenceItemRow from "./live_presence_item_table";
 import MentionUserItemRow from "./mention_user_item_table";
+import ModerationActionItemRow from "./moderation_action_item_table";
 import MyAccountStateRow from "./my_account_state_table";
 import MyConversationMessagesRow from "./my_conversation_messages_table";
 import MyConversationsRow from "./my_conversations_table";
@@ -100,6 +105,7 @@ import UserProfileItemRow from "./user_profile_item_table";
 import UserRoleRow from "./user_role_table";
 import UsersRow from "./users_table";
 import VideoItemRow from "./video_item_table";
+import WithdrawalRequestItemRow from "./withdrawal_request_item_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -144,6 +150,20 @@ const tablesSchema = __schema({
       { name: 'artist_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ArtistRow),
+  auditLogItem: __table({
+    name: 'audit_log_item',
+    indexes: [
+      { name: 'actorUserId', algorithm: 'btree', columns: [
+        'actorUserId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'audit_log_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AuditLogItemRow),
   conversationItem: __table({
     name: 'conversation_item',
     indexes: [
@@ -258,6 +278,23 @@ const tablesSchema = __schema({
       { name: 'mention_user_item_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, MentionUserItemRow),
+  moderationActionItem: __table({
+    name: 'moderation_action_item',
+    indexes: [
+      { name: 'actorUserId', algorithm: 'btree', columns: [
+        'actorUserId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'targetUserId', algorithm: 'btree', columns: [
+        'targetUserId',
+      ] },
+    ],
+    constraints: [
+      { name: 'moderation_action_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ModerationActionItemRow),
   notificationItem: __table({
     name: 'notification_item',
     indexes: [
@@ -437,6 +474,20 @@ const tablesSchema = __schema({
       { name: 'video_item_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, VideoItemRow),
+  withdrawalRequestItem: __table({
+    name: 'withdrawal_request_item',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'userId', algorithm: 'btree', columns: [
+        'userId',
+      ] },
+    ],
+    constraints: [
+      { name: 'withdrawal_request_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, WithdrawalRequestItemRow),
   myAccountState: __table({
     name: 'my_account_state',
     indexes: [
@@ -516,18 +567,10 @@ const tablesSchema = __schema({
   }, PublicProfileSummaryRow),
 });
 
-const toModuleSourceName = (accessorName: string): string =>
-  accessorName.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
-
-for (const [accessorName, tableDef] of Object.entries(tablesSchema.schemaType.tables)) {
-  // The generated SDK currently keys runtime row parsing off `sourceName`, but
-  // codegen emits accessor names (`myIdentity`) there instead of module names
-  // (`my_identity`). Normalize them here so subscription snapshots decode.
-  (tableDef as { sourceName: string }).sourceName = toModuleSourceName(accessorName);
-}
-
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("append_audit_log", AppendAuditLogReducer),
+  __reducerSchema("append_moderation_action", AppendModerationActionReducer),
   __reducerSchema("ban_live_user", BanLiveUserReducer),
   __reducerSchema("boost_live", BoostLiveReducer),
   __reducerSchema("create_user_profile", CreateUserProfileReducer),
@@ -548,6 +591,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_social_status", SetSocialStatusReducer),
   __reducerSchema("set_user_role", SetUserRoleReducer),
   __reducerSchema("start_live", StartLiveReducer),
+  __reducerSchema("submit_withdrawal_request", SubmitWithdrawalRequestReducer),
   __reducerSchema("tick_live_event", TickLiveEventReducer),
   __reducerSchema("unban_live_user", UnbanLiveUserReducer),
   __reducerSchema("update_live", UpdateLiveReducer),
@@ -608,3 +652,4 @@ export class DbConnection extends __DbConnectionImpl<typeof REMOTE_MODULE> {
     return new SubscriptionBuilder(this);
   };
 }
+

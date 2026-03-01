@@ -36,6 +36,7 @@ if (R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME)
 
 export const isR2Configured = Boolean(s3Client && R2_BUCKET_NAME);
 export const isR2PublicUrlConfigured = Boolean(R2_PUBLIC_BASE_URL);
+export const DEFAULT_PRESIGNED_URL_TTL_SECONDS = 900;
 
 export function getPublicUrlForObjectKey(objectKey) {
   if (!R2_PUBLIC_BASE_URL) return null;
@@ -45,11 +46,11 @@ export function getPublicUrlForObjectKey(objectKey) {
   return `${R2_PUBLIC_BASE_URL}/${normalizedKey}`;
 }
 
-export async function generatePresignedUrl(objectKey) {
-  console.log("Generating presigned URL for:", objectKey);
-  console.log("R2 configured:", isR2Configured);
-  console.log("R2_BUCKET_NAME:", R2_BUCKET_NAME);
-  
+export async function generatePresignedUrl({
+  objectKey,
+  contentType,
+  expiresInSeconds = DEFAULT_PRESIGNED_URL_TTL_SECONDS,
+}) {
   if (!isR2Configured) {
     throw new Error("Storage not configured");
   }
@@ -57,17 +58,12 @@ export async function generatePresignedUrl(objectKey) {
   const command = new PutObjectCommand({
     Bucket: R2_BUCKET_NAME,
     Key: objectKey,
+    ...(contentType ? { ContentType: contentType } : {}),
   });
 
-  // URL expires in 1 hour
-  const url = await getSignedUrl(s3Client, command, { 
-    expiresIn: 3600,
-    // Explicitly set unsigned headers to prevent signature mismatches
+  const url = await getSignedUrl(s3Client, command, {
+    expiresIn: expiresInSeconds,
     unsignedPayload: true,
   });
-  
-  console.log("Generated URL length:", url.length);
-  console.log("URL contains checksum header:", url.includes('x-amz-content-sha256'));
-  console.log("URL contains unsigned payload:", url.includes('X-Amz-Content-Sha256=UNSIGNED-PAYLOAD'));
   return url;
 }

@@ -14,7 +14,9 @@ const backendClient = createBackendHttpClientFromEnv();
 
 function ensureBackendClient() {
   if (!backendClient) {
-    throw new Error('Backend API is not configured. Set EXPO_PUBLIC_API_BASE_URL or EXPO_PUBLIC_BACKEND_API_URL.');
+    throw new Error(
+      'Admin API is not configured. Set EXPO_PUBLIC_ADMIN_API_BASE_URL only if you still run the legacy admin service.',
+    );
   }
   return backendClient;
 }

@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useRef, useEffect } from 'react';
 import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 
-import { createBackendHttpClientFromEnv } from '../data/adapters/backend/httpClient';
 import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
@@ -102,7 +101,6 @@ const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const { getToken, isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
-  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
   const [gems, setGems] = useState(0);
   const [cash, setCash] = useState(0);
   const [fuel, setFuel] = useState(0);
@@ -156,7 +154,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     const hydrateWallet = async () => {
       const accountState = await fetchBackendAccountState(
-        backendClient,
+        null,
         getTokenRef.current,
         userId,
       );
@@ -192,10 +190,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [backendClient, isAuthLoaded, isSignedIn, userId]);
+  }, [isAuthLoaded, isSignedIn, userId]);
 
   useEffect(() => {
-    if (!walletHydrated || !isAuthLoaded || !isSignedIn || !userId || !backendClient) {
+    if (!walletHydrated || !isAuthLoaded || !isSignedIn || !userId) {
       return;
     }
 
@@ -204,7 +202,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     persistTimerRef.current = setTimeout(() => {
-      void upsertBackendAccountState(backendClient, getTokenRef.current, {
+      void upsertBackendAccountState(null, getTokenRef.current, {
         wallet: {
           gems: gemsRef.current,
           cash: cashRef.current,
@@ -221,7 +219,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [
-    backendClient,
     cash,
     gems,
     fuel,

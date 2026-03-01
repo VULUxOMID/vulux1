@@ -10,7 +10,7 @@ import React, {
 
 import { UserRole } from '../features/liveroom/types';
 import { spacetimeDb, subscribeSpacetimeDataChanges } from '../lib/spacetime';
-import { useAuth } from './AuthContext';
+import { useAuth as useAppAuth } from './AuthContext';
 
 export type PresenceStatus = 'online' | 'busy' | 'offline';
 
@@ -164,7 +164,7 @@ function mergeUserProfile(prev: UserProfile, updates: Partial<UserProfile>): Use
 }
 
 export function UserProfileProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user } = useAppAuth();
   const resolvedUserId = user?.uid ?? defaultProfile.id;
   const localMutationVersionRef = useRef(0);
   const userProfileRef = useRef<UserProfile>({
@@ -179,14 +179,16 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   const persistProfileUpdates = useCallback(
     (userId: string, updates: Partial<UserProfile>) => {
       void (async () => {
+        const currentProfile = userProfileRef.current;
+        const nextProfile = mergeUserProfile(currentProfile, updates);
+        let persisted = false;
+
         try {
           const reducers = spacetimeDb.reducers as any;
           if (typeof reducers?.createUserProfile !== 'function') {
             throw new Error('SpacetimeDB reducers are unavailable.');
           }
 
-          const currentProfile = userProfileRef.current;
-          const nextProfile = mergeUserProfile(currentProfile, updates);
           await reducers.createUserProfile({
             userId,
             profile: JSON.stringify({
@@ -203,10 +205,15 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
               statusMessage: nextProfile.statusMessage ?? '',
             }),
           });
+          persisted = true;
         } catch (error) {
           if (__DEV__) {
             console.warn('[profile] Failed to persist profile via SpacetimeDB', error);
           }
+        }
+
+        if (__DEV__ && !persisted) {
+          console.warn('[profile] Profile changes were not persisted to a durable backend.');
         }
       })();
     },

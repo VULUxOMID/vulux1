@@ -10,7 +10,7 @@ import {
   useAuth as useSpacetimeAuth,
   useUser as useSpacetimeUser,
 } from '../auth/spacetimeSession';
-import { createBackendHttpClientFromEnv } from '../data/adapters/backend/httpClient';
+import { spacetimeDb } from '../lib/spacetime';
 
 export type AppUser = {
   uid: string;
@@ -59,12 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     emailAddress,
     emailVerified,
     roles,
-    getToken,
     signOut: signOutSession,
   } = useSpacetimeAuth();
   const { user: sessionUser } = useSpacetimeUser();
-  const backendClient = useMemo(() => createBackendHttpClientFromEnv(), []);
-
   const appUser = useMemo<AppUser | null>(() => {
     if (!userId) return null;
 
@@ -106,20 +103,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('No active user session.');
     }
 
-    if (backendClient) {
-      try {
-        const token = await getToken();
-        if (token) {
-          backendClient.setAuth(token);
-          await backendClient.post('/account/state/delete', { userId });
-        }
-      } catch {
-        // Best-effort backend cleanup only.
+    try {
+      const reducers = spacetimeDb.reducers as any;
+      if (typeof reducers?.upsertAccountState === 'function') {
+        await reducers.upsertAccountState({
+          userId,
+          updates: JSON.stringify({
+            deletedAt: Date.now(),
+            deleted: true,
+          }),
+        });
       }
+    } catch {
+      // Best-effort local cleanup only.
     }
 
     await signOutSession();
-  }, [backendClient, getToken, signOutSession, userId]);
+  }, [signOutSession, userId]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

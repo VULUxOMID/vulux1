@@ -40,6 +40,14 @@ export const Artist = __t.object("Artist", {
 });
 export type Artist = __Infer<typeof Artist>;
 
+export const AuditLogItem = __t.object("AuditLogItem", {
+  id: __t.string(),
+  actorUserId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type AuditLogItem = __Infer<typeof AuditLogItem>;
+
 export const ConversationItem = __t.object("ConversationItem", {
   id: __t.string(),
   ownerUserId: __t.string(),
@@ -109,6 +117,15 @@ export const MentionUserItem = __t.object("MentionUserItem", {
   updatedAt: __t.timestamp(),
 });
 export type MentionUserItem = __Infer<typeof MentionUserItem>;
+
+export const ModerationActionItem = __t.object("ModerationActionItem", {
+  id: __t.string(),
+  actorUserId: __t.string(),
+  targetUserId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ModerationActionItem = __Infer<typeof ModerationActionItem>;
 
 export const MyAccountState = __t.object("MyAccountState", {});
 export type MyAccountState = __Infer<typeof MyAccountState>;
@@ -366,4 +383,12 @@ export const VideoItem = __t.object("VideoItem", {
   updatedAt: __t.timestamp(),
 });
 export type VideoItem = __Infer<typeof VideoItem>;
+
+export const WithdrawalRequestItem = __t.object("WithdrawalRequestItem", {
+  id: __t.string(),
+  userId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type WithdrawalRequestItem = __Infer<typeof WithdrawalRequestItem>;
 

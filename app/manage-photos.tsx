@@ -33,6 +33,7 @@ import { useUserProfile, UserProfilePhoto } from '../src/context/UserProfileCont
 import { useAppIsActive } from '../src/hooks/useAppIsActive';
 import { subscribeBootstrap } from '../src/lib/spacetime';
 import { colors, radius, spacing } from '../src/theme';
+import { uploadMediaAsset } from '../src/utils/mediaUpload';
 
 if (Platform.OS === 'android') {
   if (UIManager.setLayoutAnimationEnabledExperimental) {
@@ -122,7 +123,7 @@ export default function ManagePhotosScreen() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const isAppActive = useAppIsActive();
-  const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
+  const { isLoaded: isAuthLoaded, isSignedIn, userId, getToken } = useSessionAuth();
   const { userProfile, updateUserProfile, updateAvatar } = useUserProfile();
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -205,6 +206,7 @@ export default function ManagePhotosScreen() {
   const commitPhotos = (nextPhotos: Photo[]) => {
     photosRef.current = nextPhotos;
     updateUserProfile({ photos: nextPhotos });
+    console.log(`[manage-photos] ui refresh -> committed ${nextPhotos.length} photos`);
   };
 
   const handleBack = () => {
@@ -462,18 +464,32 @@ export default function ManagePhotosScreen() {
         },
       );
 
+      console.log('[manage-photos] upload flow -> cropped asset ready');
+      const uploadedPhoto = await uploadMediaAsset({
+        getToken,
+        uri: cropped.uri,
+        contentType: 'image/jpeg',
+        mediaType: 'profile',
+      });
+      console.log('[manage-photos] upload flow -> r2 upload complete');
+
       const nextPhotos: Photo[] = [
         ...photos,
         {
           id: `photo-${Date.now()}`,
-          uri: cropped.uri,
+          uri: uploadedPhoto.publicUrl,
         },
       ];
       commitPhotos(nextPhotos);
       setCropAsset(null);
+      console.log('[manage-photos] upload flow -> photo available in UI');
       toast.success('Photo added');
     } catch (error) {
-      toast.error('Could not crop that photo. Please try another image.');
+      const message = error instanceof Error ? error.message : 'Could not save that photo. Please try again.';
+      toast.error(message);
+      if (__DEV__) {
+        console.warn('[manage-photos] Failed to save cropped photo', error);
+      }
     } finally {
       setIsApplyingCrop(false);
     }
@@ -1024,19 +1040,7 @@ export default function ManagePhotosScreen() {
             <AppText variant="h3" style={styles.cropTitle}>
               Crop photo
             </AppText>
-            <View style={[styles.cropHeaderSide, styles.cropHeaderSideRight]}>
-              <Pressable
-                onPress={() => {
-                  void applyCrop();
-                }}
-                disabled={isApplyingCrop}
-                style={[styles.cropDoneButton, isApplyingCrop && styles.cropDoneButtonDisabled]}
-              >
-                <AppText style={styles.cropDoneButtonText}>
-                  {isApplyingCrop ? 'Saving...' : 'Use'}
-                </AppText>
-              </Pressable>
-            </View>
+            <View style={[styles.cropHeaderSide, styles.cropHeaderSideRight]} />
           </View>
 
           <View style={styles.cropBody}>
@@ -1084,6 +1088,21 @@ export default function ManagePhotosScreen() {
             <AppText style={styles.cropScaleText}>
               {cropScale.toFixed(2)}x
             </AppText>
+            <Pressable
+              onPress={() => {
+                void applyCrop();
+              }}
+              disabled={isApplyingCrop}
+              style={[
+                styles.cropDoneButton,
+                styles.cropDoneButtonFullWidth,
+                isApplyingCrop && styles.cropDoneButtonDisabled,
+              ]}
+            >
+              <AppText style={styles.cropDoneButtonText}>
+                {isApplyingCrop ? 'Saving...' : 'Use Photo'}
+              </AppText>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -1354,6 +1373,10 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cropDoneButtonFullWidth: {
+    marginTop: spacing.xs,
+    width: '100%',
   },
   cropDoneButtonDisabled: {
     opacity: 0.6,

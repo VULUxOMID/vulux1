@@ -6,9 +6,10 @@ import { colors } from '../../../theme';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
-import { createBackendHttpClientFromEnv } from '../../../data/adapters/backend/httpClient';
 import { useVideo, type VideoCategory } from '../../../context/VideoContext';
 import { toast } from '../../../components/Toast';
+import { uploadMediaAsset } from '../../../utils/mediaUpload';
+import { publishVideoCatalogItem } from '../../../utils/spacetimePersistence';
 
 interface UploadVideoModalProps {
   visible: boolean;
@@ -77,43 +78,6 @@ export const UploadVideoModal = ({ visible, onClose, onUploadSuccess }: UploadVi
     }
   };
 
-  const uploadToR2WithProgress = async (url: string, fileContent: Blob, contentType: string, isVideo: boolean = false) =>
-    await new Promise<void>((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('PUT', url);
-      request.setRequestHeader('Content-Type', contentType);
-
-      request.upload.onloadstart = () => {
-        if (isVideo) setUploadProgress(5);
-      };
-
-      request.upload.onprogress = (event) => {
-        if (event.lengthComputable && event.total > 0 && isVideo) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          setUploadProgress(Math.max(5, Math.min(progress, 100)));
-        }
-      };
-
-      request.onload = () => {
-        if (request.status >= 200 && request.status < 300) {
-          if (isVideo) setUploadProgress(100);
-          resolve();
-          return;
-        }
-        reject(new Error(`Failed to upload file to storage (${request.status})`));
-      };
-
-      request.onerror = () => {
-        reject(new Error('Failed to upload file to storage (network error)'));
-      };
-
-      request.onabort = () => {
-        reject(new Error('Upload canceled'));
-      };
-
-      request.send(fileContent);
-    });
-
   const handleUpload = async () => {
     if (!isCreator) {
       setError('You need creator permission to publish videos.');
@@ -129,40 +93,33 @@ export const UploadVideoModal = ({ visible, onClose, onUploadSuccess }: UploadVi
     setError('');
 
     try {
-      const client = createBackendHttpClientFromEnv();
-      if (!client) throw new Error('Backend client not configured');
-      const token = await getToken({ template: process.env.EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE });
-      if (!token) throw new Error('Not authenticated');
-
-      client.setAuth(token);
-
       // --- Thumbnail Upload ---
       let uploadedThumbnailUrl = '';
       if (thumbnailUri) {
         setUploadProgress(2);
-        const thumbUrlResponse = await client.post<{ url: string; objectKey: string; publicUrl?: string | null }>('/video/upload/url', {
+        const thumbnailUpload = await uploadMediaAsset({
+          getToken,
+          uri: thumbnailUri,
           contentType: 'image/jpeg',
+          mediaType: 'image',
         });
-        const { url: thumbPresignedUrl, publicUrl: thumbPublicUrl } = thumbUrlResponse;
-        const thumbFileContent = await fetch(thumbnailUri).then(res => res.blob());
-        await uploadToR2WithProgress(thumbPresignedUrl, thumbFileContent, 'image/jpeg', false);
-        uploadedThumbnailUrl = thumbPublicUrl ?? thumbPresignedUrl.split('?')[0];
+        uploadedThumbnailUrl = thumbnailUpload.publicUrl;
       }
 
       // --- Video Upload ---
-      const urlResponse = await client.post<{ url: string; objectKey: string; publicUrl?: string | null }>('/video/upload/url', {
+      const videoUpload = await uploadMediaAsset({
+        getToken,
+        uri: videoUri,
         contentType: selectedVideoType,
+        mediaType: 'video',
+        onProgress: (progress) => {
+          setUploadProgress(Math.max(5, progress));
+        },
       });
-
-      const { url: videoPresignedUrl, publicUrl: videoPublicUrl } = urlResponse;
-
-      const videoFileContent = await fetch(videoUri).then(res => res.blob());
-      await uploadToR2WithProgress(videoPresignedUrl, videoFileContent, selectedVideoType, true);
-
-      const uploadedVideoUrl = videoPublicUrl ?? videoPresignedUrl.split('?')[0];
+      const uploadedVideoUrl = videoUpload.publicUrl;
 
       // --- Create DB Item ---
-      await client.post('/video/items', {
+      await publishVideoCatalogItem({
         title: title.trim(),
         description: description.trim(),
         videoUrl: uploadedVideoUrl,

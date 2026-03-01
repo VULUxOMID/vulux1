@@ -56,10 +56,8 @@ import { LiveItem } from '../home/LiveSection';
 import { MiniHostsGrid } from './components/MiniHostsGrid';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { createBackendHttpClientFromEnv } from '../../data/adapters/backend/httpClient';
-import { getBackendToken } from '../../utils/backendToken';
-import { getBackendTokenTemplate } from '../../config/backendToken';
 import { subscribeLive } from '../../lib/spacetime';
+import { publishLiveInvite } from '../../utils/spacetimePersistence';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const EDGE_THRESHOLD = SCREEN_WIDTH * 0.33;
@@ -90,9 +88,7 @@ export default function LiveScreen() {
   const isAppActive = useAppIsActive();
   const params = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const { userId, isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
-  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
-  const backendTokenTemplate = useMemo(() => getBackendTokenTemplate(), []);
+  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
   const { live: liveRepo, social: socialRepo } = useRepositories();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
@@ -229,15 +225,12 @@ export default function LiveScreen() {
   const sendLiveInvite = useCallback(
     async (targetUserId: string): Promise<boolean> => {
       const currentLiveId = liveRoom?.id ?? activeLive?.id;
-      if (!currentLiveId || !backendClient || !isAuthLoaded || !isSignedIn) {
+      if (!currentLiveId || !isAuthLoaded || !isSignedIn) {
         return false;
       }
 
       try {
-        const token = await getBackendToken(getToken, backendTokenTemplate);
-        if (!token) return false;
-        backendClient.setAuth(token);
-        await backendClient.post('/live/invite', {
+        await publishLiveInvite({
           liveId: currentLiveId,
           targetUserId,
         });
@@ -251,9 +244,6 @@ export default function LiveScreen() {
     },
     [
       activeLive?.id,
-      backendClient,
-      backendTokenTemplate,
-      getToken,
       isAuthLoaded,
       isSignedIn,
       liveRoom?.id,

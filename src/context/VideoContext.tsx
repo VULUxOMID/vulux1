@@ -1,13 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 import { useWallet } from './WalletContext';
 import { useAuth } from './AuthContext';
 import { useAppIsActive } from '../hooks/useAppIsActive';
 import { useVideoRepo } from '../data/provider';
 import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
-import { createBackendHttpClientFromEnv } from '../data/adapters/backend/httpClient';
-import { getBackendTokenTemplate } from '../config/backendToken';
-import { getBackendToken } from '../utils/backendToken';
+import { publishVideoCatalogItem } from '../utils/spacetimePersistence';
 
 // --- Types ---
 
@@ -95,13 +92,10 @@ const VideoContext = createContext<VideoContextType | undefined>(undefined);
 
 export function VideoProvider({ children }: { children: React.ReactNode }) {
   const { user, initializing } = useAuth();
-  const { getToken, isLoaded: isAuthLoaded, isSignedIn } = useSessionAuth();
   const isAppActive = useAppIsActive();
   const videoRepo = useVideoRepo();
-  const backendClient = useMemo(() => createBackendHttpClientFromEnv(), []);
-  const backendTokenTemplate = getBackendTokenTemplate();
   const queriesEnabled =
-    !initializing && !!user?.uid && isAuthLoaded && isSignedIn && isAppActive;
+    !initializing && !!user?.uid && isAppActive;
   const { balance, deductBalance } = useWallet();
   const repositoryVideos = useMemo(
     () => (queriesEnabled ? videoRepo.listVideos({ limit: 250 }) : []),
@@ -193,17 +187,7 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
     setVideos((prev) => [optimisticVideo, ...prev]);
 
     try {
-      if (!backendClient) {
-        throw new Error('Backend client not configured');
-      }
-
-      const token = await getBackendToken(getToken, backendTokenTemplate);
-      if (!token) {
-        throw new Error('Not authenticated');
-      }
-
-      backendClient.setAuth(token);
-      const response = await backendClient.post<{ id: string }>('/video/items', {
+      const response = await publishVideoCatalogItem({
         title: videoData.title,
         description: videoData.description ?? '',
         videoUrl: videoData.videoUrl,
@@ -214,6 +198,9 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
         price: videoData.price ?? 0,
         currency: videoData.currency ?? 'cash',
         durationSeconds: 0,
+        creatorId: user?.uid ?? 'unknown',
+        creatorName: user?.displayName ?? 'Unknown Creator',
+        creatorAvatar: user?.photoURL ?? '',
       });
 
       if (!response?.id) {
@@ -234,7 +221,7 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
       requestBackendRefresh({
         scopes: ['videos'],
         source: 'manual',
-        reason: 'video_uploaded',
+        reason: 'video_uploaded_spacetimedb',
       });
     } catch (error) {
       setVideos((prev) => prev.filter((video) => video.id !== optimisticId));

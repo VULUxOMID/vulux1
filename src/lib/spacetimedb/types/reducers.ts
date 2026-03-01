@@ -6,6 +6,8 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AppendAuditLogReducer from "../append_audit_log_reducer";
+import AppendModerationActionReducer from "../append_moderation_action_reducer";
 import BanLiveUserReducer from "../ban_live_user_reducer";
 import BoostLiveReducer from "../boost_live_reducer";
 import CreateUserProfileReducer from "../create_user_profile_reducer";
@@ -28,11 +30,14 @@ import SetLivePresenceReducer from "../set_live_presence_reducer";
 import SetSocialStatusReducer from "../set_social_status_reducer";
 import SetUserRoleReducer from "../set_user_role_reducer";
 import StartLiveReducer from "../start_live_reducer";
+import SubmitWithdrawalRequestReducer from "../submit_withdrawal_request_reducer";
 import TickLiveEventReducer from "../tick_live_event_reducer";
 import UnbanLiveUserReducer from "../unban_live_user_reducer";
 import UpdateLiveReducer from "../update_live_reducer";
 import UpsertAccountStateReducer from "../upsert_account_state_reducer";
 
+export type AppendAuditLogParams = __Infer<typeof AppendAuditLogReducer>;
+export type AppendModerationActionParams = __Infer<typeof AppendModerationActionReducer>;
 export type BanLiveUserParams = __Infer<typeof BanLiveUserReducer>;
 export type BoostLiveParams = __Infer<typeof BoostLiveReducer>;
 export type CreateUserProfileParams = __Infer<typeof CreateUserProfileReducer>;
@@ -55,6 +60,7 @@ export type SetLivePresenceParams = __Infer<typeof SetLivePresenceReducer>;
 export type SetSocialStatusParams = __Infer<typeof SetSocialStatusReducer>;
 export type SetUserRoleParams = __Infer<typeof SetUserRoleReducer>;
 export type StartLiveParams = __Infer<typeof StartLiveReducer>;
+export type SubmitWithdrawalRequestParams = __Infer<typeof SubmitWithdrawalRequestReducer>;
 export type TickLiveEventParams = __Infer<typeof TickLiveEventReducer>;
 export type UnbanLiveUserParams = __Infer<typeof UnbanLiveUserReducer>;
 export type UpdateLiveParams = __Infer<typeof UpdateLiveReducer>;

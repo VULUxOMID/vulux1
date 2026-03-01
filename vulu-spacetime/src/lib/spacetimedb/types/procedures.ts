@@ -6,5 +6,8 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all procedure arg schemas
+import * as ResolveOrCreateUserIdentitySyncProcedure from "../resolve_or_create_user_identity_sync_procedure";
 
+export type ResolveOrCreateUserIdentitySyncArgs = __Infer<typeof ResolveOrCreateUserIdentitySyncProcedure.params>;
+export type ResolveOrCreateUserIdentitySyncResult = __Infer<typeof ResolveOrCreateUserIdentitySyncProcedure.returnType>;
 

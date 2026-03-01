@@ -20,9 +20,6 @@ import {
 } from '../features/liveroom/types';
 import { liveSessionUser, createChatMessage } from '../features/liveroom/liveSession';
 import { createRoomFromLive } from '../features/liveroom/roomFactory';
-import { createBackendHttpClientFromEnv } from '../data/adapters/backend/httpClient';
-import { getBackendToken } from '../utils/backendToken';
-import { getBackendTokenTemplate } from '../config/backendToken';
 import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
 import { useRepositories } from '../data/provider';
 import { useWallet } from './WalletContext';
@@ -441,14 +438,11 @@ const defaultLiveValue: LiveContextType = {
 };
 
 export function LiveProvider({ children }: { children: ReactNode }) {
-  const { userId, isLoaded: isAuthLoaded, getToken } = useSessionAuth();
+  const { userId, isLoaded: isAuthLoaded } = useSessionAuth();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
   const { fuel, consumeFuel } = useWallet();
   const fuelRef = useRef(fuel);
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
-
-  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
-  const tokenTemplate = useMemo(() => getBackendTokenTemplate(), []);
 
   const [activeLive, setActiveLive] = useState<LiveItem | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -654,25 +648,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-
-      if (!backendClient) return false;
-      try {
-        const token = await getBackendToken(getToken, tokenTemplate);
-        if (!token) return false;
-        backendClient.setAuth(token);
-        await backendClient.post(path, payload);
-        return true;
-      } catch (error) {
-        if (isBannedFromLiveError(error)) {
-          forceCloseLiveForBan();
-        }
-        if (__DEV__) {
-          console.warn(`[live] Failed to sync ${path}`, error);
-        }
-        return false;
-      }
+      return false;
     },
-    [backendClient, forceCloseLiveForBan, getToken, isAuthLoaded, tokenTemplate, userId],
+    [forceCloseLiveForBan, isAuthLoaded, userId],
   );
 
   const syncLivePresence = useCallback(

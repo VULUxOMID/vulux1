@@ -7,9 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { useVideo, VideoCategory } from '../../src/context/VideoContext';
 import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
-import { createBackendHttpClientFromEnv } from '../../src/data/adapters/backend/httpClient';
-import { getBackendTokenTemplate } from '../../src/config/backendToken';
-import { getBackendToken } from '../../src/utils/backendToken';
+import { uploadMediaAsset } from '../../src/utils/mediaUpload';
 import { toast } from '../../src/components/Toast';
 import { colors, spacing, typography } from '../../src/theme';
 
@@ -28,35 +26,6 @@ export default function VideoUploadScreen() {
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [selectedVideoType, setSelectedVideoType] = useState('video/mp4');
   const [isUploading, setIsUploading] = useState(false);
-
-  const uploadToR2 = async (
-    presignedUrl: string,
-    fileContent: Blob,
-    contentType: string,
-  ): Promise<void> =>
-    await new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('PUT', presignedUrl);
-      request.setRequestHeader('Content-Type', contentType);
-
-      request.onload = () => {
-        if (request.status >= 200 && request.status < 300) {
-          resolve();
-          return;
-        }
-        reject(new Error(`Storage upload failed (${request.status})`));
-      };
-
-      request.onerror = () => {
-        reject(new Error('Storage upload failed (network error)'));
-      };
-
-      request.onabort = () => {
-        reject(new Error('Upload canceled'));
-      };
-
-      request.send(fileContent);
-    });
 
   const handlePickThumbnail = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -102,45 +71,20 @@ export default function VideoUploadScreen() {
     setIsUploading(true);
 
     try {
-      const client = createBackendHttpClientFromEnv();
-      if (!client) {
-        throw new Error('Backend client not configured');
-      }
-
-      const token = await getBackendToken(getToken, getBackendTokenTemplate());
-      if (!token) {
-        throw new Error('Not authenticated');
-      }
-      client.setAuth(token);
-
-      const [videoFileContent, thumbnailFileContent] = await Promise.all([
-        fetch(videoUri).then((res) => res.blob()),
-        fetch(thumbnail).then((res) => res.blob()),
+      const [{ publicUrl: uploadedThumbnailUrl }, { publicUrl: uploadedVideoUrl }] = await Promise.all([
+        uploadMediaAsset({
+          getToken,
+          uri: thumbnail,
+          contentType: 'image/jpeg',
+          mediaType: 'image',
+        }),
+        uploadMediaAsset({
+          getToken,
+          uri: videoUri,
+          contentType: selectedVideoType,
+          mediaType: 'video',
+        }),
       ]);
-
-      const thumbnailUrlResponse = await client.post<{
-        url: string;
-        objectKey: string;
-        publicUrl?: string | null;
-      }>('/video/upload/url', {
-        contentType: 'image/jpeg',
-      });
-      const thumbPresignedUrl = thumbnailUrlResponse.url;
-      const thumbPublicUrl = thumbnailUrlResponse.publicUrl;
-      await uploadToR2(thumbPresignedUrl, thumbnailFileContent, 'image/jpeg');
-      const uploadedThumbnailUrl = thumbPublicUrl ?? thumbPresignedUrl.split('?')[0];
-
-      const videoUrlResponse = await client.post<{
-        url: string;
-        objectKey: string;
-        publicUrl?: string | null;
-      }>('/video/upload/url', {
-        contentType: selectedVideoType,
-      });
-      const videoPresignedUrl = videoUrlResponse.url;
-      const videoPublicUrl = videoUrlResponse.publicUrl;
-      await uploadToR2(videoPresignedUrl, videoFileContent, selectedVideoType);
-      const uploadedVideoUrl = videoPublicUrl ?? videoPresignedUrl.split('?')[0];
 
       await uploadVideo({
         title,

@@ -215,6 +215,7 @@ function resolveSocialPresenceStatus(
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
 
 const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
+  ['sub'],
   ['userId'],
   ['user_id'],
   ['uid'],
@@ -652,6 +653,61 @@ function authorizeGlobalMessagePayload(ctx: any, payload: JsonRecord): string | 
       unauthorized('global chat senderId must match caller identity.');
     }
     payload.senderId = callerUserId;
+    return eventType;
+  }
+
+  if (eventType === 'video_catalog_item') {
+    const callerUserId = resolveCallerUserId(ctx);
+    const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+    const creatorId = readString(payload.creatorId);
+    if (creatorId && creatorId !== callerUserId && (!legacyCallerUserId || creatorId !== legacyCallerUserId)) {
+      unauthorized('video_catalog_item creatorId must match caller identity.');
+    }
+    payload.creatorId = creatorId ?? legacyCallerUserId ?? callerUserId;
+    return eventType;
+  }
+
+  if (eventType === 'music_track_item') {
+    const callerUserId = resolveCallerUserId(ctx);
+    const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+    const uploaderUserId = readString(payload.uploaderUserId);
+    if (
+      uploaderUserId &&
+      uploaderUserId !== callerUserId &&
+      (!legacyCallerUserId || uploaderUserId !== legacyCallerUserId)
+    ) {
+      unauthorized('music_track_item uploaderUserId must match caller identity.');
+    }
+    payload.uploaderUserId = uploaderUserId ?? legacyCallerUserId ?? callerUserId;
+    return eventType;
+  }
+
+  if (eventType === 'media_upload') {
+    const callerUserId = resolveCallerUserId(ctx);
+    const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+    const ownerUserId = readString(payload.ownerUserId);
+    if (ownerUserId && ownerUserId !== callerUserId && (!legacyCallerUserId || ownerUserId !== legacyCallerUserId)) {
+      unauthorized('media_upload ownerUserId must match caller identity.');
+    }
+    payload.ownerUserId = ownerUserId ?? legacyCallerUserId ?? callerUserId;
+    return eventType;
+  }
+
+  if (eventType === 'live_invite') {
+    const callerUserId = resolveCallerUserId(ctx);
+    const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+    const inviterUserId = readString(payload.inviterUserId);
+    if (
+      inviterUserId &&
+      inviterUserId !== callerUserId &&
+      (!legacyCallerUserId || inviterUserId !== legacyCallerUserId)
+    ) {
+      unauthorized('live_invite inviterUserId must match caller identity.');
+    }
+    if (!readString(payload.targetUserId)) {
+      throw new Error('live_invite targetUserId is required.');
+    }
+    payload.inviterUserId = inviterUserId ?? legacyCallerUserId ?? callerUserId;
     return eventType;
   }
 
@@ -2811,5 +2867,79 @@ export const grantAdminCurrency = schemaDb.reducer(
       metadata: toJsonString({ source: 'grantAdminCurrency' }),
       createdAt: ctx.timestamp,
     });
+  },
+);
+
+export const appendAuditLog = schemaDb.reducer(
+  {
+    id: t.string(),
+    actorUserId: t.string(),
+    item: t.string(),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.actorUserId, 'actorUserId');
+    const existing = ctx.db.auditLogItem.id.find(args.id);
+    if (existing) {
+      ctx.db.auditLogItem.id.delete(args.id);
+    }
+    ctx.db.auditLogItem.insert({
+      id: args.id,
+      actorUserId: args.actorUserId,
+      item: args.item,
+      createdAt: ctx.timestamp,
+    });
+  },
+);
+
+export const appendModerationAction = schemaDb.reducer(
+  {
+    id: t.string(),
+    targetUserId: t.option(t.string()),
+    item: t.string(),
+  },
+  (ctx, args) => {
+    const actorUserId = assertAdmin(ctx);
+    const existing = ctx.db.moderationActionItem.id.find(args.id);
+    if (existing) {
+      ctx.db.moderationActionItem.id.delete(args.id);
+    }
+    ctx.db.moderationActionItem.insert({
+      id: args.id,
+      actorUserId,
+      targetUserId: readString(args.targetUserId) ?? '',
+      item: args.item,
+      createdAt: ctx.timestamp,
+    });
+  },
+);
+
+export const submitWithdrawalRequest = schemaDb.reducer(
+  {
+    id: t.string(),
+    userId: t.string(),
+    item: t.string(),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+
+    const existing = ctx.db.withdrawalRequestItem.id.find(args.id);
+    if (existing) {
+      ctx.db.withdrawalRequestItem.id.delete(args.id);
+    }
+    ctx.db.withdrawalRequestItem.insert({
+      id: args.id,
+      userId: args.userId,
+      item: args.item,
+      createdAt: ctx.timestamp,
+    });
+
+    const currentState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(currentState);
+    const nextWallet = {
+      ...currentWallet,
+      withdrawalHistory: [...currentWallet.withdrawalHistory, parseJsonRecord(args.item)],
+    };
+    const nextState = writeWalletToAccountState(currentState, nextWallet);
+    writeAccountStateItem(ctx, args.userId, nextState);
   },
 );

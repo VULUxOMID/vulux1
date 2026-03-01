@@ -32,8 +32,8 @@ function trim(value: string | undefined): string | undefined {
 
 function getRealtimeBaseUrlFromEnv(): string | null {
   const httpBaseUrl =
-    trim(process.env.EXPO_PUBLIC_API_BASE_URL) ??
-    trim(process.env.EXPO_PUBLIC_BACKEND_API_URL);
+    trim(process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL) ??
+    trim(process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL);
   if (!httpBaseUrl) return null;
 
   try {

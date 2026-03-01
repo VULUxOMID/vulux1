@@ -6,7 +6,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import { Track, Playlist, Artist } from '../types';
 import { useMusicCatalogRepo } from '../../../data/provider';
-import { createBackendHttpClientFromEnv } from '../../../data/adapters/backend/httpClient';
 import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
@@ -88,7 +87,6 @@ const MusicContext = createContext<MusicContextType | undefined>(undefined);
 
 export const MusicProvider = ({ children }: { children: ReactNode }) => {
   const { getToken, isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
-  const [backendClient] = useState(() => createBackendHttpClientFromEnv());
   const musicCatalogRepo = useMusicCatalogRepo();
   const tracksCatalog = useMemo(() => musicCatalogRepo.listTracks({ limit: 300 }), [musicCatalogRepo]);
   const artistsCatalog = useMemo(() => musicCatalogRepo.listArtists({ limit: 300 }), [musicCatalogRepo]);
@@ -262,7 +260,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
     setBackendHydrated(false);
 
     const hydrateFromBackend = async () => {
-      const accountState = await fetchBackendAccountState(backendClient, getToken, userId);
+      const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
 
       const musicState =
@@ -292,7 +290,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       active = false;
     };
-  }, [backendClient, getToken, isAuthLoaded, isSignedIn, storageLoaded, userId]);
+  }, [getToken, isAuthLoaded, isSignedIn, storageLoaded, userId]);
 
   useEffect(() => {
     if (
@@ -300,8 +298,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
       !backendHydrated ||
       !isAuthLoaded ||
       !isSignedIn ||
-      !userId ||
-      !backendClient
+      !userId
     ) {
       return;
     }
@@ -311,7 +308,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
     }
 
     backendPersistTimerRef.current = setTimeout(() => {
-      void upsertBackendAccountState(backendClient, getToken, {
+      void upsertBackendAccountState(null, getToken, {
         music: {
           playlists,
           likedTrackIds: Array.from(likedTrackIds),
@@ -327,7 +324,6 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
       }
     };
   }, [
-    backendClient,
     backendHydrated,
     getToken,
     isAuthLoaded,

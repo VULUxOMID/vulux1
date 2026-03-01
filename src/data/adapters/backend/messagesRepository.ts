@@ -10,10 +10,6 @@ import type { BackendHttpClient } from './httpClient';
 import { requestBackendRefresh } from './refreshBus';
 import { spacetimeDb } from '../../../lib/spacetime';
 
-const MESSAGE_SEND_MAX_ATTEMPTS = 3;
-const MESSAGE_SEND_INITIAL_RETRY_DELAY_MS = 350;
-const MESSAGE_SEND_MAX_RETRY_DELAY_MS = 1_600;
-
 type UnknownRecord = Record<string, unknown>;
 
 type ThreadMessageEvent = {
@@ -41,83 +37,6 @@ type UserDirectoryEntry = {
 const globalMessagesCacheByRoom = new Map<string, GlobalChatMessage[]>();
 const conversationsCacheByViewer = new Map<string, Conversation[]>();
 const threadMessagesCacheByConversation = new Map<string, ThreadSeedMessage[]>();
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function getStatusCodeFromError(error: unknown): number | null {
-  if (error && typeof error === 'object') {
-    const status = (error as { status?: unknown }).status;
-    if (typeof status === 'number' && Number.isFinite(status)) {
-      return status;
-    }
-  }
-
-  if (error instanceof Error) {
-    const match = error.message.match(/\((\d{3})\)/);
-    if (match) {
-      const parsed = Number.parseInt(match[1], 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-
-  return null;
-}
-
-function shouldRetryMessageSend(error: unknown, attemptIndex: number): boolean {
-  if (attemptIndex >= MESSAGE_SEND_MAX_ATTEMPTS - 1) {
-    return false;
-  }
-
-  const statusCode = getStatusCodeFromError(error);
-  if (statusCode === null) {
-    return true;
-  }
-
-  if (statusCode === 408 || statusCode === 429 || statusCode >= 500) {
-    return true;
-  }
-
-  return false;
-}
-
-async function postWithRetry(
-  client: BackendHttpClient | null,
-  path: string,
-  body: unknown,
-): Promise<void> {
-  if (!client) {
-    throw new Error('Backend API is unavailable.');
-  }
-
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < MESSAGE_SEND_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      await client.post(path, body);
-      return;
-    } catch (error) {
-      lastError = error;
-      const shouldRetry = shouldRetryMessageSend(error, attempt);
-      if (!shouldRetry) {
-        break;
-      }
-
-      const delayMs = Math.min(
-        MESSAGE_SEND_MAX_RETRY_DELAY_MS,
-        MESSAGE_SEND_INITIAL_RETRY_DELAY_MS * 2 ** attempt,
-      );
-      await sleep(delayMs);
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error('Failed to send message.');
-}
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -615,7 +534,7 @@ function parsePositiveLimit(value: unknown): number | null {
 
 export function createBackendMessagesRepository(
   snapshot: BackendSnapshot,
-  client: BackendHttpClient | null,
+  _client: BackendHttpClient | null,
   viewerUserId: string | null = null,
 ): MessagesRepository {
   const normalizeSenderId = (senderId: string) =>
@@ -806,15 +725,12 @@ export function createBackendMessagesRepository(
           reason: 'thread_message_sent_spacetimedb',
         });
         return;
-      } catch {
-        // Fallback for legacy API deployments.
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[data/messages] Failed to send thread message via SpacetimeDB', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to send thread message.');
       }
-
-      const { fromUserId: _fromUserId, ...payload } = request;
-      await postWithRetry(client, '/messages/thread/send', {
-        ...payload,
-        clientMessageId: request.clientMessageId ?? request.message.id,
-      });
     },
     async markConversationRead(request) {
       if (!request.userId) return;
@@ -852,19 +768,10 @@ export function createBackendMessagesRepository(
             reason: 'conversation_mark_read_spacetimedb',
           });
           return;
-        } catch {
-          // Fallback for legacy API deployments.
-        }
-      }
-
-      const { readerUserId: _readerUserId, ...payload } = request;
-      try {
-        await postWithRetry(client, '/messages/conversation/mark-read', {
-          ...payload,
-        });
-      } catch (error) {
-        if (__DEV__) {
-          console.warn('[data/backend] Failed to mark conversation as read', error);
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('[data/messages] Failed to mark conversation as read via SpacetimeDB', error);
+          }
         }
       }
     },

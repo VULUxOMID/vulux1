@@ -40,6 +40,7 @@ import type { LiveUser } from '../../src/features/liveroom/types';
 import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { subscribeConversation } from '../../src/lib/spacetime';
+import { uploadMediaAsset } from '../../src/utils/mediaUpload';
 
 // Types
 type ActionId = 'reply' | 'copy' | 'edit' | 'delete';
@@ -520,7 +521,7 @@ export default function ChatDetailScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
-  const { userId: viewerUserId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
+  const { userId: viewerUserId, isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -935,16 +936,26 @@ export default function ChatDetailScreen() {
           ? asset.width / asset.height
           : undefined;
 
+      const uploadedImage = await uploadMediaAsset({
+        getToken,
+        uri: asset.uri,
+        contentType:
+          typeof asset.mimeType === 'string' && asset.mimeType.startsWith('image/')
+            ? asset.mimeType
+            : 'image/jpeg',
+        mediaType: 'chat',
+      });
+
       sendMessage('', {
         type: 'image',
-        url: asset.uri,
+        url: uploadedImage.publicUrl,
         aspectRatio,
       });
       hapticConfirm();
     } catch (error) {
-      toast.error('Could not pick an image right now.');
+      toast.error('Could not upload that image right now.');
       if (__DEV__) {
-        console.warn('[chat] Failed to pick image', error);
+        console.warn('[chat] Failed to upload selected image', error);
       }
     }
   };

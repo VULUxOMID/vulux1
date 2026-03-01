@@ -7,8 +7,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
-import { createBackendHttpClientFromEnv } from '../../../data/adapters/backend/httpClient';
 import { toast } from '../../../components/Toast';
+import { uploadMediaAsset } from '../../../utils/mediaUpload';
+import { publishMusicTrackCatalogItem } from '../../../utils/spacetimePersistence';
 
 interface UploadTrackModalProps {
   visible: boolean;
@@ -73,43 +74,6 @@ export const UploadTrackModal = ({ visible, onClose, onUploadSuccess }: UploadTr
     }
   };
 
-  const uploadToR2WithProgress = async (url: string, fileContent: Blob, contentType: string, isAudio: boolean = false) =>
-    await new Promise<void>((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('PUT', url);
-      request.setRequestHeader('Content-Type', contentType);
-
-      request.upload.onloadstart = () => {
-        if (isAudio) setUploadProgress(5);
-      };
-
-      request.upload.onprogress = (event) => {
-        if (event.lengthComputable && event.total > 0 && isAudio) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          setUploadProgress(Math.max(5, Math.min(progress, 100)));
-        }
-      };
-
-      request.onload = () => {
-        if (request.status >= 200 && request.status < 300) {
-          if (isAudio) setUploadProgress(100);
-          resolve();
-          return;
-        }
-        reject(new Error(`Failed to upload file to storage (${request.status})`));
-      };
-
-      request.onerror = () => {
-        reject(new Error('Failed to upload file to storage (network error)'));
-      };
-
-      request.onabort = () => {
-        reject(new Error('Upload canceled'));
-      };
-
-      request.send(fileContent);
-    });
-
   const handleUpload = async () => {
     if (!title.trim() || !artistName.trim() || !audioUri) {
       setError('Please fill in all fields and select an audio file');
@@ -121,40 +85,33 @@ export const UploadTrackModal = ({ visible, onClose, onUploadSuccess }: UploadTr
     setError('');
 
     try {
-      const client = createBackendHttpClientFromEnv();
-      if (!client) throw new Error('Backend client not configured');
-      const token = await getToken({ template: process.env.EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE });
-      if (!token) throw new Error('Not authenticated');
-
-      client.setAuth(token);
-
       // --- Artwork Upload ---
       let uploadedArtworkUrl = '';
       if (artworkUri) {
         setUploadProgress(2);
-        const artworkUrlResponse = await client.post<{ url: string; objectKey: string; publicUrl?: string | null }>('/music/upload/url', {
+        const artworkUpload = await uploadMediaAsset({
+          getToken,
+          uri: artworkUri,
           contentType: 'image/jpeg',
+          mediaType: 'image',
         });
-        const { url: artPresignedUrl, publicUrl: artPublicUrl } = artworkUrlResponse;
-        const artFileContent = await fetch(artworkUri).then(res => res.blob());
-        await uploadToR2WithProgress(artPresignedUrl, artFileContent, 'image/jpeg', false);
-        uploadedArtworkUrl = artPublicUrl ?? artPresignedUrl.split('?')[0];
+        uploadedArtworkUrl = artworkUpload.publicUrl;
       }
 
       // --- Audio Upload ---
-      const urlResponse = await client.post<{ url: string; objectKey: string; publicUrl?: string | null }>('/music/upload/url', {
+      const audioUpload = await uploadMediaAsset({
+        getToken,
+        uri: audioUri,
         contentType: selectedContentType,
+        mediaType: 'music',
+        onProgress: (progress) => {
+          setUploadProgress(Math.max(5, progress));
+        },
       });
-
-      const { url: audioPresignedUrl, publicUrl: audioPublicUrl } = urlResponse;
-
-      const audioFileContent = await fetch(audioUri).then(res => res.blob());
-      await uploadToR2WithProgress(audioPresignedUrl, audioFileContent, selectedContentType, true);
-
-      const uploadedAudioUrl = audioPublicUrl ?? audioPresignedUrl.split('?')[0];
+      const uploadedAudioUrl = audioUpload.publicUrl;
 
       // --- Save Track ---
-      await client.post('/music/tracks', {
+      await publishMusicTrackCatalogItem({
         title: title.trim(),
         artistName: artistName.trim(),
         audioUrl: uploadedAudioUrl,
