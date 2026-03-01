@@ -25,7 +25,7 @@ import { useRepositories } from '../data/provider';
 import { useWallet } from './WalletContext';
 import { toast } from '../components/Toast';
 import type { GlobalChatMessage, SocialUser } from '../data/contracts';
-import { spacetimeDb } from '../lib/spacetime';
+import { liveLifecycleClient, type LiveMutationResult } from '../lib/liveLifecycleClient';
 
 type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
@@ -71,7 +71,7 @@ type LiveContextType = {
   boostLive: (multiplier: BoostMultiplier) => void;
   resetBoost: () => void;
 
-  startLive: (title: string, inviteOnly: boolean) => boolean;
+  startLive: (title: string, inviteOnly: boolean) => Promise<LiveMutationResult>;
 
   toggleMic: () => void;
 };
@@ -195,148 +195,15 @@ function asFiniteNumber(value: unknown): number | null {
   return null;
 }
 
-type LiveMutationEvent = {
-  eventType: string;
-  roomId: string;
-  payload: Record<string, unknown>;
-};
-
-function buildLiveMutationEvent(
-  path: string,
-  payload: Record<string, unknown>,
-  userId: string,
-): LiveMutationEvent | null {
-  const now = Date.now();
-  const liveId = asTrimmedString(payload.liveId);
-
-  if (path === '/live/start') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_start',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_start',
-        liveId,
-        ownerUserId: userId,
-        title: asTrimmedString(payload.title) ?? 'Live',
-        inviteOnly: payload.inviteOnly === true,
-        viewers: Math.max(0, Math.floor(asFiniteNumber(payload.viewers) ?? 1)),
-        hosts: Array.isArray(payload.hosts) ? payload.hosts : [],
-        bannedUserIds: Array.isArray(payload.bannedUserIds) ? payload.bannedUserIds : [],
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/update') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_update',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_update',
-        liveId,
-        title: asTrimmedString(payload.title) ?? undefined,
-        inviteOnly: typeof payload.inviteOnly === 'boolean' ? payload.inviteOnly : undefined,
-        viewers: asFiniteNumber(payload.viewers) ?? undefined,
-        hosts: Array.isArray(payload.hosts) ? payload.hosts : undefined,
-        bannedUserIds: Array.isArray(payload.bannedUserIds) ? payload.bannedUserIds : undefined,
-        updatedByUserId: userId,
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/presence') {
-    const activity = asTrimmedString(payload.activity) ?? 'none';
-    return {
-      eventType: 'live_presence',
-      roomId: liveId ? `live:${liveId}` : `presence:${userId}`,
-      payload: {
-        eventType: 'live_presence',
-        userId,
-        activity,
-        liveId: liveId ?? undefined,
-        liveTitle: asTrimmedString(payload.liveTitle) ?? undefined,
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/ban') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_ban',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_ban',
-        liveId,
-        targetUserId: asTrimmedString(payload.targetUserId) ?? '',
-        actorUserId: userId,
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/unban') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_unban',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_unban',
-        liveId,
-        targetUserId: asTrimmedString(payload.targetUserId) ?? '',
-        actorUserId: userId,
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/end') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_end',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_end',
-        liveId,
-        actorUserId: userId,
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/boost') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_boost',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_boost',
-        liveId,
-        actorUserId: userId,
-        amount: Math.max(1, Math.floor(asFiniteNumber(payload.amount) ?? 1)),
-        createdAt: now,
-      },
-    };
-  }
-
-  if (path === '/live/event/tick') {
-    if (!liveId) return null;
-    return {
-      eventType: 'live_event_tick',
-      roomId: `live:${liveId}`,
-      payload: {
-        eventType: 'live_event_tick',
-        liveId,
-        actorUserId: userId,
-        createdAt: now,
-      },
-    };
-  }
-
-  return null;
+function makeLiveMutationFailure(
+  code: Extract<LiveMutationResult, { ok: false }>['code'],
+  message: string,
+): LiveMutationResult {
+  return {
+    ok: false,
+    code,
+    message,
+  };
 }
 
 function normalizeLiveUserIds(value: unknown): string[] {
@@ -433,7 +300,11 @@ const defaultLiveValue: LiveContextType = {
   setTitle: () => { },
   boostLive: () => { },
   resetBoost: () => { },
-  startLive: () => false,
+  startLive: async () => ({
+    ok: false,
+    code: 'reducers_unavailable',
+    message: 'Live context is unavailable.',
+  }),
   toggleMic: () => { },
 };
 
@@ -457,6 +328,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   const activeLiveRef = useRef<LiveItem | null>(null);
   const liveRoomRef = useRef<LiveRoom | null>(null);
+  const liveStartInFlightRef = useRef(false);
   const liveEndDetectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveEndAutoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -630,36 +502,142 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, [clearLiveEndTimers]);
 
   const postLiveMutation = useCallback(
-    async (path: string, payload: Record<string, unknown>): Promise<boolean> => {
-      if (!isAuthLoaded || !userId) return false;
-
-      const liveEvent = buildLiveMutationEvent(path, payload, userId);
-      if (liveEvent) {
-        try {
-          await (spacetimeDb.reducers as any).sendGlobalMessage({
-            id: `${liveEvent.eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            roomId: liveEvent.roomId,
-            item: JSON.stringify(liveEvent.payload),
-          });
-          return true;
-        } catch (error) {
-          if (__DEV__) {
-            console.warn(`[live] Spacetime live mutation failed for ${path}`, error);
-          }
-        }
+    async (path: string, payload: Record<string, unknown>): Promise<LiveMutationResult> => {
+      if (!isAuthLoaded || !userId) {
+        return makeLiveMutationFailure('unauthenticated', 'Sign in to manage live sessions.');
       }
-      return false;
+
+      const liveId = asTrimmedString(payload.liveId);
+      if (path === '/live/start') {
+        if (!liveId) {
+          return makeLiveMutationFailure('invalid_input', 'Live id is required to start a live.');
+        }
+        return liveLifecycleClient.startLive({
+          liveId,
+          ownerUserId: userId,
+          title: asTrimmedString(payload.title) ?? 'Live',
+          inviteOnly: payload.inviteOnly === true,
+          viewers: Math.max(0, Math.floor(asFiniteNumber(payload.viewers) ?? 1)),
+          hosts: Array.isArray(payload.hosts) ? payload.hosts : [],
+          bannedUserIds: Array.isArray(payload.bannedUserIds)
+            ? normalizeLiveUserIds(payload.bannedUserIds)
+            : [],
+        });
+      }
+
+      if (path === '/live/update') {
+        if (!liveId) {
+          return makeLiveMutationFailure('invalid_input', 'Live id is required to update a live.');
+        }
+
+        const parsedViewers = asFiniteNumber(payload.viewers);
+        return liveLifecycleClient.updateLive({
+          liveId,
+          title: asTrimmedString(payload.title) ?? undefined,
+          inviteOnly: typeof payload.inviteOnly === 'boolean' ? payload.inviteOnly : undefined,
+          viewers:
+            parsedViewers === null
+              ? undefined
+              : Math.max(0, Math.floor(parsedViewers)),
+          hosts: Array.isArray(payload.hosts) ? payload.hosts : undefined,
+          bannedUserIds: Array.isArray(payload.bannedUserIds)
+            ? normalizeLiveUserIds(payload.bannedUserIds)
+            : undefined,
+        });
+      }
+
+      if (path === '/live/presence') {
+        const normalizedActivity = asTrimmedString(payload.activity);
+        const activity: 'hosting' | 'watching' | 'none' =
+          normalizedActivity === 'hosting' || normalizedActivity === 'watching'
+            ? normalizedActivity
+            : 'none';
+
+        return liveLifecycleClient.setLivePresence({
+          userId,
+          activity,
+          liveId: liveId ?? undefined,
+          liveTitle: asTrimmedString(payload.liveTitle) ?? undefined,
+        });
+      }
+
+      if (path === '/live/ban') {
+        const targetUserId = asTrimmedString(payload.targetUserId);
+        if (!liveId || !targetUserId) {
+          return makeLiveMutationFailure(
+            'invalid_input',
+            'Live id and target user id are required to ban a user.',
+          );
+        }
+        return liveLifecycleClient.banLiveUser({
+          liveId,
+          targetUserId,
+          actorUserId: userId,
+        });
+      }
+
+      if (path === '/live/unban') {
+        const targetUserId = asTrimmedString(payload.targetUserId);
+        if (!liveId || !targetUserId) {
+          return makeLiveMutationFailure(
+            'invalid_input',
+            'Live id and target user id are required to unban a user.',
+          );
+        }
+        return liveLifecycleClient.unbanLiveUser({
+          liveId,
+          targetUserId,
+          actorUserId: userId,
+        });
+      }
+
+      if (path === '/live/end') {
+        if (!liveId) {
+          return makeLiveMutationFailure('invalid_input', 'Live id is required to end a live.');
+        }
+        return liveLifecycleClient.endLive({
+          liveId,
+          actorUserId: userId,
+        });
+      }
+
+      if (path === '/live/boost') {
+        if (!liveId) {
+          return makeLiveMutationFailure('invalid_input', 'Live id is required to boost a live.');
+        }
+        return liveLifecycleClient.boostLive({
+          liveId,
+          actorUserId: userId,
+          amount: Math.max(1, Math.floor(asFiniteNumber(payload.amount) ?? 1)),
+        });
+      }
+
+      if (path === '/live/event/tick') {
+        if (!liveId) {
+          return makeLiveMutationFailure(
+            'invalid_input',
+            'Live id is required to tick live event state.',
+          );
+        }
+        return liveLifecycleClient.tickLiveEvent({ liveId });
+      }
+
+      return makeLiveMutationFailure('invalid_input', `Unsupported live mutation path: ${path}`);
     },
-    [forceCloseLiveForBan, isAuthLoaded, userId],
+    [isAuthLoaded, userId],
   );
 
   const syncLivePresence = useCallback(
-    (activity: 'hosting' | 'watching' | 'none', liveId?: string, liveTitle?: string) => {
+    (
+      activity: 'hosting' | 'watching' | 'none',
+      liveId?: string,
+      liveTitle?: string,
+    ): Promise<LiveMutationResult> => {
       const normalizedLiveTitle =
         typeof liveTitle === 'string' && liveTitle.trim().length > 0
           ? liveTitle.trim().slice(0, 80)
           : undefined;
-      void postLiveMutation('/live/presence', {
+      return postLiveMutation('/live/presence', {
         activity,
         liveId,
         liveTitle: activity === 'hosting' ? normalizedLiveTitle : undefined,
@@ -1194,13 +1172,19 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           inviteOnly: room.inviteOnly,
           viewers: Math.max(0, room.watchers.length + room.streamers.length),
           hosts: room.streamers.map((streamer) => toHostPayload(streamer)),
-        }).finally(() => {
-          requestBackendRefresh({
-            scopes: ['live'],
-            source: 'manual',
-            reason: 'live_started',
+        })
+          .then((result) => {
+            if (!result.ok) {
+              toast.error(result.message);
+            }
+          })
+          .finally(() => {
+            requestBackendRefresh({
+              scopes: ['live'],
+              source: 'manual',
+              reason: 'live_started',
+            });
           });
-        });
       }
     },
     [clearLiveEndTimers, currentUserWithMedia.id, fuel, postLiveMutation, syncLivePresence],
@@ -1431,8 +1415,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             liveId: currentLiveId,
             targetUserId: user.id,
           })
-            .then((synced) => {
-              if (!synced) {
+            .then((result) => {
+              if (!result.ok) {
                 syncLiveHosts(nextRoomSnapshot as LiveRoom);
               }
             })
@@ -1481,8 +1465,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             liveId: currentLiveId,
             targetUserId: user.id,
           })
-            .then((synced) => {
-              if (!synced) {
+            .then((result) => {
+              if (!result.ok) {
                 syncLiveHosts(nextRoomSnapshot as LiveRoom);
               }
             })
@@ -1647,85 +1631,121 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startLive = useCallback(
-    (title: string, inviteOnly: boolean): boolean => {
+    async (title: string, inviteOnly: boolean): Promise<LiveMutationResult> => {
+      if (!isAuthLoaded || !userId) {
+        return makeLiveMutationFailure('unauthenticated', 'Sign in before starting a live.');
+      }
+
+      if (liveStartInFlightRef.current) {
+        return makeLiveMutationFailure(
+          'invalid_input',
+          'A live start is already in progress. Please wait a moment.',
+        );
+      }
+
+      if (activeLiveRef.current || liveRoomRef.current || liveState !== 'LIVE_CLOSED') {
+        return makeLiveMutationFailure(
+          'invalid_input',
+          'Leave your current live before starting a new one.',
+        );
+      }
+
       if (fuel <= 0) {
         toast.warning('You are out of fuel. Refuel before starting a live.');
-        return false;
+        return makeLiveMutationFailure('invalid_input', 'You are out of fuel.');
       }
 
       const normalizedTitle = title.trim().slice(0, 80);
       if (normalizedTitle.length < 3) {
         toast.warning('Add a live title (at least 3 characters).');
-        return false;
+        return makeLiveMutationFailure('invalid_input', 'Live title must be at least 3 characters.');
       }
 
-      const liveId = `live-${Date.now()}`;
-      const hostUser = currentUserWithMedia;
+      liveStartInFlightRef.current = true;
+      try {
+        const liveId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const hostUser = currentUserWithMedia;
+        const hosts = [toHostPayload(hostUser)];
 
-      const newRoom: LiveRoom = {
-        id: liveId,
-        title: normalizedTitle,
-        inviteOnly,
-        hostUser,
-        streamers: [hostUser],
-        watchers: [],
-        chatMessages: [
-          createChatMessage(`${hostUser.name} started the live!`, undefined, 'system', 'join'),
-        ],
-        boostRank: null,
-        totalBoosts: 0,
-        bannedUserIds: [],
-        bannedUsers: [],
-        createdAt: Date.now(),
-      };
+        const startResult = await postLiveMutation('/live/start', {
+          liveId,
+          title: normalizedTitle,
+          inviteOnly,
+          viewers: 1,
+          hosts,
+        });
 
-      clearLiveEndTimers();
-      setLiveEndingState(null);
-      setLiveRoom(newRoom);
-      setIsHost(true);
-      setLiveState('LIVE_FULL');
+        if (!startResult.ok) {
+          return startResult;
+        }
 
-      const nextActiveLive: ExtendedLiveItem = {
-        id: newRoom.id,
-        title: newRoom.title,
-        viewers: 1,
-        ownerUserId: hostUser.id,
-        inviteOnly,
-        images: [hostUser.avatarUrl],
-        hosts: [
-          {
-            id: hostUser.id,
-            username: hostUser.username,
-            name: hostUser.name,
-            age: hostUser.age,
-            country: hostUser.country,
-            bio: hostUser.bio,
-            verified: hostUser.verified,
-            avatar: hostUser.avatarUrl,
-          },
-        ],
-      };
-      setActiveLive(nextActiveLive);
+        const newRoom: LiveRoom = {
+          id: liveId,
+          title: normalizedTitle,
+          inviteOnly,
+          hostUser,
+          streamers: [hostUser],
+          watchers: [],
+          chatMessages: [
+            createChatMessage(`${hostUser.name} started the live!`, undefined, 'system', 'join'),
+          ],
+          boostRank: null,
+          totalBoosts: 0,
+          bannedUserIds: [],
+          bannedUsers: [],
+          createdAt: Date.now(),
+        };
 
-      setIsMinimized(false);
-      syncLivePresence('hosting', newRoom.id, newRoom.title);
+        clearLiveEndTimers();
+        setLiveEndingState(null);
+        setLiveRoom(newRoom);
+        setIsHost(true);
+        setLiveState('LIVE_FULL');
 
-      void postLiveMutation('/live/start', {
-        liveId: newRoom.id,
-        title: newRoom.title,
-        inviteOnly,
-        viewers: 1,
-        hosts: [toHostPayload(hostUser)],
-      }).finally(() => {
+        const nextActiveLive: ExtendedLiveItem = {
+          id: newRoom.id,
+          title: newRoom.title,
+          viewers: 1,
+          ownerUserId: hostUser.id,
+          inviteOnly,
+          images: [hostUser.avatarUrl],
+          hosts: [
+            {
+              id: hostUser.id,
+              username: hostUser.username,
+              name: hostUser.name,
+              age: hostUser.age,
+              country: hostUser.country,
+              bio: hostUser.bio,
+              verified: hostUser.verified,
+              avatar: hostUser.avatarUrl,
+            },
+          ],
+        };
+        setActiveLive(nextActiveLive);
+
+        setIsMinimized(false);
+        const presenceResult = await syncLivePresence('hosting', newRoom.id, newRoom.title);
+        if (
+          !presenceResult.ok &&
+          presenceResult.code !== 'live_ended' &&
+          presenceResult.code !== 'not_found'
+        ) {
+          toast.warning('Live started, but presence sync failed. Reconnecting...');
+        }
+
         requestBackendRefresh({
           scopes: ['live'],
           source: 'manual',
           reason: 'live_started',
         });
-      });
-      return true;
+
+        return { ok: true };
+      } finally {
+        liveStartInFlightRef.current = false;
+      }
     },
-    [clearLiveEndTimers, currentUserWithMedia, fuel, postLiveMutation, syncLivePresence],
+    [clearLiveEndTimers, currentUserWithMedia, fuel, isAuthLoaded, liveState, postLiveMutation, syncLivePresence, userId],
   );
 
   const toggleMic = useCallback(() => {
