@@ -732,10 +732,6 @@ function assertLiveParticipationAllowed(
     throw new Error('Live has ended.');
   }
 
-  if (hasAdminRole(ctx)) {
-    return live;
-  }
-
   const bannedUserIds = new Set(normalizeBannedUserIds(live.bannedUserIds));
   if (bannedUserIds.has(callerUserId)) {
     unauthorized("You're banned.");
