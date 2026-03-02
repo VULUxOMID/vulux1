@@ -500,17 +500,6 @@ function countEnabledAdminRoles(ctx: any): number {
   return count;
 }
 
-function hasBootstrapAdminGrantAuditLog(ctx: any): boolean {
-  for (const row of ctx.db.auditLogItem.iter()) {
-    const item = parseJsonRecord(row.item);
-    const actionType = readString(item.actionType)?.toLowerCase();
-    if (actionType === BOOTSTRAP_ADMIN_AUDIT_ACTION) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function hasAdminRole(ctx: any): boolean {
   return userHasAdminRole(
     ctx,
@@ -2982,33 +2971,30 @@ export const setUserRole = schemaDb.reducer(
       throw new Error('targetUserId and role are required.');
     }
 
+    const normalizedRole = role.toLowerCase();
+    const canBootstrapFirstAdmin =
+      targetUserId === BOOTSTRAP_ADMIN_USER_ID &&
+      normalizedRole === 'admin' &&
+      enabled &&
+      countEnabledAdminRoles(ctx) === 0;
+
+    if (canBootstrapFirstAdmin) {
+      if (!readUserRow(ctx, targetUserId)) {
+        throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
+      }
+      const bootstrapActorUserId = resolveCallerUserId(ctx);
+      upsertUserRole(ctx, targetUserId, role, enabled, bootstrapActorUserId);
+      appendBootstrapAdminGrantAuditLog(ctx, bootstrapActorUserId, targetUserId);
+      return;
+    }
+
+    const adminUserId = assertAdmin(ctx);
+
     if (!readUserRow(ctx, targetUserId)) {
       throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
     }
 
-    const normalizedRole = role.toLowerCase();
-    const isBootstrapAdminGrantRequest =
-      targetUserId === BOOTSTRAP_ADMIN_USER_ID &&
-      normalizedRole === 'admin' &&
-      enabled;
-    const canBootstrapFirstAdmin =
-      isBootstrapAdminGrantRequest &&
-      countEnabledAdminRoles(ctx) === 0 &&
-      !hasBootstrapAdminGrantAuditLog(ctx);
-
-    const adminUserId = canBootstrapFirstAdmin ? resolveCallerUserId(ctx) : assertAdmin(ctx);
-
-    upsertUserRole(
-      ctx,
-      targetUserId,
-      role,
-      enabled,
-      adminUserId,
-    );
-
-    if (canBootstrapFirstAdmin) {
-      appendBootstrapAdminGrantAuditLog(ctx, adminUserId, targetUserId);
-    }
+    upsertUserRole(ctx, targetUserId, role, enabled, adminUserId);
   },
 );
 
