@@ -21,6 +21,7 @@ import {
 import { liveSessionUser, createChatMessage } from '../features/liveroom/liveSession';
 import { createRoomFromLive } from '../features/liveroom/roomFactory';
 import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
+import { spendFuelTick } from '../data/adapters/backend/walletMutations';
 import { useRepositories } from '../data/provider';
 import { useWallet } from './WalletContext';
 import { toast } from '../components/Toast';
@@ -531,7 +532,7 @@ const defaultLiveValue: LiveContextType = {
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { userId, isLoaded: isAuthLoaded } = useSessionAuth();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
-  const { fuel, consumeFuel } = useWallet();
+  const { fuel } = useWallet();
   const fuelRef = useRef(fuel);
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
 
@@ -1276,6 +1277,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   const closeLiveRef = useRef(closeLive);
   useEffect(() => { closeLiveRef.current = closeLive; }, [closeLive]);
+  const fuelDrainInFlightRef = useRef(false);
 
   useEffect(() => {
     if (liveState === 'LIVE_CLOSED') return;
@@ -1287,16 +1289,27 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     }
 
     const drainInterval = setInterval(() => {
-      const consumed = consumeFuel(1);
-      if (!consumed) {
-        closeLiveRef.current();
+      if (!userId || fuelDrainInFlightRef.current) {
+        return;
       }
+
+      fuelDrainInFlightRef.current = true;
+      void spendFuelTick(userId, 1, 'live_tick')
+        .then((result) => {
+          if (!result.ok && result.code === 'insufficient_fuel') {
+            closeLiveRef.current();
+          }
+        })
+        .finally(() => {
+          fuelDrainInFlightRef.current = false;
+        });
     }, FUEL_DRAIN_INTERVAL_MS);
 
     return () => {
       clearInterval(drainInterval);
+      fuelDrainInFlightRef.current = false;
     };
-  }, [consumeFuel, liveState]);
+  }, [liveState, userId]);
 
   const switchLiveRoom = useCallback(
     (live: LiveItem): boolean => {

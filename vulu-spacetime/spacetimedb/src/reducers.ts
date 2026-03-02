@@ -9,6 +9,19 @@ const MAX_THREAD_MESSAGES = 500;
 const LIVE_EVENT_DURATION_MS = 24 * 60 * 60 * 1000;
 const LIVE_EVENT_WINNER_INTERVAL_MS = 15 * 60 * 1000;
 const GEMS_TO_FUEL_RATE = 4;
+const GEM_TO_CASH_RATE = 10;
+const CASH_TO_GEM_RATE = 10;
+const AD_REWARD_GEMS = 10;
+
+const FUEL_PACK_COSTS: Record<number, { gems: number; cash: number }> = {
+  30: { gems: 12, cash: 120 },
+  60: { gems: 20, cash: 200 },
+  120: { gems: 35, cash: 350 },
+  300: { gems: 80, cash: 800 },
+  600: { gems: 150, cash: 1500 },
+};
+
+const TRUSTED_GEM_PURCHASE_AMOUNTS = new Set([100, 550, 1200, 2500]);
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1412,6 +1425,26 @@ function appendWalletTransaction(
     metadata: toJsonString(params.metadata ?? {}),
     createdAt: ctx.timestamp,
   });
+}
+
+function hasWalletPurchaseToken(
+  ctx: any,
+  userId: string,
+  purchaseToken: string,
+): boolean {
+  for (const row of ctx.db.walletTransactionItem.iter()) {
+    if (row.userId !== userId || row.eventType !== 'credit_gems_purchase') {
+      continue;
+    }
+
+    const metadata = parseJsonRecord(row.metadata);
+    const existingToken = readString(metadata.purchaseToken);
+    if (existingToken && existingToken === purchaseToken) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function upsertNotificationItem(ctx: any, id: string, userId: string, item: JsonRecord): void {
@@ -3425,6 +3458,286 @@ export const sendCashToUser = schemaDb.reducer(
 
     upsertGlobalMessageRow(ctx, args.id, `wallet:${args.fromUserId}`, toJsonString(payload));
     applyCashTransfer(ctx, payload);
+  },
+);
+
+export const purchaseFuelPack = schemaDb.reducer(
+  {
+    userId: t.string(),
+    fuelAmount: t.u32(),
+    paymentCurrency: t.string(),
+    source: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+
+    const fuelAmount = Math.max(0, toNonNegativeInt(args.fuelAmount));
+    if (fuelAmount <= 0) {
+      throw new Error('fuelAmount must be greater than zero.');
+    }
+
+    const pricing = FUEL_PACK_COSTS[fuelAmount];
+    if (!pricing) {
+      throw new Error('Unsupported fuel pack amount.');
+    }
+
+    const paymentCurrency = readString(args.paymentCurrency)?.toLowerCase();
+    if (paymentCurrency !== 'gems' && paymentCurrency !== 'cash') {
+      throw new Error('paymentCurrency must be gems or cash.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const paymentAmount = paymentCurrency === 'gems' ? pricing.gems : pricing.cash;
+    const currentBalance = paymentCurrency === 'gems' ? currentWallet.gems : currentWallet.cash;
+    if (currentBalance < paymentAmount) {
+      throw new Error(`Insufficient ${paymentCurrency}.`);
+    }
+
+    const nextWallet = {
+      ...currentWallet,
+      gems:
+        paymentCurrency === 'gems'
+          ? currentWallet.gems - paymentAmount
+          : currentWallet.gems,
+      cash:
+        paymentCurrency === 'cash'
+          ? currentWallet.cash - paymentAmount
+          : currentWallet.cash,
+      fuel: currentWallet.fuel + fuelAmount,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'purchase_fuel_pack',
+      delta: {
+        gems: paymentCurrency === 'gems' ? -paymentAmount : 0,
+        cash: paymentCurrency === 'cash' ? -paymentAmount : 0,
+        fuel: fuelAmount,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: readString(args.source) ?? 'wallet_purchase_fuel_pack',
+        fuelAmount,
+        paymentCurrency,
+        paymentAmount,
+      },
+    });
+  },
+);
+
+export const claimAdReward = schemaDb.reducer(
+  {
+    userId: t.string(),
+    source: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems + AD_REWARD_GEMS,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'claim_ad_reward',
+      delta: {
+        gems: AD_REWARD_GEMS,
+        cash: 0,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: readString(args.source) ?? 'wallet_claim_ad_reward',
+        rewardGems: AD_REWARD_GEMS,
+      },
+    });
+  },
+);
+
+export const creditGemsPurchase = schemaDb.reducer(
+  {
+    userId: t.string(),
+    gemsToCredit: t.u32(),
+    purchaseToken: t.string(),
+    priceLabel: t.option(t.string()),
+    source: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+    const gemsToCredit = Math.max(0, toNonNegativeInt(args.gemsToCredit));
+    if (gemsToCredit <= 0) {
+      throw new Error('gemsToCredit must be greater than zero.');
+    }
+
+    if (!TRUSTED_GEM_PURCHASE_AMOUNTS.has(gemsToCredit)) {
+      throw new Error('Unsupported gems package.');
+    }
+
+    const purchaseToken = readString(args.purchaseToken);
+    if (!purchaseToken) {
+      throw new Error('purchaseToken is required.');
+    }
+
+    if (hasWalletPurchaseToken(ctx, args.userId, purchaseToken)) {
+      throw new Error('purchaseToken has already been fulfilled.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems + gemsToCredit,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'credit_gems_purchase',
+      delta: {
+        gems: gemsToCredit,
+        cash: 0,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: readString(args.source) ?? 'wallet_credit_gems_purchase',
+        purchaseToken,
+        priceLabel: readString(args.priceLabel) ?? undefined,
+        gemsToCredit,
+      },
+    });
+  },
+);
+
+export const convertGemsToCash = schemaDb.reducer(
+  {
+    userId: t.string(),
+    gemsToConvert: t.u32(),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+    const gemsToConvert = Math.max(0, toNonNegativeInt(args.gemsToConvert));
+    if (gemsToConvert <= 0) {
+      throw new Error('gemsToConvert must be greater than zero.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    if (currentWallet.gems < gemsToConvert) {
+      throw new Error('Insufficient gems.');
+    }
+
+    const cashToCredit = gemsToConvert * GEM_TO_CASH_RATE;
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems - gemsToConvert,
+      cash: currentWallet.cash + cashToCredit,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'convert_gems_to_cash',
+      delta: {
+        gems: -gemsToConvert,
+        cash: cashToCredit,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'wallet_convert_gems_to_cash',
+        gemsToConvert,
+        cashToCredit,
+        gemToCashRate: GEM_TO_CASH_RATE,
+      },
+    });
+  },
+);
+
+export const convertCashToGems = schemaDb.reducer(
+  {
+    userId: t.string(),
+    cashToConvert: t.u32(),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+    const cashToConvert = Math.max(0, toNonNegativeInt(args.cashToConvert));
+    if (cashToConvert <= 0) {
+      throw new Error('cashToConvert must be greater than zero.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    if (currentWallet.cash < cashToConvert) {
+      throw new Error('Insufficient cash.');
+    }
+
+    const gemsToCredit = Math.floor(cashToConvert / CASH_TO_GEM_RATE);
+    if (gemsToCredit <= 0) {
+      throw new Error('cashToConvert is below minimum exchange amount.');
+    }
+
+    const spentCash = gemsToCredit * CASH_TO_GEM_RATE;
+    const nextWallet = {
+      ...currentWallet,
+      cash: currentWallet.cash - spentCash,
+      gems: currentWallet.gems + gemsToCredit,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'convert_cash_to_gems',
+      delta: {
+        gems: gemsToCredit,
+        cash: -spentCash,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'wallet_convert_cash_to_gems',
+        requestedCashToConvert: cashToConvert,
+        spentCash,
+        gemsToCredit,
+        cashToGemRate: CASH_TO_GEM_RATE,
+      },
+    });
   },
 );
 

@@ -25,6 +25,8 @@ import { useLive } from '../../context/LiveContext';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../liveroom/types';
 import { hapticTap } from '../../utils/haptics';
 import { normalizeImageUri } from '../../utils/imageSource';
+import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 // Base screen width for scaling (iPhone 12/13 width)
 const BASE_SCREEN_WIDTH = 390;
@@ -118,8 +120,9 @@ export function FriendLivePreviewSheet({
   otherFriendsInLive = [],
 }: FriendLivePreviewSheetProps) {
   const router = useRouter();
+  const { userId } = useSessionAuth();
   const { width: screenWidth } = useWindowDimensions();
-  const { fuel, gems, cash, addFuel, spendGems, spendCash } = useWallet();
+  const { fuel, gems, cash } = useWallet();
   const { switchLiveRoom } = useLive();
   const isClosingRef = useRef(false);
   const isSwipeDismissRef = useRef(false);
@@ -366,7 +369,7 @@ export function FriendLivePreviewSheet({
     hapticTap();
   }, []);
 
-  const handleConfirmRefuel = useCallback(() => {
+  const handleConfirmRefuel = useCallback(async () => {
     if (fuel >= MAX_FUEL_MINUTES) {
       toast.info('Your fuel tank is already full.');
       setIsRefuelSheetVisible(false);
@@ -378,31 +381,36 @@ export function FriendLivePreviewSheet({
       return;
     }
 
-    const isPaid =
-      fuelPaymentType === 'gems'
-        ? spendGems(selectedFuelCost.gems)
-        : spendCash(selectedFuelCost.cash);
-
-    if (!isPaid) {
-      toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+    if (!userId) {
+      toast.error('Sign in required to refuel.');
       return;
     }
 
-    addFuel(selectedFuelAmount);
+    const result = await purchaseFuelPack(
+      userId,
+      selectedFuelAmount,
+      fuelPaymentType,
+      'friend_live_preview_refuel',
+    );
+    if (!result.ok) {
+      if (result.code === 'insufficient_balance') {
+        toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+      } else {
+        toast.error(result.message ?? 'Refuel failed.');
+      }
+      return;
+    }
+
     setIsRefuelSheetVisible(false);
     toast.success(`Added ${selectedFuelAmount}m fuel.`);
     hapticTap();
   }, [
-    addFuel,
     fuel,
     fuelPaymentType,
     hasEnoughBalance,
     selectedFuelAmount,
-    selectedFuelCost.cash,
-    selectedFuelCost.gems,
     selectedFuelPrice,
-    spendCash,
-    spendGems,
+    userId,
   ]);
   const cardPanHandlers = isRefuelSheetVisible ? {} : panResponder.panHandlers;
 
