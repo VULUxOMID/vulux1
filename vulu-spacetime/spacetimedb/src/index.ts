@@ -5,6 +5,8 @@ export {
   publicLeaderboard,
   publicLiveDiscovery,
   myAccountState,
+  myWalletBalance,
+  myWalletTransactions,
   myProfile,
   myNotifications,
   myFriendships,

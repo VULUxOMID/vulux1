@@ -68,6 +68,56 @@ function readIdentityString(value: unknown): string | null {
     return null;
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+    if (typeof value !== 'string' || value.trim().length === 0) return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+function readNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'bigint') {
+        const asNumber = Number(value);
+        return Number.isFinite(asNumber) ? asNumber : null;
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function toNonNegativeInt(value: unknown, fallback = 0): number {
+    const parsed = readNumber(value);
+    if (parsed === null) return fallback;
+    return Math.max(0, Math.floor(parsed));
+}
+
+function readWalletBalancesFromState(stateValue: unknown): {
+    gems: number;
+    cash: number;
+    fuel: number;
+} {
+    const state = parseJsonRecord(stateValue);
+    const wallet = state.wallet;
+    if (!wallet || typeof wallet !== 'object' || Array.isArray(wallet)) {
+        return { gems: 0, cash: 0, fuel: 0 };
+    }
+
+    const walletRecord = wallet as Record<string, unknown>;
+    return {
+        gems: toNonNegativeInt(walletRecord.gems),
+        cash: toNonNegativeInt(walletRecord.cash),
+        fuel: toNonNegativeInt(walletRecord.fuel),
+    };
+}
+
 function readJwtClaims(ctx: any): Record<string, unknown> | null {
     const claims = ctx?.senderAuth?.jwt?.fullPayload;
     return claims && typeof claims === 'object' && !Array.isArray(claims)
@@ -168,6 +218,21 @@ export const spacetimedb = schema({
             deltaCash: t.u32(),
             deltaFuel: t.u32(),
             reason: t.string(),
+            balanceBefore: t.string(), // json
+            balanceAfter: t.string(), // json
+            metadata: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
+    walletTransactionItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            userId: t.string().index(),
+            eventType: t.string(),
+            deltaGems: t.i32(),
+            deltaCash: t.i32(),
+            deltaFuel: t.i32(),
             balanceBefore: t.string(), // json
             balanceAfter: t.string(), // json
             metadata: t.string(), // json
@@ -443,6 +508,27 @@ const myAccountStateRow = t.row('MyAccountStateRow', {
     updatedAt: t.timestamp(),
 });
 
+const myWalletBalanceRow = t.row('MyWalletBalanceRow', {
+    userId: t.string(),
+    gems: t.u32(),
+    cash: t.u32(),
+    fuel: t.u32(),
+    updatedAt: t.timestamp(),
+});
+
+const myWalletTransactionRow = t.row('MyWalletTransactionRow', {
+    id: t.string(),
+    userId: t.string(),
+    eventType: t.string(),
+    deltaGems: t.i32(),
+    deltaCash: t.i32(),
+    deltaFuel: t.i32(),
+    balanceBefore: t.string(),
+    balanceAfter: t.string(),
+    metadata: t.string(),
+    createdAt: t.timestamp(),
+});
+
 const myNotificationRow = t.row('MyNotificationRow', {
     id: t.string(),
     userId: t.string(),
@@ -524,6 +610,38 @@ export const myAccountState = spacetimedb.view(
     (ctx) => {
         const callerUserId = requireViewCallerUserId(ctx);
         return ctx.from.accountStateItem.where((row) => row.userId.eq(callerUserId)).build();
+    },
+);
+
+export const myWalletBalance = spacetimedb.view(
+    { name: 'my_wallet_balance', public: true },
+    t.array(myWalletBalanceRow),
+    (ctx) => {
+        const callerUserId = requireViewCallerUserId(ctx);
+        const accountState = ctx.db.accountStateItem.userId.find(callerUserId);
+        if (!accountState) {
+            return [];
+        }
+
+        const wallet = readWalletBalancesFromState(accountState.state);
+        return [
+            {
+                userId: callerUserId,
+                gems: wallet.gems,
+                cash: wallet.cash,
+                fuel: wallet.fuel,
+                updatedAt: accountState.updatedAt,
+            },
+        ];
+    },
+);
+
+export const myWalletTransactions = spacetimedb.view(
+    { name: 'my_wallet_transactions', public: true },
+    t.array(myWalletTransactionRow),
+    (ctx) => {
+        const callerUserId = requireViewCallerUserId(ctx);
+        return ctx.from.walletTransactionItem.where((row) => row.userId.eq(callerUserId)).build();
     },
 );
 
