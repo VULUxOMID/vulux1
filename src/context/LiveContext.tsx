@@ -1301,7 +1301,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const switchLiveRoom = useCallback(
     (live: LiveItem): boolean => {
       const asExtendedLive = live as ExtendedLiveItem;
-      const normalizedBannedUserIds = normalizeLiveUserIds(asExtendedLive.bannedUserIds);
+      const authoritativeLive =
+        queriesEnabled && live.id
+          ? (liveRepo.findLiveById(live.id) as ExtendedLiveItem | undefined)
+          : undefined;
+      const effectiveLive = authoritativeLive ?? asExtendedLive;
+      const normalizedBannedUserIds = normalizeLiveUserIds(effectiveLive.bannedUserIds);
       if (userId && normalizedBannedUserIds.includes(userId)) {
         toast.warning("You've been banned from this live.");
         requestBackendRefresh({
@@ -1312,12 +1317,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return false;
       }
       const hostUserIds = new Set(
-        (live.hosts || [])
+        (effectiveLive.hosts || [])
           .map((host) => (typeof host.id === 'string' && host.id.trim().length > 0 ? host.id : null))
           .filter((value): value is string => Boolean(value)),
       );
       const nextIsHost = Boolean(
-        userId && (asExtendedLive.ownerUserId === userId || hostUserIds.has(userId)),
+        userId && (effectiveLive.ownerUserId === userId || hostUserIds.has(userId)),
       );
 
       if (nextIsHost && fuel <= 0) {
@@ -1352,7 +1357,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
       const nextRoom = {
         ...createRoomFromLive(liveWithResolvedHosts, {
-          inviteOnly: asExtendedLive.inviteOnly === true,
+          inviteOnly: effectiveLive.inviteOnly === true,
           initialBoostRank: null,
           initialBoosts: 0,
           hostUserOverride: nextIsHost ? currentUserWithMedia : undefined,
@@ -1376,7 +1381,16 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       });
       return true;
     },
-    [clearLiveEndTimers, currentUserWithMedia, fuel, resolveLiveUser, syncLivePresence, userId],
+    [
+      clearLiveEndTimers,
+      currentUserWithMedia,
+      fuel,
+      liveRepo,
+      queriesEnabled,
+      resolveLiveUser,
+      syncLivePresence,
+      userId,
+    ],
   );
 
   const openLive = useCallback(
