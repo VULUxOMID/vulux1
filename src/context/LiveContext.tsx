@@ -299,9 +299,30 @@ function areLiveUserListsEquivalent(a: LiveUser[], b: LiveUser[]): boolean {
 
 type LiveAccessRejectionReason = 'invite_only' | 'banned' | 'live_ended';
 
+function readLiveAccessErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string') {
+      return maybeMessage;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 function resolveLiveAccessRejectionReasonFromError(error: unknown): LiveAccessRejectionReason | null {
-  if (!(error instanceof Error)) return null;
-  const message = error.message.toLowerCase();
+  const message = readLiveAccessErrorMessage(error).toLowerCase();
+  if (!message) return null;
 
   if (message.includes('invite only')) return 'invite_only';
   if (
