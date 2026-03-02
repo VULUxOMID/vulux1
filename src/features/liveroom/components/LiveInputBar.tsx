@@ -7,11 +7,12 @@ import { hapticTap } from '../../../utils/haptics';
 
 type LiveInputBarProps = {
   onSend: (text: string) => void;
+  onRaiseHandRequest?: () => void;
   isHost?: boolean;
   bottomInset?: number;
 };
 
-export function LiveInputBar({ onSend, isHost, bottomInset = 0 }: LiveInputBarProps) {
+export function LiveInputBar({ onSend, onRaiseHandRequest, isHost, bottomInset = 0 }: LiveInputBarProps) {
   const [text, setText] = useState('');
 
   const handleSend = (textToSend: string = text) => {
@@ -20,6 +21,15 @@ export function LiveInputBar({ onSend, isHost, bottomInset = 0 }: LiveInputBarPr
     hapticTap();
     onSend(trimmedText);
     setText('');
+  };
+
+  const handleRaiseHand = () => {
+    hapticTap();
+    if (onRaiseHandRequest) {
+      onRaiseHandRequest();
+      return;
+    }
+    handleSend('👋');
   };
 
   return (
@@ -50,7 +60,7 @@ export function LiveInputBar({ onSend, isHost, bottomInset = 0 }: LiveInputBarPr
         {!isHost && (
           <Pressable 
             style={styles.handWaveButton}
-            onPress={() => handleSend('👋')}
+            onPress={handleRaiseHand}
           >
             <Ionicons name="hand-right" size={24} color="#fff" />
           </Pressable>
@@ -94,4 +104,3 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
-
