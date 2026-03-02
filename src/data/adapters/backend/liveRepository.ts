@@ -201,8 +201,9 @@ function getSpacetimeLives(): ExtendedLiveItem[] {
       const hostUserId = asString(row?.hostUserId ?? row?.host_user_id);
       const hostUsername = asString(row?.hostUsername ?? row?.host_username);
       const hostAvatar = asString(row?.hostAvatarUrl ?? row?.host_avatar_url);
+      const hasHostIdentity = Boolean(hostUserId || hostUsername);
 
-      const hosts = hostAvatar
+      const hosts = hasHostIdentity
         ? [{
           id: hostUserId ?? undefined,
           username: hostUsername ?? undefined,
@@ -211,7 +212,7 @@ function getSpacetimeLives(): ExtendedLiveItem[] {
           country: '',
           bio: '',
           verified: false,
-          avatar: hostAvatar,
+          avatar: hostAvatar ?? '',
         }]
         : [];
 
@@ -226,6 +227,18 @@ function getSpacetimeLives(): ExtendedLiveItem[] {
     });
 
   return parsedRows.filter((live): live is ExtendedLiveItem => live !== null);
+}
+
+function getSpacetimeLiveById(liveId: string): ExtendedLiveItem | null {
+  const dbView = spacetimeDb.db as any;
+  const normalizedLiveId = liveId.trim();
+  if (!normalizedLiveId) return null;
+
+  const row =
+    dbView?.liveItem?.id?.find?.(normalizedLiveId) ??
+    dbView?.live_item?.id?.find?.(normalizedLiveId);
+  if (!row) return null;
+  return parseLiveRow(row);
 }
 
 function getSpacetimeBoostLeaderboard() {
@@ -282,15 +295,26 @@ function getSpacetimePresence() {
 export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepository {
   return {
     listLives(request) {
+      const spacetimeLives = getSpacetimeLives();
       const byId = new Map<string, ExtendedLiveItem>();
 
-      for (const live of snapshot.lives) {
-        if (!live?.id) continue;
-        byId.set(live.id, live as ExtendedLiveItem);
-      }
-
-      for (const live of getSpacetimeLives()) {
-        byId.set(live.id, live);
+      if (spacetimeLives.length > 0) {
+        for (const live of spacetimeLives) {
+          byId.set(live.id, live);
+        }
+        for (const live of snapshot.lives) {
+          if (!live?.id) continue;
+          if (!byId.has(live.id)) continue;
+          byId.set(live.id, {
+            ...live,
+            ...(byId.get(live.id) ?? {}),
+          } as ExtendedLiveItem);
+        }
+      } else {
+        for (const live of snapshot.lives) {
+          if (!live?.id) continue;
+          byId.set(live.id, live as ExtendedLiveItem);
+        }
       }
 
       let mergedLives = Array.from(byId.values());
@@ -309,9 +333,11 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
       const normalized = liveId.trim();
       if (!normalized) return undefined;
 
-      const fromSpacetime = getSpacetimeLives().find((live) => live.id === normalized);
-      if (fromSpacetime) return fromSpacetime;
-      return snapshot.lives.find((live) => live.id === normalized);
+      const fromLiveItem = getSpacetimeLiveById(normalized);
+      if (fromLiveItem) return fromLiveItem;
+      const fromSnapshot = snapshot.lives.find((live) => live.id === normalized);
+      if (fromSnapshot) return fromSnapshot;
+      return getSpacetimeLives().find((live) => live.id === normalized);
     },
     listBoostLeaderboard(request) {
       const byId = new Map<string, (typeof snapshot.boostLeaderboard)[number]>();

@@ -92,7 +92,7 @@ export default function LiveScreen() {
   const insets = useSafeAreaInsets();
   const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
-  const { live: liveRepo, social: socialRepo } = useRepositories();
+  const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const lives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
@@ -679,6 +679,53 @@ export default function LiveScreen() {
     }
   }, [sendMessage]);
 
+  const handleRaiseHandRequest = useCallback(async () => {
+    if (isHost) {
+      return;
+    }
+
+    const currentLiveId = liveRoom?.id ?? activeLive?.id;
+    const hostUserId = liveRoom?.hostUser.id ?? activeLive?.hosts?.[0]?.id;
+    if (!currentLiveId || !hostUserId || !currentUser?.id) {
+      toast.error('Host is unavailable right now.');
+      return;
+    }
+
+    const requesterName = currentUser.name?.trim() || 'A viewer';
+    const messageId = `live-raise-hand-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    try {
+      await messagesRepo.sendGlobalMessage({
+        clientMessageId: messageId,
+        roomId: currentLiveId,
+        message: {
+          id: messageId,
+          user: requesterName,
+          senderId: currentUser.id,
+          text: `${requesterName} requested to join as a co-host.`,
+          type: 'system',
+          createdAt: Date.now(),
+          roomId: currentLiveId,
+        },
+      });
+      toast.success('Raise-hand request sent.');
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[live] Failed to send raise-hand request', error);
+      }
+      toast.error('Could not send request. Try again.');
+    }
+  }, [
+    activeLive?.hosts,
+    activeLive?.id,
+    currentUser?.id,
+    currentUser?.name,
+    isHost,
+    liveRoom?.hostUser.id,
+    liveRoom?.id,
+    messagesRepo,
+  ]);
+
   const handleInviteToStream = useCallback((user: LiveUser) => {
     hapticTap();
     setPendingInviteUser(user);
@@ -1061,6 +1108,7 @@ export default function LiveScreen() {
             >
               <LiveInputBar
                 onSend={handleSendMessage}
+                onRaiseHandRequest={handleRaiseHandRequest}
                 isHost={isHost}
                 bottomInset={keyboardHeight > 0 ? 0 : insets.bottom}
               />

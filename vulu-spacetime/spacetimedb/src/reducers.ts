@@ -1450,7 +1450,7 @@ function upsertPublicLiveDiscoveryItem(
   const primaryHost = hosts[0] ?? {};
   const viewerCount = toNonNegativeInt(item.viewers);
   const endedAt = toNonNegativeInt(item.endedAt);
-  const shouldHideFromDiscovery = endedAt > 0 || (hosts.length === 0 && viewerCount === 0);
+  const shouldHideFromDiscovery = endedAt > 0 || hosts.length === 0;
 
   const hostUserId =
     readString(primaryHost.id) ??
@@ -2189,7 +2189,34 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
   if (!userId || !activity) return;
 
   if (activity === 'none') {
+    const previousPresence = readLivePresenceItem(ctx, userId);
+    const previousLiveId = readString(previousPresence.liveId);
+    const previousActivity = readString(previousPresence.activity);
     deleteLivePresenceItem(ctx, userId);
+
+    if (previousLiveId && previousActivity === 'hosting') {
+      const live = readLiveItem(ctx, previousLiveId);
+      if (Object.keys(live).length > 0) {
+        const hosts = normalizeHostList(live.hosts);
+        const remainingHosts = hosts.filter((host) => readString(host.id) !== userId);
+        const ownerUserId = readLiveOwnerUserId(live);
+        const shouldEndLive = ownerUserId === userId || remainingHosts.length === 0;
+
+        if (shouldEndLive) {
+          applyLiveEnd(ctx, { liveId: previousLiveId });
+        } else if (remainingHosts.length !== hosts.length) {
+          writeLiveItem(ctx, previousLiveId, {
+            ...live,
+            hosts: remainingHosts,
+            images: remainingHosts
+              .map((host) => readString(host.avatar))
+              .filter((value): value is string => Boolean(value)),
+            viewers: Math.max(0, toNonNegativeInt(live.viewers) - 1),
+            updatedAt: nowMs(ctx),
+          });
+        }
+      }
+    }
     return;
   }
 
