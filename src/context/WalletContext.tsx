@@ -3,13 +3,7 @@ import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 
 import {
   fetchAccountState as fetchBackendAccountState,
-  upsertAccountState as upsertBackendAccountState,
 } from '../data/adapters/backend/accountState';
-
-// Exchange rates
-const GEM_TO_CASH_RATE = 10; // 1 Gem = 10 Cash
-const CASH_TO_GEM_RATE = 10; // 10 Cash = 1 Gem
-const GEM_TO_REAL_MONEY_RATE = 0.01; // 1 Gem = $0.01 Real Money
 
 function toNonNegativeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -111,7 +105,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const fuelRef = useRef(fuel);
   const gemsRef = useRef(gems);
   const cashRef = useRef(cash);
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const getTokenRef = useRef(getToken);
 
   useEffect(() => {
@@ -192,119 +185,56 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     };
   }, [isAuthLoaded, isSignedIn, userId]);
 
-  useEffect(() => {
-    if (!walletHydrated || !isAuthLoaded || !isSignedIn || !userId) {
-      return;
+  const warnWalletMutationBlocked = useCallback((action: string) => {
+    if (__DEV__) {
+      console.warn(`[wallet] blocked client-side mutation: ${action}`);
     }
-
-    if (persistTimerRef.current) {
-      clearTimeout(persistTimerRef.current);
-    }
-
-    persistTimerRef.current = setTimeout(() => {
-      void upsertBackendAccountState(null, getTokenRef.current, {
-        wallet: {
-          gems: gemsRef.current,
-          cash: cashRef.current,
-          fuel: fuelRef.current,
-          withdrawalHistory,
-        },
-      }, userId);
-    }, 450);
-
-    return () => {
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current);
-        persistTimerRef.current = null;
-      }
-    };
-  }, [
-    cash,
-    gems,
-    fuel,
-    isAuthLoaded,
-    isSignedIn,
-    userId,
-    walletHydrated,
-    withdrawalHistory,
-  ]);
+  }, []);
 
   const addGems = useCallback((amount: number) => {
     if (!Number.isFinite(amount) || amount <= 0) return;
-    gemsRef.current += amount;
-    setGems((prev) => prev + amount);
-  }, []);
+    warnWalletMutationBlocked('addGems');
+  }, [warnWalletMutationBlocked]);
 
   const addCash = useCallback((amount: number) => {
     if (!Number.isFinite(amount) || amount <= 0) return;
-    cashRef.current += amount;
-    setCash((prev) => prev + amount);
-  }, []);
+    warnWalletMutationBlocked('addCash');
+  }, [warnWalletMutationBlocked]);
 
   const addFuel = useCallback((minutes: number) => {
     if (!Number.isFinite(minutes) || minutes <= 0) return;
-    fuelRef.current += minutes;
-    setFuel((prev) => prev + minutes);
-  }, []);
+    warnWalletMutationBlocked('addFuel');
+  }, [warnWalletMutationBlocked]);
 
   const consumeFuel = useCallback((minutes: number) => {
     if (!Number.isFinite(minutes) || minutes <= 0) return false;
-    if (fuelRef.current >= minutes) {
-      fuelRef.current -= minutes;
-      setFuel((prev) => prev - minutes);
-      return true;
-    }
+    warnWalletMutationBlocked('consumeFuel');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   const exchangeGemsForCash = useCallback((gemsAmount: number) => {
     if (!Number.isFinite(gemsAmount) || gemsAmount <= 0) return false;
-    if (gemsRef.current >= gemsAmount) {
-      const cashAmount = gemsAmount * GEM_TO_CASH_RATE;
-      gemsRef.current -= gemsAmount;
-      cashRef.current += cashAmount;
-      setGems((prev) => prev - gemsAmount);
-      setCash((prev) => prev + cashAmount);
-      return true;
-    }
+    warnWalletMutationBlocked('exchangeGemsForCash');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   const exchangeCashForGems = useCallback((cashAmount: number) => {
     if (!Number.isFinite(cashAmount) || cashAmount <= 0) return false;
-    if (cashRef.current >= cashAmount) {
-      const gemsAmount = Math.floor(cashAmount / CASH_TO_GEM_RATE);
-      if (gemsAmount > 0) {
-        const convertedCash = gemsAmount * CASH_TO_GEM_RATE;
-        cashRef.current -= convertedCash;
-        gemsRef.current += gemsAmount;
-        setCash((prev) => prev - convertedCash);
-        setGems((prev) => prev + gemsAmount);
-        return true;
-      }
-    }
+    warnWalletMutationBlocked('exchangeCashForGems');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   const spendGems = useCallback((amount: number) => {
     if (!Number.isFinite(amount) || amount <= 0) return false;
-    if (gemsRef.current >= amount) {
-      gemsRef.current -= amount;
-      setGems((prev) => prev - amount);
-      return true;
-    }
+    warnWalletMutationBlocked('spendGems');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   const spendCash = useCallback((amount: number) => {
     if (!Number.isFinite(amount) || amount <= 0) return false;
-    if (cashRef.current >= amount) {
-      cashRef.current -= amount;
-      setCash((prev) => prev - amount);
-      return true;
-    }
+    warnWalletMutationBlocked('spendCash');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   const deductBalance = useCallback(async (amount: number, currency: 'gems' | 'cash') => {
     if (currency === 'gems') {
@@ -316,23 +246,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const requestWithdrawal = useCallback((amountGems: number, details: WithdrawalRequest['details'], method: string) => {
     if (!Number.isFinite(amountGems) || amountGems <= 0) return false;
-    if (gemsRef.current >= amountGems) {
-      gemsRef.current -= amountGems;
-      setGems((prev) => prev - amountGems);
-      const newRequest: WithdrawalRequest = {
-        id: Math.random().toString(36).slice(2, 11),
-        amountGems,
-        amountRealMoney: amountGems * GEM_TO_REAL_MONEY_RATE,
-        status: 'pending',
-        date: new Date().toISOString(),
-        method,
-        details,
-      };
-      setWithdrawalHistory((prev) => [newRequest, ...prev]);
-      return true;
-    }
+    void details;
+    void method;
+    warnWalletMutationBlocked('requestWithdrawal');
     return false;
-  }, []);
+  }, [warnWalletMutationBlocked]);
 
   return (
     <WalletContext.Provider

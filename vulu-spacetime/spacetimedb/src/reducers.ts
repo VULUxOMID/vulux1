@@ -1892,6 +1892,10 @@ function applyAccountStateUpsert(ctx: any, payload: JsonRecord): void {
   const updates = isRecord(payload.updates) ? payload.updates : {};
   if (!userId) return;
 
+  if (Object.prototype.hasOwnProperty.call(updates, 'wallet')) {
+    throw new Error('wallet updates must use dedicated wallet reducers.');
+  }
+
   const currentState = readAccountStateItem(ctx, userId);
   const nextState = deepMerge(currentState, updates);
   writeAccountStateItem(ctx, userId, nextState);
