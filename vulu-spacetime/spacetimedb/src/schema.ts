@@ -26,6 +26,7 @@ type PublicLiveDiscoveryViewRow = {
 
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
 const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
+    ['sub'],
     ['userId'],
     ['user_id'],
     ['uid'],

@@ -11,7 +11,6 @@ import React, {
 import { AppState } from 'react-native';
 
 import { useAuth } from '../../../context/AuthContext';
-import { useUserProfile } from '../../../context/UserProfileContext';
 import { auditLogger } from '../utils/auditLogger';
 import {
   type AdminAction,
@@ -67,22 +66,10 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const expiryLoggedRef = useRef(false);
   const authedUserIdRef = useRef<string | null>(null);
 
-  const { user } = useAuth();
-  const { userProfile } = useUserProfile();
+  const { user, roles } = useAuth();
   const userId = user?.uid ?? null;
 
-  const adminRole = useMemo(() => {
-    const resolvedRole = resolveHighestAdminRole(userProfile?.roles);
-    if (resolvedRole) {
-      return resolvedRole;
-    }
-
-    if (__DEV__ && user) {
-      return 'OWNER';
-    }
-
-    return null;
-  }, [user, userProfile?.roles]);
+  const adminRole = useMemo(() => resolveHighestAdminRole(roles), [roles]);
 
   const isAdminUser = Boolean(adminRole);
   const isOwner = adminRole === 'OWNER';

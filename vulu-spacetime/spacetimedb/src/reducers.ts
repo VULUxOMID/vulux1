@@ -3365,14 +3365,18 @@ export const appendAuditLog = schemaDb.reducer(
     item: t.string(),
   },
   (ctx, args) => {
-    assertSelf(ctx, args.actorUserId, 'actorUserId');
+    const actorUserId = assertAdmin(ctx);
+    const requestedActorUserId = readString(args.actorUserId);
+    if (requestedActorUserId && requestedActorUserId !== actorUserId) {
+      unauthorized('actorUserId must match caller identity.');
+    }
     const existing = ctx.db.auditLogItem.id.find(args.id);
     if (existing) {
       ctx.db.auditLogItem.id.delete(args.id);
     }
     ctx.db.auditLogItem.insert({
       id: args.id,
-      actorUserId: args.actorUserId,
+      actorUserId,
       item: args.item,
       createdAt: ctx.timestamp,
     });
