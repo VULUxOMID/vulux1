@@ -309,6 +309,8 @@ const ADMIN_ROLE_NAMES = new Set([
   'superadmin',
   'owner',
 ]);
+const BOOTSTRAP_ADMIN_USER_ID = '45d3c56c-a930-449b-9a3c-ef039f45eed7';
+const BOOTSTRAP_ADMIN_AUDIT_ACTION = 'bootstrap_admin_granted';
 
 function unauthorized(message: string): never {
   throw new Error(`Unauthorized: ${message}`);
@@ -427,6 +429,32 @@ function userHasAdminRole(ctx: any, userId: string | null | undefined): boolean 
     }
   }
 
+  return false;
+}
+
+function isEnabledUserRoleRow(row: any): boolean {
+  return readBoolean((row as JsonRecord)?.enabled) !== false;
+}
+
+function countEnabledAdminRoles(ctx: any): number {
+  let count = 0;
+  for (const row of ctx.db.userRole.iter()) {
+    const role = readString(row.role)?.toLowerCase();
+    if (role === 'admin' && isEnabledUserRoleRow(row)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function hasBootstrapAdminGrantAuditLog(ctx: any): boolean {
+  for (const row of ctx.db.auditLogItem.iter()) {
+    const item = parseJsonRecord(row.item);
+    const actionType = readString(item.actionType)?.toLowerCase();
+    if (actionType === BOOTSTRAP_ADMIN_AUDIT_ACTION) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -568,6 +596,30 @@ function upsertUserRole(
 
 function ensureDefaultUserRole(ctx: any, vuluUserId: string): void {
   upsertUserRole(ctx, vuluUserId, 'user', true, null);
+}
+
+function appendBootstrapAdminGrantAuditLog(
+  ctx: any,
+  actorUserId: string,
+  targetUserId: string,
+): void {
+  const createdAtMs = nowMs(ctx);
+  const item: JsonRecord = {
+    category: 'admin_bootstrap',
+    actionType: BOOTSTRAP_ADMIN_AUDIT_ACTION,
+    actorUserId,
+    targetUserId,
+    role: 'admin',
+    enabled: true,
+    createdAt: createdAtMs,
+  };
+
+  ctx.db.auditLogItem.insert({
+    id: makeId(ctx, 'audit-bootstrap-admin'),
+    actorUserId,
+    item: toJsonString(item),
+    createdAt: ctx.timestamp,
+  });
 }
 
 type ResolveIdentityArgs = {
@@ -2847,9 +2899,9 @@ export const setUserRole = schemaDb.reducer(
     enabled: t.bool(),
   },
   (ctx, args) => {
-    const adminUserId = assertAdmin(ctx);
     const targetUserId = readString(args.targetUserId);
     const role = readString(args.role);
+    const enabled = readBoolean(args.enabled) !== false;
 
     if (!targetUserId || !role) {
       throw new Error('targetUserId and role are required.');
@@ -2859,13 +2911,29 @@ export const setUserRole = schemaDb.reducer(
       throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
     }
 
+    const normalizedRole = role.toLowerCase();
+    const isBootstrapAdminGrantRequest =
+      targetUserId === BOOTSTRAP_ADMIN_USER_ID &&
+      normalizedRole === 'admin' &&
+      enabled;
+    const canBootstrapFirstAdmin =
+      isBootstrapAdminGrantRequest &&
+      countEnabledAdminRoles(ctx) === 0 &&
+      !hasBootstrapAdminGrantAuditLog(ctx);
+
+    const adminUserId = canBootstrapFirstAdmin ? resolveCallerUserId(ctx) : assertAdmin(ctx);
+
     upsertUserRole(
       ctx,
       targetUserId,
       role,
-      readBoolean(args.enabled) !== false,
+      enabled,
       adminUserId,
     );
+
+    if (canBootstrapFirstAdmin) {
+      appendBootstrapAdminGrantAuditLog(ctx, adminUserId, targetUserId);
+    }
   },
 );
 
