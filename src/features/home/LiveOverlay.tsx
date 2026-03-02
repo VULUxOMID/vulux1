@@ -1,11 +1,12 @@
-import React, { useMemo, useRef, useCallback, useEffect } from 'react';
-import { View, StyleSheet, Dimensions, Animated, PanResponder, Pressable, Alert } from 'react-native';
+import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
+import { View, StyleSheet, Dimensions, Animated, PanResponder, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useLive } from '../../context/LiveContext';
 import { colors, radius, spacing } from '../../theme';
 import { NAV_BAR_HEIGHT } from '../../components/navigation/layoutConstants';
 import { MiniHostsGrid } from '../live/components/MiniHostsGrid';
+import { EndLiveModal } from '../liveroom/components';
 
 export function LiveOverlay() {
   const {
@@ -17,39 +18,39 @@ export function LiveOverlay() {
     isHost,
     isLiveEnding,
   } = useLive();
+  const [showExitModal, setShowExitModal] = useState(false);
 
   const handleClose = useCallback(() => {
+    setShowExitModal(true);
+  }, []);
+
+  const handleConfirmClose = useCallback(() => {
+    setShowExitModal(false);
     if (isHost) {
-      Alert.alert(
-        'End Live?',
-        'Ending now will stop the live for everyone.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'End Live', style: 'destructive', onPress: endLive },
-        ]
-      );
+      endLive();
     } else {
-      Alert.alert(
-        'Leave Live?',
-        'You will leave this live. The stream keeps running for others.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Leave Live', style: 'destructive', onPress: leaveLive },
-        ],
-      );
+      leaveLive();
     }
   }, [endLive, isHost, leaveLive]);
 
   if (!activeLive) return null;
 
   return (
-    <MiniLiveFloating
-      onClose={handleClose}
-      onOpen={restoreLive}
-      activeLive={activeLive}
-      visible={isMinimized}
-      isEnding={isLiveEnding}
-    />
+    <>
+      <MiniLiveFloating
+        onClose={handleClose}
+        onOpen={restoreLive}
+        activeLive={activeLive}
+        visible={isMinimized}
+        isEnding={isLiveEnding}
+      />
+      <EndLiveModal
+        visible={showExitModal}
+        onClose={() => setShowExitModal(false)}
+        onEndLive={handleConfirmClose}
+        isHost={isHost}
+      />
+    </>
   );
 }
 

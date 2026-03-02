@@ -47,6 +47,7 @@ import {
   FuelSheet,
   KickConfirmModal,
   EndLiveModal,
+  LiveEndedScreen,
   ProfileViewsModal,
   BoostButton,
   InviteToStreamModal,
@@ -803,6 +804,11 @@ export default function LiveScreen() {
     handlePostLiveNavigation();
   }, [endLive, handlePostLiveNavigation, isHost, leaveLive]);
 
+  const handleCloseLiveEndedScreen = useCallback(() => {
+    leaveLive();
+    handlePostLiveNavigation();
+  }, [handlePostLiveNavigation, leaveLive]);
+
   const handleFillFuel = useCallback((amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
     // Deduct currency
     let success = false;
@@ -962,10 +968,13 @@ export default function LiveScreen() {
           </Animated.View>
 
           {showLiveOverBanner && (
-            <View style={[styles.liveOverBanner, { top: insets.top + 56 }]}>
-              <AppText style={styles.liveOverTitle}>Live is over</AppText>
-              <AppText style={styles.liveOverSubtitle}>Closing in {liveOverSecondsLabel}s</AppText>
-            </View>
+            <LiveEndedScreen
+              onClose={handleCloseLiveEndedScreen}
+              hostName={liveRoom.hostUser.name}
+              totalViewers={viewerCount}
+              totalBoosts={liveRoom.totalBoosts}
+              duration={`${liveOverSecondsLabel}s`}
+            />
           )}
 
           {/* Main Content Area */}
