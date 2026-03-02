@@ -531,6 +531,78 @@ function ensureUserRow(
   });
 }
 
+type UserBanState = {
+  isBanned: boolean;
+  banStatus: 'active' | 'banned';
+  banReason: string | null;
+};
+
+function readUserBanState(userRow: any): UserBanState {
+  const isBanned = readBoolean(userRow?.isBanned) === true;
+  const banStatus = readString(userRow?.banStatus)?.toLowerCase();
+  return {
+    isBanned,
+    banStatus: banStatus === 'banned' ? 'banned' : 'active',
+    banReason: readString(userRow?.banReason),
+  };
+}
+
+function writeUserBanState(ctx: any, userRow: any, nextBanState: UserBanState): void {
+  const vuluUserId = readString(userRow?.vuluUserId);
+  if (!vuluUserId) {
+    throw new Error('user row is missing vuluUserId.');
+  }
+
+  ctx.db.users.vuluUserId.delete(vuluUserId);
+  ctx.db.users.insert({
+    vuluUserId,
+    createdAt: userRow.createdAt ?? ctx.timestamp,
+    displayName: readString(userRow.displayName) ?? vuluUserId,
+    avatar: readString(userRow.avatar) ?? undefined,
+    isBanned: nextBanState.isBanned,
+    banStatus: nextBanState.banStatus,
+    banReason: nextBanState.banReason ?? undefined,
+  });
+}
+
+function appendModerationAuditLogEntry(
+  ctx: any,
+  params: {
+    actorUserId: string;
+    targetUserId: string;
+    actionType: 'user_ban' | 'user_unban';
+    reason: string;
+    previousBanState: UserBanState;
+    nextBanState: UserBanState;
+  },
+): void {
+  const item: JsonRecord = {
+    category: 'moderation',
+    actionType: params.actionType,
+    actorUserId: params.actorUserId,
+    targetUserId: params.targetUserId,
+    reason: params.reason,
+    previousBanState: params.previousBanState,
+    nextBanState: params.nextBanState,
+    createdAt: nowMs(ctx),
+  };
+
+  ctx.db.moderationActionItem.insert({
+    id: makeId(ctx, 'mod-action'),
+    actorUserId: params.actorUserId,
+    targetUserId: params.targetUserId,
+    item: toJsonString(item),
+    createdAt: ctx.timestamp,
+  });
+
+  ctx.db.auditLogItem.insert({
+    id: makeId(ctx, 'audit-log'),
+    actorUserId: params.actorUserId,
+    item: toJsonString(item),
+    createdAt: ctx.timestamp,
+  });
+}
+
 function upsertUserRole(
   ctx: any,
   vuluUserId: string,
@@ -2862,6 +2934,80 @@ export const setUserRole = schemaDb.reducer(
       readBoolean(args.enabled) !== false,
       adminUserId,
     );
+  },
+);
+
+export const banUser = schemaDb.reducer(
+  {
+    targetUserId: t.string(),
+    reason: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const targetUserId = readString(args.targetUserId);
+    if (!targetUserId) {
+      throw new Error('targetUserId is required.');
+    }
+
+    const userRow = readUserRow(ctx, targetUserId);
+    if (!userRow) {
+      throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
+    }
+
+    const previousBanState = readUserBanState(userRow);
+    const reason = readString(args.reason) ?? 'Banned by admin';
+    const nextBanState: UserBanState = {
+      isBanned: true,
+      banStatus: 'banned',
+      banReason: reason,
+    };
+
+    writeUserBanState(ctx, userRow, nextBanState);
+    appendModerationAuditLogEntry(ctx, {
+      actorUserId: adminUserId,
+      targetUserId,
+      actionType: 'user_ban',
+      reason,
+      previousBanState,
+      nextBanState,
+    });
+  },
+);
+
+export const unbanUser = schemaDb.reducer(
+  {
+    targetUserId: t.string(),
+    reason: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const targetUserId = readString(args.targetUserId);
+    if (!targetUserId) {
+      throw new Error('targetUserId is required.');
+    }
+
+    const userRow = readUserRow(ctx, targetUserId);
+    if (!userRow) {
+      throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
+    }
+
+    const previousBanState = readUserBanState(userRow);
+    const reason = readString(args.reason) ?? 'Ban lifted by admin';
+    const nextBanState: UserBanState = {
+      isBanned: false,
+      banStatus: 'active',
+      banReason: null,
+    };
+
+    writeUserBanState(ctx, userRow, nextBanState);
+    appendModerationAuditLogEntry(ctx, {
+      actorUserId: adminUserId,
+      targetUserId,
+      actionType: 'user_unban',
+      reason,
+      previousBanState,
+      nextBanState,
+    });
   },
 );
 
