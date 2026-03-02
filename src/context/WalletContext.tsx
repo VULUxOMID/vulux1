@@ -4,6 +4,8 @@ import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 import {
   fetchAccountState as fetchBackendAccountState,
 } from '../data/adapters/backend/accountState';
+import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
+import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
 
 function toNonNegativeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -100,6 +102,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [fuel, setFuel] = useState(0);
   const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalRequest[]>([]);
   const [walletHydrated, setWalletHydrated] = useState(false);
+  const [walletRefreshNonce, setWalletRefreshNonce] = useState(0);
 
   // Refs to avoid stale closures in callbacks
   const fuelRef = useRef(fuel);
@@ -115,6 +118,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
   useEffect(() => { gemsRef.current = gems; }, [gems]);
   useEffect(() => { cashRef.current = cash; }, [cash]);
+
+  useEffect(() => {
+    if (!isAuthLoaded || !isSignedIn || !userId) {
+      return;
+    }
+
+    const unsubscribeDataChanges = subscribeSpacetimeDataChanges((event) => {
+      if (event.scopes.includes('wallet')) {
+        setWalletRefreshNonce((value) => value + 1);
+      }
+    });
+
+    const unsubscribeBackendRefresh = subscribeBackendRefresh((event) => {
+      if (!event.scopes || event.scopes.includes('wallet') || event.forceFull) {
+        setWalletRefreshNonce((value) => value + 1);
+      }
+    });
+
+    return () => {
+      unsubscribeBackendRefresh();
+      unsubscribeDataChanges();
+    };
+  }, [isAuthLoaded, isSignedIn, userId]);
 
   useEffect(() => {
     let active = true;
@@ -183,7 +209,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [isAuthLoaded, isSignedIn, userId]);
+  }, [isAuthLoaded, isSignedIn, userId, walletRefreshNonce]);
 
   const warnWalletMutationBlocked = useCallback((action: string) => {
     if (__DEV__) {

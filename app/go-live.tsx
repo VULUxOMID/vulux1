@@ -24,6 +24,8 @@ import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
+import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { purchaseFuelPack } from '../src/data/adapters/backend/walletMutations';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -32,8 +34,9 @@ const LIVE_TITLE_MAX_LENGTH = 80;
 export default function GoLiveScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { userId } = useSessionAuth();
   const { startLive, activeLive, liveRoom } = useLive();
-  const { fuel, addFuel, gems, cash, spendGems, spendCash } = useWallet();
+  const { fuel, gems, cash } = useWallet();
 
   const [title, setTitle] = useState('');
   const [inviteOnly, setInviteOnly] = useState(false);
@@ -103,22 +106,34 @@ export default function GoLiveScreen() {
     router.back();
   };
 
-  const handleFillFuel = (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
+  const handleFillFuel = async (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
     const cost = FUEL_COSTS[amount];
     const canAfford = paymentType === 'gems' ? gems >= cost.gems : cash >= cost.cash;
 
     if (!canAfford) {
-      // You could add a toast here
+      toast.warning(`You need ${paymentType === 'gems' ? cost.gems : cost.cash} ${paymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+      return;
+    }
+
+    if (!userId) {
+      toast.error('Sign in required to refuel.');
       return;
     }
 
     if (fuel < MAX_FUEL_MINUTES) {
-      const actualFill = Math.min(amount, MAX_FUEL_MINUTES - fuel);
-      const success = paymentType === 'gems' ? spendGems(cost.gems) : spendCash(cost.cash);
+      const result = await purchaseFuelPack(
+        userId,
+        amount,
+        paymentType,
+        'go_live_refuel',
+      );
 
-      if (success) {
-        addFuel(actualFill);
+      if (result.ok) {
         setShowFuelSheet(false);
+      } else if (result.code === 'insufficient_balance') {
+        toast.warning('Not enough balance to refuel.');
+      } else {
+        toast.error(result.message ?? 'Refuel failed. Please try again.');
       }
     }
   };

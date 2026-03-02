@@ -34,7 +34,7 @@ import { colors, radius, spacing } from '../../theme';
 import { hapticTap, hapticImpact, hapticWarn } from '../../utils/haptics';
 import { toast } from '../../components/Toast';
 import type { BoostMultiplier, FuelFillAmount, LiveUser } from '../liveroom/types';
-import { FUEL_COSTS, BOOST_COSTS, MAX_FUEL_MINUTES } from '../liveroom/types';
+import { BOOST_COSTS, MAX_FUEL_MINUTES } from '../liveroom/types';
 import * as ImagePicker from 'expo-image-picker';
 import {
   LiveTopBar,
@@ -59,6 +59,7 @@ import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { subscribeLive } from '../../lib/spacetime';
 import { publishLiveInvite } from '../../utils/spacetimePersistence';
+import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const EDGE_THRESHOLD = SCREEN_WIDTH * 0.33;
@@ -115,8 +116,6 @@ export default function LiveScreen() {
     gems: userGems,
     cash: userCash,
     fuel,
-    addFuel,
-    spendGems,
     spendCash,
   } = useWallet();
   const {
@@ -856,29 +855,30 @@ export default function LiveScreen() {
     handlePostLiveNavigation();
   }, [handlePostLiveNavigation, leaveLive]);
 
-  const handleFillFuel = useCallback((amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
-    // Deduct currency
-    let success = false;
-    const cost = FUEL_COSTS[amount];
-
-    if (paymentType === 'gems') {
-      success = spendGems(cost.gems);
-    } else {
-      success = spendCash(cost.cash);
+  const handleFillFuel = useCallback(async (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
+    if (!userId) {
+      toast.error('Sign in required to refuel.');
+      return;
     }
 
-    if (success) {
+    const result = await purchaseFuelPack(
+      userId,
+      amount,
+      paymentType,
+      'live_screen_refuel',
+    );
+    if (result.ok) {
       hapticImpact('medium');
-      // Calculate actual fill (capped at max)
-      const actualFill = Math.min(amount, MAX_FUEL_MINUTES - fuel);
-      if (actualFill > 0) {
-        addFuel(actualFill);
-      }
-    } else {
-      // Should handle insufficient funds (though button should be disabled)
-      hapticImpact('heavy');
+      return;
     }
-  }, [fuel, spendGems, spendCash, addFuel]);
+
+    hapticImpact('heavy');
+    if (result.code === 'insufficient_balance') {
+      toast.warning('Not enough balance to refuel.');
+    } else {
+      toast.error(result.message ?? 'Refuel failed.');
+    }
+  }, [userId]);
 
   const dismissKeyboard = useCallback(() => {
     Keyboard.dismiss();

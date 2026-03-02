@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
@@ -16,20 +16,22 @@ import { ShopEarnTab } from '../../src/features/shop/ShopEarnTab';
 import { ShopWalletTab } from '../../src/features/shop/ShopWalletTab';
 import { WithdrawalModal } from '../../src/features/shop/WithdrawalModal';
 import { ShopTab } from '../../src/features/shop/types';
+import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
+import {
+  claimAdReward,
+  convertCashToGems,
+  convertGemsToCash,
+  creditGemsPurchase,
+  purchaseFuelPack,
+} from '../../src/data/adapters/backend/walletMutations';
 
 export default function ShopScreen() {
   const router = useRouter();
+  const { userId } = useSessionAuth();
   const { 
     gems, 
     cash, 
     fuel, 
-    addGems,
-    addCash,
-    exchangeGemsForCash,
-    exchangeCashForGems, 
-    addFuel, 
-    spendGems, 
-    spendCash,
     requestWithdrawal,
     withdrawalHistory
   } = useWallet();
@@ -94,17 +96,26 @@ export default function ShopScreen() {
 
   const MIN_WITHDRAWAL_GEMS = 500; // $5.00
 
-  const handleWatchAd = async () => {
+  const handleWatchAd = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setIsLoadingAd(true);
     
     // Ad loading simulation
-    setTimeout(() => {
+    setTimeout(async () => {
       setIsLoadingAd(false);
-      addGems(10);
-      toast.success('You earned 10 gems!');
+      if (!userId) {
+        toast.error('Sign in required to claim rewards.');
+        return;
+      }
+
+      const result = await claimAdReward(userId, 'shop_watch_ad');
+      if (result.ok) {
+        toast.success('You earned 10 gems!');
+      } else {
+        toast.error(result.message ?? 'Could not claim ad reward right now.');
+      }
     }, 1500);
-  };
+  }, [userId]);
 
   const handleBuyGems = (amount: number, price: string) => {
     showConfirm({
@@ -114,10 +125,26 @@ export default function ShopScreen() {
       icon: 'prism',
       iconColor: colors.accentPremium,
       confirmColor: colors.accentPremium,
-      onConfirm: () => {
+      onConfirm: async () => {
         hideConfirm();
-        addGems(amount);
-        toast.success(`You received ${amount} Gems!`);
+        if (!userId) {
+          toast.error('Sign in required to purchase gems.');
+          return;
+        }
+
+        const purchaseToken = `shop-${userId}-${Date.now()}-${amount}`;
+        const result = await creditGemsPurchase(
+          userId,
+          amount,
+          purchaseToken,
+          price,
+          'shop_buy_gems',
+        );
+        if (result.ok) {
+          toast.success(`You received ${amount} Gems!`);
+        } else {
+          toast.error(result.message ?? 'Purchase could not be completed.');
+        }
       },
     });
   };
@@ -167,12 +194,24 @@ export default function ShopScreen() {
       icon: 'flash',
       iconColor: colors.accentWarning,
       confirmColor: colors.accentPrimary,
-      onConfirm: () => {
+      onConfirm: async () => {
         hideConfirm();
-        const success = fuelPaymentType === 'gems' ? spendGems(cost.gems) : spendCash(cost.cash);
-        if (success) {
-          addFuel(amount);
+        if (!userId) {
+          toast.error('Sign in required to refuel.');
+          return;
+        }
+        const result = await purchaseFuelPack(
+          userId,
+          amount,
+          fuelPaymentType,
+          'shop_refuel',
+        );
+        if (result.ok) {
           toast.success('Fuel tank replenished!');
+        } else if (result.code === 'insufficient_balance') {
+          toast.warning(`You need ${price} ${currencyName} to buy this fuel pack.`);
+        } else {
+          toast.error(result.message ?? 'Refuel failed. Please try again.');
         }
       },
     });
@@ -186,13 +225,19 @@ export default function ShopScreen() {
       icon: 'swap-horizontal',
       iconColor: colors.accentSuccess,
       confirmColor: colors.accentSuccess,
-      onConfirm: () => {
+      onConfirm: async () => {
         hideConfirm();
-        const success = exchangeGemsForCash(gemAmount);
-        if (success) {
+        if (!userId) {
+          toast.error('Sign in required to exchange currencies.');
+          return;
+        }
+        const result = await convertGemsToCash(userId, gemAmount);
+        if (result.ok) {
           toast.success('Conversion complete!');
-        } else {
+        } else if (result.code === 'insufficient_balance') {
           toast.error('Not enough gems!');
+        } else {
+          toast.error(result.message ?? 'Conversion failed.');
         }
       },
     });
@@ -207,13 +252,19 @@ export default function ShopScreen() {
       icon: 'swap-horizontal',
       iconColor: colors.accentPremium,
       confirmColor: colors.accentPremium,
-      onConfirm: () => {
+      onConfirm: async () => {
         hideConfirm();
-        const success = exchangeCashForGems(cashAmount);
-        if (success) {
+        if (!userId) {
+          toast.error('Sign in required to exchange currencies.');
+          return;
+        }
+        const result = await convertCashToGems(userId, cashAmount);
+        if (result.ok) {
           toast.success('Conversion complete!');
-        } else {
+        } else if (result.code === 'insufficient_balance') {
           toast.error('Not enough cash!');
+        } else {
+          toast.error(result.message ?? 'Conversion failed.');
         }
       },
     });
@@ -239,6 +290,10 @@ export default function ShopScreen() {
     ) => requestWithdrawal(amount, details, method),
     [requestWithdrawal]
   );
+
+  const handleEarnCashUnavailable = useCallback((_amount: number) => {
+    toast.info('Cash rewards are temporarily unavailable.');
+  }, []);
 
   const formatTime = (mins: number) => {
     if (mins >= 60) {
@@ -284,7 +339,7 @@ export default function ShopScreen() {
           />
         )}
 
-        {activeTab === 'earn' && <ShopEarnTab onAddCash={addCash} />}
+        {activeTab === 'earn' && <ShopEarnTab onAddCash={handleEarnCashUnavailable} />}
 
         {activeTab === 'wallet' && (
           <ShopWalletTab
