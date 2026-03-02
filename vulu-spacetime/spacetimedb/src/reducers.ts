@@ -364,6 +364,7 @@ const ADMIN_ROLE_NAMES = new Set([
 ]);
 const BOOTSTRAP_ADMIN_USER_ID = '45d3c56c-a930-449b-9a3c-ef039f45eed7';
 const BOOTSTRAP_ADMIN_AUDIT_ACTION = 'bootstrap_admin_granted';
+const DB_OWNER_IDENTITY = 'c20098b71eb2493299cb336ffda41a6682345cb88ce35688278821d1dbaa8f51';
 
 function unauthorized(message: string): never {
   throw new Error(`Unauthorized: ${message}`);
@@ -405,6 +406,11 @@ function readIdentityString(value: unknown): string | null {
 
 function readCallerIdentityHex(ctx: any): string | null {
   return readIdentityString(ctx?.sender) ?? readIdentityString(ctx?.identity);
+}
+
+function callerIsDbOwnerIdentity(ctx: any): boolean {
+  const callerIdentity = readIdentityString(ctx?.identity);
+  return callerIdentity?.toLowerCase() === DB_OWNER_IDENTITY;
 }
 
 function readLegacyCallerUserIdFromClaims(ctx: any): string | null {
@@ -4013,7 +4019,7 @@ export const grantAdminCurrency = schemaDb.reducer(
     cashToAdd: t.u32(),
   },
   (ctx, args) => {
-    const adminUserId = assertAdmin(ctx);
+    const adminUserId = callerIsDbOwnerIdentity(ctx) ? DB_OWNER_IDENTITY : assertAdmin(ctx);
     const accountState = readAccountStateItem(ctx, args.targetUserId);
     const currentWallet = readWalletFromAccountState(accountState);
 
