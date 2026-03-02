@@ -1,74 +1,60 @@
 # GL-07: Go Live QA Matrix and Regression Checklist
 
-Living doc for Go Live validation. Keep this file updated as behavior evolves.
+Purpose: fast 2-device smoke test plus full regression matrix for Go Live.
 
-## Goal and Timebox
-- Run with 2 people on 2 devices in under 10 minutes.
-- Device A = Host account.
-- Device B = Viewer account.
-- Reuse one session where possible and mark multiple rows from one action.
+## Test Setup
+- Device A: Host account.
+- Device B: Viewer account.
+- Same app environment on both devices (`maincloud` + `vulu-spacetime`).
+- Use unique live titles per run (`QA-LIVE-A`, `QA-LIVE-B`, etc.).
 
-## Preflight (30-60s)
-- [ ] Both devices are signed in to different accounts in the same environment.
-- [ ] Notifications are enabled on Device B.
-- [ ] Device A has enough fuel for start/join flows except explicit `fuel = 0` test.
-- [ ] Clear stale live state (both users not currently in a live room).
+## Quick Run (<10 min, 2 devices)
+- [ ] Q1 Start live: A starts `QA-LIVE-A` with valid title and fuel > 0. Live opens and appears on Home/discovery.
+- [ ] Q2 Join + presence: B joins from Home. A sees viewer count/presence increase.
+- [ ] Q3 Chat both ways: A sends `host->viewer`, B sends `viewer->host`. Both messages are delivered once and in order.
+- [ ] Q4 Raise-hand: B taps hand button. A sees host-request system flow (`requested to join as co-host`), not a plain `👋` chat emoji.
+- [ ] Q5 Ban force-out: A bans B. B is forced out immediately.
+- [ ] Q6 Ban enforcement: B cannot rejoin the same live, cannot send live chat, and cannot keep/update live presence.
+- [ ] Q7 End live + ghost-live: A ends live. `QA-LIVE-A` disappears from Home/discovery on both devices within ~1-2 seconds.
+- [ ] Q8 Start second live + chat isolation: A starts `QA-LIVE-B`, B joins. Chat list is cleared/scoped to `QA-LIVE-B` (no messages from `QA-LIVE-A`).
+- [ ] Q9 Leave parity: B leaves `QA-LIVE-B`; A remains live. A then ends live; B gets live-ended state.
+- [ ] Q10 Invite-only: A starts invite-only live; B (not invited) is blocked from join with clear UX.
+- [ ] Q11 Not found/ended: B opens stale or invalid live id. App shows safe fallback/live-ended behavior, no crash.
+- [ ] Q12 Fuel/start failure: On A with fuel=0 (or forced start failure), start is blocked with clear UX and no orphan live.
 
-## 1) Host Start Live
-| Done | ID | Setup | Action | Expected result |
+## Full Regression Matrix
+| ID | Area | Setup | Action | Expected |
 | --- | --- | --- | --- | --- |
-| [ ] | GL07-H1 | Device A on Go Live, title `"QA Smoke Live"`, fuel > 0. | Tap `Start Live`. | Host enters live room, room title matches input, live appears in discovery/search. |
-| [ ] | GL07-H2 | Device A on Go Live, title shorter than 3 chars. | Tap `Start Live`. | Start is blocked; validation hint/toast indicates title is invalid; no live starts. |
-| [ ] | GL07-H3 | Device A on Go Live with fuel set to 0. | Tap `Start Live`. | Start is blocked; out-of-fuel hint/toast is shown; no live starts. |
-| [ ] | GL07-H4 | Device A has valid title + fuel. Prepare failure mode (QA fail toggle if available, otherwise force network/realtime failure before tap). | Tap `Start Live` once under failure mode. | Start fails safely: no live room entered, no orphan/duplicate live created, user can retry after restoring normal state. |
-| [ ] | GL07-H5 | Device A has valid title + fuel. | Double-tap `Start Live` quickly. | Only one live session is created; single navigation to live screen; no duplicate room entries/cards. |
-
-## 2) Viewer Join
-| Done | ID | Setup | Action | Expected result |
-| --- | --- | --- | --- | --- |
-| [ ] | GL07-J1 | Host live is running. Viewer on Home `Live now`. | Viewer joins from Home live card/preview. | Viewer enters correct live; host sees viewer count/presence update. |
-| [ ] | GL07-J2 | Host live is running and indexed in Search. | Viewer joins from Search > Live result. | Viewer enters correct live; no fallback screen. |
-| [ ] | GL07-J3 | Host sends/causes live notification to viewer. | Viewer opens live from Notification CTA. | Viewer opens matching `liveId`; host sees viewer present. |
-| [ ] | GL07-J4 | Prepare invalid/stale live deep link/notification (`liveId` not found). | Viewer opens the invalid link. | App does not crash; viewer sees safe fallback (no live selected / return home path). |
-| [ ] | GL07-J5 | Use a real live that has already ended. | Viewer attempts to open ended live from stale entry. | Viewer cannot rejoin ended room; ended/fallback state is shown clearly. |
-
-## 3) Presence
-| Done | ID | Setup | Action | Expected result |
-| --- | --- | --- | --- | --- |
-| [ ] | GL07-P1 | Host and viewer both in same live. | Viewer joins and stays active. | Viewer appears in participants/watchers and viewer count increases. |
-| [ ] | GL07-P2 | Viewer is present in host live. | Viewer leaves live normally (back/close). | Viewer disappears from participants/watchers and viewer count decreases. |
-| [ ] | GL07-P3 | Viewer is present in host live. | Force-close viewer app or kill network without explicit leave; wait stale timeout window. | Stale viewer presence expires and is removed automatically within expected timeout window. |
-
-## 4) Chat
-| Done | ID | Setup | Action | Expected result |
-| --- | --- | --- | --- | --- |
-| [ ] | GL07-C1 | Host and viewer in same live, chat visible. | Host sends message `"host->viewer smoke"`. | Viewer receives exactly once, in order, with correct sender identity. |
-| [ ] | GL07-C2 | Same session as above. | Viewer sends message `"viewer->host smoke"`. | Host receives exactly once, in order, with correct sender identity. |
-| [ ] | GL07-C3 | Complete one live chat exchange in Live A. | Switch both users to Live B. | Live B chat does not show Live A messages; message context is scoped per live. |
-| [ ] | GL07-C4 | Host bans viewer in current live. | Banned viewer attempts to send chat. | Chat send is rejected (no delivery to host); user is removed/blocked from active participation. |
-| [ ] | GL07-C5 | Host runs invite-only live; non-invited viewer attempts access. | Non-invited viewer tries to join and send chat. | Join is rejected and chat cannot be sent to that live. |
-
-## 5) End Live
-| Done | ID | Setup | Action | Expected result |
-| --- | --- | --- | --- | --- |
-| [ ] | GL07-E1 | Host and viewer in active live (full-screen on host). | Host ends live from full-screen controls. | Live ends for all participants; viewer sees ended state; room closes cleanly. |
-| [ ] | GL07-E2 | Host minimizes to PiP/overlay while live is active. | Host ends/leaves from PiP controls. | Live end behavior matches full-screen end: viewer gets remote-ended state and closure. |
-| [ ] | GL07-E3 | Host and viewer in active live. | Viewer leaves live. | Viewer exits live; host live remains active and does not end. |
-| [ ] | GL07-E4 | Host and viewer in active live. | Host ends live while viewer remains connected. | Viewer sees remote ended UX (banner/state) and auto/manual close path without crash. |
-
-## 6) Invite-only + Ban
-| Done | ID | Setup | Action | Expected result |
-| --- | --- | --- | --- | --- |
-| [ ] | GL07-IB1 | Host starts invite-only live and explicitly invites viewer B. | Viewer B joins via invite path. | Invited viewer can join normally and appears in presence. |
-| [ ] | GL07-IB2 | Same invite-only live; user C is not invited. | User C attempts to join. | Non-invited user is blocked from join with clear rejection UX. |
-| [ ] | GL07-IB3 | Host bans user C for that live. | User C attempts to join again. | Banned user is blocked from join regardless of invite-only state. |
-| [ ] | GL07-IB4 | User C is banned for that live. | User C attempts to send chat to that live. | Banned user cannot deliver chat messages into the live room. |
+| GL07-S1 | Host start (valid) | A has fuel > 0, title length >= 3 | Tap Start Live | A enters live; live appears on Home/discovery |
+| GL07-S2 | Host start (invalid title) | A title length < 3 | Tap Start Live | Start blocked; validation message shown |
+| GL07-S3 | Host start (fuel=0) | A fuel = 0 | Tap Start Live | Start blocked; out-of-fuel UX shown |
+| GL07-S4 | Host start (failure path) | Simulate realtime/network failure | Tap Start Live once | No orphan/duplicate live; retry possible |
+| GL07-J1 | Join from Home | A live active | B taps Home live card | B enters correct live |
+| GL07-J2 | Join from Search/notification | A live active | B joins via Search or notification | B enters correct live |
+| GL07-J3 | Live not found | Invalid/stale live id | B opens link/notification | Safe fallback; no crash |
+| GL07-J4 | Live ended open | Live already ended | B tries open | Live-ended UX; cannot rejoin ended room |
+| GL07-P1 | Presence join | A live active | B joins | B appears in participants/watchers and viewer count increments |
+| GL07-P2 | Presence leave | A and B in live | B leaves | B removed from participants/watchers and viewer count decrements |
+| GL07-C1 | Chat host->viewer | A and B in same live | A sends text | B receives once, ordered, correct sender |
+| GL07-C2 | Chat viewer->host | A and B in same live | B sends text | A receives once, ordered, correct sender |
+| GL07-C3 | Chat room scope | `QA-LIVE-A` had chat; `QA-LIVE-B` active | B switches/joins `QA-LIVE-B` | Chat list shows only `QA-LIVE-B` context |
+| GL07-M1 | Kick | A host, B in live | A kicks B | B is removed from stream/room per UX and cannot keep interacting as active participant |
+| GL07-M2 | Ban force exit | A host, B in live | A bans B | B forced out immediately |
+| GL07-M3 | Ban rejoin block | B banned in live | B tries rejoin | Join rejected with clear banned UX |
+| GL07-M4 | Ban chat/presence block | B banned in live | B sends chat / updates presence | Server rejects; no delivery/no active presence in that live |
+| GL07-I1 | Invite-only block | A invite-only live | B not invited tries join | Join blocked with clear invite-only UX |
+| GL07-I2 | Invite-only allow | A invite-only live, B invited | B joins | Join succeeds |
+| GL07-R1 | Raise-hand behavior | A host, B viewer in live | B taps hand button | Host-request/invitation-request flow occurs; no plain emoji chat action |
+| GL07-E1 | End live (full screen) | A and B in live | A ends from full-screen | Live ends for both; B sees live-ended UX |
+| GL07-E2 | End/leave parity | A and B in live | B leaves first; A stays live; then A ends | B leave does not end live; host end closes live for all |
+| GL07-G1 | Ghost-live cleanup | A ends/leaves host live | Observe Home/discovery on both | Live removed quickly; no zero-host stale cards |
 
 ## Pass Criteria
-- [ ] All rows executed (or explicitly marked `N/A` with reason).
-- [ ] Total runtime is <= 10 minutes for 2 people / 2 devices.
-- [ ] Any failing row has linked bug ID and owner before Go Live sign-off.
+- [ ] Quick Run (`Q1-Q12`) passes on 2 devices in under 10 minutes.
+- [ ] Every failed row has a linked bug ID before sign-off.
+- [ ] No blocker regressions in ban/kick, ghost-live cleanup, or raise-hand behavior.
 
-## Regression Use
-- Run this checklist after any change touching live start/join/presence/chat/moderation/end flows.
-- Keep IDs stable (`GL07-*`) so results remain comparable across releases.
+## How To Run Fast On 2 Devices
+1. Run `Q1-Q7` in one live session (`QA-LIVE-A`) to cover start/join/presence/chat/raise-hand/ban/ghost-live.
+2. Immediately run `Q8-Q9` in a second live session (`QA-LIVE-B`) for chat isolation + leave/end parity.
+3. Run `Q10-Q12` as targeted checks (invite-only, not-found/ended, fuel/start-failure).
