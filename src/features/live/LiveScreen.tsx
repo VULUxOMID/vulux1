@@ -1262,7 +1262,7 @@ export default function LiveScreen() {
                   onChangeText={setTitleDraft}
                   placeholder="Enter live title"
                   placeholderTextColor={colors.textMuted}
-                  maxLength={60}
+                  maxLength={80}
                 />
                 <Pressable
                   style={styles.settingsSave}

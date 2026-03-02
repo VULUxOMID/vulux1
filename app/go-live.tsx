@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,8 +23,11 @@ import { useWallet } from '../src/context/WalletContext';
 import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
 import { useLive } from '../src/context/LiveContext';
+import { toast } from '../src/components/Toast';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
+const LIVE_TITLE_MIN_LENGTH = 3;
+const LIVE_TITLE_MAX_LENGTH = 80;
 
 export default function GoLiveScreen() {
   const router = useRouter();
@@ -37,12 +41,17 @@ export default function GoLiveScreen() {
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
-  const canStartLive = normalizedTitle.length >= 3 && fuel > 0 && !pendingStart;
+  const isOutOfFuel = fuel <= 0;
+  const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
+  const canStartLive = hasValidTitle && !isOutOfFuel && !pendingStart;
+  const canPressPrimaryCta = !pendingStart && (isOutOfFuel || hasValidTitle);
   const startDisabledHint =
-    fuel <= 0
+    pendingStart
+      ? null
+      : isOutOfFuel
       ? 'You are out of fuel. Tap Live Fuel to refuel.'
-      : normalizedTitle.length < 3
-        ? 'Title must be at least 3 characters.'
+      : !hasValidTitle
+        ? `Title must be at least ${LIVE_TITLE_MIN_LENGTH} characters.`
         : null;
 
   // Lock orientation to portrait
@@ -56,6 +65,13 @@ export default function GoLiveScreen() {
   const handleStartLive = async () => {
     if (pendingStart) return;
     hapticTap();
+    if (isOutOfFuel) {
+      setShowFuelSheet(true);
+      return;
+    }
+    if (!hasValidTitle) {
+      return;
+    }
     setPendingStart(true);
     setStartError(null);
     try {
@@ -63,10 +79,13 @@ export default function GoLiveScreen() {
       if (!startResult.ok) {
         setPendingStart(false);
         setStartError(startResult.message);
+        toast.error(startResult.message);
       }
     } catch {
       setPendingStart(false);
-      setStartError('Unable to start live right now. Please try again.');
+      const message = 'Unable to start live right now. Please try again.';
+      setStartError(message);
+      toast.error(message);
     }
   };
 
@@ -163,9 +182,10 @@ export default function GoLiveScreen() {
                       setStartError(null);
                     }
                   }}
-                  maxLength={50}
+                  editable={!pendingStart}
+                  maxLength={LIVE_TITLE_MAX_LENGTH}
                 />
-                <AppText style={styles.charCount}>{title.length}/50</AppText>
+                <AppText style={styles.charCount}>{title.length}/{LIVE_TITLE_MAX_LENGTH}</AppText>
               </View>
             </View>
 
@@ -191,6 +211,7 @@ export default function GoLiveScreen() {
                     setStartError(null);
                   }
                 }}
+                disabled={pendingStart}
                 trackColor={{ false: colors.surfaceAlt, true: colors.accentPrimary }}
                 thumbColor="#fff"
               />
@@ -199,9 +220,11 @@ export default function GoLiveScreen() {
             <Pressable
               style={[styles.fuelWidget, fuel <= 0 && styles.fuelWidgetEmpty]}
               onPress={() => {
+                if (pendingStart) return;
                 hapticTap();
                 setShowFuelSheet(true);
               }}
+              disabled={pendingStart}
             >
               <View style={styles.fuelWidgetInfo}>
                 <View
@@ -232,9 +255,13 @@ export default function GoLiveScreen() {
           {/* Start Live Button */}
           <View style={styles.footer}>
             <Pressable
-              style={[styles.startButton, !canStartLive && styles.startButtonDisabled]}
+              style={[
+                styles.startButton,
+                (!canStartLive || isOutOfFuel) && styles.startButtonDisabled,
+                !canPressPrimaryCta && styles.startButtonDisabled,
+              ]}
               onPress={handleStartLive}
-              disabled={!canStartLive}
+              disabled={!canPressPrimaryCta}
             >
               <LinearGradient
                 colors={GO_LIVE_BUTTON_GRADIENT}
@@ -242,12 +269,34 @@ export default function GoLiveScreen() {
                 end={{ x: 1, y: 1 }}
                 style={styles.startButtonGradient}
               >
-                <AppText style={styles.startButtonText}>Start Live</AppText>
-                <Ionicons name="arrow-forward" size={20} color="#fff" />
+                {pendingStart ? (
+                  <>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <AppText style={styles.startButtonText}>Starting Live...</AppText>
+                  </>
+                ) : (
+                  <>
+                    <AppText style={styles.startButtonText}>
+                      {isOutOfFuel ? 'Refuel To Go Live' : startError ? 'Retry Start Live' : 'Start Live'}
+                    </AppText>
+                    <Ionicons
+                      name={isOutOfFuel ? 'flame' : 'arrow-forward'}
+                      size={20}
+                      color="#fff"
+                    />
+                  </>
+                )}
               </LinearGradient>
             </Pressable>
             {startError ? (
-              <AppText style={styles.validationHintError}>{startError}</AppText>
+              <>
+                <AppText style={styles.validationHintError}>{startError}</AppText>
+                <Pressable onPress={handleStartLive} disabled={!canPressPrimaryCta} style={styles.retryButton}>
+                  <AppText style={styles.retryButtonText}>
+                    {isOutOfFuel ? 'Open Live Fuel' : 'Retry'}
+                  </AppText>
+                </Pressable>
+              </>
             ) : startDisabledHint ? (
               <AppText style={styles.validationHint}>{startDisabledHint}</AppText>
             ) : null}
@@ -500,5 +549,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     color: colors.accentDanger,
+  },
+  retryButton: {
+    alignSelf: 'center',
+    marginTop: spacing.xs,
+  },
+  retryButtonText: {
+    fontSize: 13,
+    color: colors.accentPrimary,
+    fontWeight: '600',
   },
 });
