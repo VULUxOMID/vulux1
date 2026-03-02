@@ -138,6 +138,46 @@ function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
 
+function readBooleanLike(value: unknown): boolean | null {
+  const direct = readBoolean(value);
+  if (direct !== null) {
+    return direct;
+  }
+
+  const normalized = readString(value)?.toLowerCase();
+  if (normalized === 'true' || normalized === '1') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0') {
+    return false;
+  }
+
+  return null;
+}
+
+function unwrapQuotedString(value: string): string {
+  let current = value.trim();
+  for (let depth = 0; depth < 2; depth += 1) {
+    const startsWithDoubleQuote = current.startsWith('"') && current.endsWith('"');
+    const startsWithSingleQuote = current.startsWith("'") && current.endsWith("'");
+    if (!startsWithDoubleQuote && !startsWithSingleQuote) {
+      break;
+    }
+    current = current.slice(1, -1).trim();
+  }
+  return current;
+}
+
+function readNormalizedStringArg(value: unknown): string | null {
+  const normalized = readString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const unwrapped = unwrapQuotedString(normalized);
+  return readString(unwrapped);
+}
+
 function readNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'bigint') {
@@ -2932,9 +2972,11 @@ export const setUserRole = schemaDb.reducer(
     enabled: t.bool(),
   },
   (ctx, args) => {
-    const targetUserId = readString(args.targetUserId);
-    const role = readString(args.role);
-    const enabled = readBoolean(args.enabled) !== false;
+    const targetUserId =
+      readNormalizedStringArg(args.targetUserId) ??
+      readNormalizedStringArg((args as JsonRecord).target_user_id);
+    const role = readNormalizedStringArg(args.role);
+    const enabled = readBooleanLike(args.enabled) !== false;
 
     if (!targetUserId || !role) {
       throw new Error('targetUserId and role are required.');
