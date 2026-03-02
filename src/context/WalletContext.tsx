@@ -7,9 +7,27 @@ import {
 import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
 import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
 
+const WALLET_HYDRATION_RETRY_MS = 350;
+const WALLET_HYDRATION_MAX_RETRIES = 8;
+
 function toNonNegativeNumber(value: unknown, fallback = 0): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.max(0, value);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, value);
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) {
+      return Math.max(0, asNumber);
+    }
+    return fallback;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, parsed);
+    }
+  }
+  return fallback;
 }
 
 function toWithdrawalStatus(value: unknown): WithdrawalRequest['status'] {
@@ -144,6 +162,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const resetWalletState = () => {
       gemsRef.current = 0;
@@ -171,7 +190,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     setWalletHydrated(false);
 
-    const hydrateWallet = async () => {
+    const hydrateWallet = async (attempt = 0) => {
       const accountState = await fetchBackendAccountState(
         null,
         getTokenRef.current,
@@ -179,20 +198,41 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       );
       if (!active) return;
 
+      const walletState =
+        accountState?.wallet && typeof accountState.wallet === 'object'
+          ? (accountState.wallet as Record<string, unknown>)
+          : null;
+      const hasWalletState = walletState !== null;
+
+      if (__DEV__) {
+        console.log('[wallet] hydrate fetch account_state.wallet', {
+          userId,
+          refreshNonce: walletRefreshNonce,
+          attempt,
+          accountStatePresent: Boolean(accountState),
+          walletStatePresent: hasWalletState,
+          walletState,
+        });
+      }
+
+      if (!hasWalletState && attempt < WALLET_HYDRATION_MAX_RETRIES) {
+        retryTimer = setTimeout(() => {
+          void hydrateWallet(attempt + 1);
+        }, WALLET_HYDRATION_RETRY_MS);
+        return;
+      }
+
       if (!accountState) {
         setWalletHydrated(true);
         return;
       }
 
-      const walletState =
-        accountState?.wallet && typeof accountState.wallet === 'object'
-          ? (accountState.wallet as Record<string, unknown>)
-          : {};
+      const normalizedWalletState = walletState ?? {};
 
-      const nextGems = toNonNegativeNumber(walletState.gems);
-      const nextCash = toNonNegativeNumber(walletState.cash);
-      const nextFuel = toNonNegativeNumber(walletState.fuel);
-      const nextWithdrawalHistory = parseWithdrawalHistory(walletState.withdrawalHistory);
+      const nextGems = toNonNegativeNumber(normalizedWalletState.gems);
+      const nextCash = toNonNegativeNumber(normalizedWalletState.cash);
+      const nextFuel = toNonNegativeNumber(normalizedWalletState.fuel);
+      const nextWithdrawalHistory = parseWithdrawalHistory(normalizedWalletState.withdrawalHistory);
 
       gemsRef.current = nextGems;
       cashRef.current = nextCash;
@@ -202,12 +242,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setFuel(nextFuel);
       setWithdrawalHistory(nextWithdrawalHistory);
       setWalletHydrated(true);
+
+      if (__DEV__) {
+        console.log('[wallet] hydrate apply state', {
+          userId,
+          gems: nextGems,
+          cash: nextCash,
+          fuel: nextFuel,
+          withdrawalHistoryCount: nextWithdrawalHistory.length,
+          refreshNonce: walletRefreshNonce,
+        });
+      }
     };
 
     void hydrateWallet();
 
     return () => {
       active = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, [isAuthLoaded, isSignedIn, userId, walletRefreshNonce]);
 
