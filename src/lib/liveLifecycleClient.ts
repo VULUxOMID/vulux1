@@ -80,6 +80,7 @@ type ReducerCaller = (args: Record<string, unknown>) => Promise<unknown>;
 
 const failureLogAtByKey = new Map<string, number>();
 const FAILURE_LOG_THROTTLE_MS = 5_000;
+const LIVE_TITLE_MAX_LENGTH = 80;
 
 function makeReducerId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -102,6 +103,12 @@ function normalizeString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeLiveTitle(value: unknown): string | null {
+  const normalized = normalizeString(value);
+  if (!normalized) return null;
+  return normalized.slice(0, LIVE_TITLE_MAX_LENGTH);
 }
 
 function normalizeInteger(value: unknown, fallback = 0): number {
@@ -242,7 +249,7 @@ function startLive(input: StartLiveInput): Promise<LiveMutationResult> {
     );
   }
 
-  const title = normalizeString(input.title) ?? 'Live';
+  const title = normalizeLiveTitle(input.title) ?? 'Live';
   const hosts = Array.isArray(input.hosts) ? input.hosts : [];
   const bannedUserIds = Array.isArray(input.bannedUserIds) ? input.bannedUserIds : [];
 
@@ -267,7 +274,7 @@ function updateLive(input: UpdateLiveInput): Promise<LiveMutationResult> {
   return runReducerMutation('update_live', ['updateLive', 'update_live'], {
     id: input.id ?? makeReducerId('live-update'),
     liveId,
-    title: normalizeString(input.title),
+    title: normalizeLiveTitle(input.title),
     inviteOnly: typeof input.inviteOnly === 'boolean' ? input.inviteOnly : null,
     viewers:
       typeof input.viewers === 'number' && Number.isFinite(input.viewers)
@@ -314,7 +321,7 @@ function setLivePresence(input: SetLivePresenceInput): Promise<LiveMutationResul
     userId,
     activity,
     liveId: liveId ?? null,
-    liveTitle: normalizeString(input.liveTitle),
+    liveTitle: normalizeLiveTitle(input.liveTitle),
   });
 }
 
