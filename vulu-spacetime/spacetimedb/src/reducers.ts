@@ -8,6 +8,7 @@ type JsonArray = unknown[];
 const MAX_THREAD_MESSAGES = 500;
 const LIVE_EVENT_DURATION_MS = 24 * 60 * 60 * 1000;
 const LIVE_EVENT_WINNER_INTERVAL_MS = 15 * 60 * 1000;
+const GEMS_TO_FUEL_RATE = 4;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1285,12 +1286,20 @@ function upsertPublicLeaderboardItemFromState(
   });
 }
 
-function readWalletFromAccountState(accountState: JsonRecord): {
+type WalletState = {
   gems: number;
   cash: number;
   fuel: number;
   withdrawalHistory: unknown[];
-} {
+};
+
+type WalletDelta = {
+  gems: number;
+  cash: number;
+  fuel: number;
+};
+
+function readWalletFromAccountState(accountState: JsonRecord): WalletState {
   const wallet = isRecord(accountState.wallet) ? accountState.wallet : {};
 
   return {
@@ -1303,7 +1312,7 @@ function readWalletFromAccountState(accountState: JsonRecord): {
 
 function writeWalletToAccountState(
   accountState: JsonRecord,
-  wallet: { gems: number; cash: number; fuel: number; withdrawalHistory: unknown[] },
+  wallet: WalletState,
 ): JsonRecord {
   return {
     ...accountState,
@@ -1311,6 +1320,46 @@ function writeWalletToAccountState(
       ...wallet,
     },
   };
+}
+
+function walletSnapshot(wallet: WalletState): JsonRecord {
+  return {
+    gems: wallet.gems,
+    cash: wallet.cash,
+    fuel: wallet.fuel,
+  };
+}
+
+function toI32(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value > 2_147_483_647) return 2_147_483_647;
+  if (value < -2_147_483_648) return -2_147_483_648;
+  return Math.trunc(value);
+}
+
+function appendWalletTransaction(
+  ctx: any,
+  params: {
+    userId: string;
+    eventType: string;
+    delta: WalletDelta;
+    balanceBefore: WalletState;
+    balanceAfter: WalletState;
+    metadata?: JsonRecord;
+  },
+): void {
+  ctx.db.walletTransactionItem.insert({
+    id: makeId(ctx, 'wallet-tx'),
+    userId: params.userId,
+    eventType: params.eventType,
+    deltaGems: toI32(params.delta.gems),
+    deltaCash: toI32(params.delta.cash),
+    deltaFuel: toI32(params.delta.fuel),
+    balanceBefore: toJsonString(walletSnapshot(params.balanceBefore)),
+    balanceAfter: toJsonString(walletSnapshot(params.balanceAfter)),
+    metadata: toJsonString(params.metadata ?? {}),
+    createdAt: ctx.timestamp,
+  });
 }
 
 function upsertNotificationItem(ctx: any, id: string, userId: string, item: JsonRecord): void {
@@ -2507,6 +2556,40 @@ function applyCashTransfer(ctx: any, payload: JsonRecord): void {
   writeAccountStateItem(ctx, fromUserId, writeWalletToAccountState(senderState, nextSenderWallet));
   writeAccountStateItem(ctx, toUserId, writeWalletToAccountState(receiverState, nextReceiverWallet));
 
+  const transferId = readString(payload.transferId) ?? makeId(ctx, 'cash-transfer');
+  appendWalletTransaction(ctx, {
+    userId: fromUserId,
+    eventType: 'cash_transfer_sent',
+    delta: {
+      gems: 0,
+      cash: -amountCash,
+      fuel: 0,
+    },
+    balanceBefore: senderWallet,
+    balanceAfter: nextSenderWallet,
+    metadata: {
+      transferId,
+      counterpartyUserId: toUserId,
+      source: 'sendCashToUser',
+    },
+  });
+  appendWalletTransaction(ctx, {
+    userId: toUserId,
+    eventType: 'cash_transfer_received',
+    delta: {
+      gems: 0,
+      cash: amountCash,
+      fuel: 0,
+    },
+    balanceBefore: receiverWallet,
+    balanceAfter: nextReceiverWallet,
+    metadata: {
+      transferId,
+      counterpartyUserId: fromUserId,
+      source: 'sendCashToUser',
+    },
+  });
+
   const transferNotificationId = makeId(ctx, 'notif-cash-received');
   upsertNotificationItem(ctx, transferNotificationId, toUserId, {
     id: transferNotificationId,
@@ -3273,6 +3356,195 @@ export const sendCashToUser = schemaDb.reducer(
   },
 );
 
+export const adminCreditGems = schemaDb.reducer(
+  {
+    targetUserId: t.string(),
+    gemsToAdd: t.u32(),
+    reason: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const gemsToAdd = Math.max(0, toNonNegativeInt(args.gemsToAdd));
+    if (gemsToAdd <= 0) {
+      return;
+    }
+
+    const accountState = readAccountStateItem(ctx, args.targetUserId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems + gemsToAdd,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.targetUserId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.targetUserId,
+      eventType: 'admin_credit_gems',
+      delta: {
+        gems: gemsToAdd,
+        cash: 0,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'adminCreditGems',
+        adminUserId,
+        reason: readString(args.reason) ?? 'Admin credit gems',
+      },
+    });
+  },
+);
+
+export const adminCreditCash = schemaDb.reducer(
+  {
+    targetUserId: t.string(),
+    cashToAdd: t.u32(),
+    reason: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const cashToAdd = Math.max(0, toNonNegativeInt(args.cashToAdd));
+    if (cashToAdd <= 0) {
+      return;
+    }
+
+    const accountState = readAccountStateItem(ctx, args.targetUserId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const nextWallet = {
+      ...currentWallet,
+      cash: currentWallet.cash + cashToAdd,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.targetUserId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.targetUserId,
+      eventType: 'admin_credit_cash',
+      delta: {
+        gems: 0,
+        cash: cashToAdd,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'adminCreditCash',
+        adminUserId,
+        reason: readString(args.reason) ?? 'Admin credit cash',
+      },
+    });
+  },
+);
+
+export const convertGemsToFuel = schemaDb.reducer(
+  {
+    userId: t.string(),
+    gemsToConvert: t.u32(),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+    const gemsToConvert = Math.max(0, toNonNegativeInt(args.gemsToConvert));
+    if (gemsToConvert <= 0) {
+      throw new Error('gemsToConvert must be greater than zero.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    if (currentWallet.gems < gemsToConvert) {
+      throw new Error('Insufficient gems.');
+    }
+
+    const fuelToAdd = gemsToConvert * GEMS_TO_FUEL_RATE;
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems - gemsToConvert,
+      fuel: currentWallet.fuel + fuelToAdd,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'convert_gems_to_fuel',
+      delta: {
+        gems: -gemsToConvert,
+        cash: 0,
+        fuel: fuelToAdd,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'convertGemsToFuel',
+        gemsToConvert,
+        fuelAdded: fuelToAdd,
+        gemsToFuelRate: GEMS_TO_FUEL_RATE,
+      },
+    });
+  },
+);
+
+export const spendFuel = schemaDb.reducer(
+  {
+    userId: t.string(),
+    fuelToSpend: t.u32(),
+    reason: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+    const fuelToSpend = Math.max(0, toNonNegativeInt(args.fuelToSpend));
+    if (fuelToSpend <= 0) {
+      throw new Error('fuelToSpend must be greater than zero.');
+    }
+
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    if (currentWallet.fuel < fuelToSpend) {
+      throw new Error('Insufficient fuel.');
+    }
+
+    const nextWallet = {
+      ...currentWallet,
+      fuel: currentWallet.fuel - fuelToSpend,
+    };
+
+    writeAccountStateItem(
+      ctx,
+      args.userId,
+      writeWalletToAccountState(accountState, nextWallet),
+    );
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'spend_fuel',
+      delta: {
+        gems: 0,
+        cash: 0,
+        fuel: -fuelToSpend,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'spendFuel',
+        reason: readString(args.reason) ?? 'Fuel spend',
+      },
+    });
+  },
+);
+
 export const sendGlobalMessage = schemaDb.reducer(
   {
     id: t.string(),
@@ -3340,6 +3612,22 @@ export const grantAdminCurrency = schemaDb.reducer(
 
     const nextState = writeWalletToAccountState(accountState, nextWallet);
     writeAccountStateItem(ctx, args.targetUserId, nextState);
+
+    appendWalletTransaction(ctx, {
+      userId: args.targetUserId,
+      eventType: 'grant_admin_currency',
+      delta: {
+        gems: args.gemsToAdd,
+        cash: args.cashToAdd,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'grantAdminCurrency',
+        adminUserId,
+      },
+    });
 
     const txId = makeId(ctx, 'tx-admin-credit');
     ctx.db.adminWalletCreditTransaction.insert({
