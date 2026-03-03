@@ -925,6 +925,90 @@ function authorizeLiveInvitePayload(ctx: any, payload: JsonRecord): void {
   payload.inviterUserId = inviterUserId ?? legacyCallerUserId ?? callerUserId;
 }
 
+function authorizeLiveHostRequestPayload(ctx: any, payload: JsonRecord): void {
+  const callerUserId = resolveCallerUserId(ctx);
+  const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+  const requesterUserId = readString(payload.requesterUserId);
+  if (
+    requesterUserId &&
+    requesterUserId !== callerUserId &&
+    (!legacyCallerUserId || requesterUserId !== legacyCallerUserId)
+  ) {
+    unauthorized('live_host_request requesterUserId must match caller identity.');
+  }
+
+  const liveId = readString(payload.liveId);
+  if (!liveId) {
+    throw new Error('live_host_request liveId is required.');
+  }
+
+  const normalizedRequesterUserId = requesterUserId ?? legacyCallerUserId ?? callerUserId;
+  const live = assertLiveParticipationAllowed(ctx, liveId, normalizedRequesterUserId);
+  assertLiveParticipantOrAdmin(ctx, liveId, live);
+  if (isLiveHostUser(live, normalizedRequesterUserId)) {
+    unauthorized('Hosts cannot request to become co-hosts.');
+  }
+
+  payload.liveId = liveId;
+  payload.requesterUserId = normalizedRequesterUserId;
+}
+
+function authorizeLiveHostRequestResponsePayload(ctx: any, payload: JsonRecord): void {
+  const callerUserId = resolveCallerUserId(ctx);
+  assertCallerNotGloballyBanned(ctx, callerUserId);
+
+  const liveId = readString(payload.liveId);
+  if (!liveId) {
+    throw new Error('live_host_request_response liveId is required.');
+  }
+
+  const requesterUserId = readString(payload.requesterUserId);
+  if (!requesterUserId) {
+    throw new Error('live_host_request_response requesterUserId is required.');
+  }
+
+  const live = readLiveItem(ctx, liveId);
+  if (Object.keys(live).length === 0) {
+    throw new Error(`Live "${liveId}" not found.`);
+  }
+  assertLiveOwnerOrAdmin(ctx, liveId, live);
+
+  payload.liveId = liveId;
+  payload.requesterUserId = requesterUserId;
+  payload.accepted = readBooleanLike(payload.accepted) ?? false;
+  payload.hostUserId = callerUserId;
+}
+
+function authorizeLiveInviteResponsePayload(ctx: any, payload: JsonRecord): void {
+  const callerUserId = resolveCallerUserId(ctx);
+  const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
+  const targetUserId = readString(payload.targetUserId);
+  if (
+    targetUserId &&
+    targetUserId !== callerUserId &&
+    (!legacyCallerUserId || targetUserId !== legacyCallerUserId)
+  ) {
+    unauthorized('live_invite_response targetUserId must match caller identity.');
+  }
+
+  const liveId = readString(payload.liveId);
+  if (!liveId) {
+    throw new Error('live_invite_response liveId is required.');
+  }
+
+  const normalizedTargetUserId = targetUserId ?? legacyCallerUserId ?? callerUserId;
+  const live = assertLiveParticipationAllowed(ctx, liveId, normalizedTargetUserId);
+  const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
+  if (!invitedUserIds.has(normalizedTargetUserId) && !isLiveHostUser(live, normalizedTargetUserId)) {
+    unauthorized('No active invite for this user.');
+  }
+
+  payload.liveId = liveId;
+  payload.targetUserId = normalizedTargetUserId;
+  payload.accepted = readBooleanLike(payload.accepted) ?? false;
+  payload.responderUserId = normalizedTargetUserId;
+}
+
 function authorizeLiveChatPayload(
   ctx: any,
   roomId: string,
@@ -1045,6 +1129,21 @@ function authorizeGlobalMessagePayload(
 
   if (eventType === 'live_invite') {
     authorizeLiveInvitePayload(ctx, payload);
+    return eventType;
+  }
+
+  if (eventType === 'live_host_request') {
+    authorizeLiveHostRequestPayload(ctx, payload);
+    return eventType;
+  }
+
+  if (eventType === 'live_host_request_response') {
+    authorizeLiveHostRequestResponsePayload(ctx, payload);
+    return eventType;
+  }
+
+  if (eventType === 'live_invite_response') {
+    authorizeLiveInviteResponsePayload(ctx, payload);
     return eventType;
   }
 
@@ -2426,6 +2525,65 @@ function applyLiveInvite(ctx: any, payload: JsonRecord): void {
   });
 }
 
+function applyLiveHostRequest(_ctx: any, _payload: JsonRecord): void {
+  // Request state is derived from global events on clients.
+}
+
+function applyLiveHostRequestResponse(_ctx: any, _payload: JsonRecord): void {
+  // Request state is derived from global events on clients.
+}
+
+function applyLiveInviteResponse(ctx: any, payload: JsonRecord): void {
+  const liveId = readString(payload.liveId);
+  const targetUserId = readString(payload.targetUserId);
+  const accepted = readBooleanLike(payload.accepted) ?? false;
+  if (!liveId || !targetUserId) return;
+
+  const live = readLiveItem(ctx, liveId);
+  if (Object.keys(live).length === 0 || isLiveEnded(live)) return;
+
+  const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
+  invitedUserIds.add(targetUserId);
+
+  const hosts = normalizeHostList(live.hosts);
+  const hostExists = hosts.some((host) => readString(host.id) === targetUserId);
+  if (accepted && !hostExists) {
+    const profileSummary = readPublicProfileSummaryItem(ctx, targetUserId);
+    const username = resolveFriendlyUserLabel(targetUserId, [
+      readString(profileSummary?.username),
+      targetUserId,
+    ]);
+    const host: JsonRecord = {
+      id: targetUserId,
+      username,
+      name: resolveFriendlyUserLabel(targetUserId, [
+        readString(profileSummary?.username),
+        username,
+      ]),
+      age: 0,
+      country: '',
+      bio: '',
+      verified: false,
+      avatar: readString(profileSummary?.avatarUrl) ?? '',
+    };
+    hosts.push(host);
+  }
+
+  const nextLiveItem: JsonRecord = {
+    ...live,
+    hosts,
+    images: hosts
+      .map((host) => readString(host.avatar))
+      .filter((value): value is string => Boolean(value)),
+    viewers: Math.max(toNonNegativeInt(live.viewers), hosts.length),
+    invitedUserIds: Array.from(invitedUserIds),
+    updatedAt: nowMs(ctx),
+  };
+
+  writeLiveItem(ctx, liveId, nextLiveItem);
+  updateKnownLiveUsersFromHosts(ctx, hosts);
+}
+
 function applyLiveBan(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
   const targetUserId = readString(payload.targetUserId);
@@ -2822,6 +2980,21 @@ function applyDomainEvent(
 
   if (eventType === 'live_invite') {
     applyLiveInvite(ctx, payload);
+    return;
+  }
+
+  if (eventType === 'live_host_request') {
+    applyLiveHostRequest(ctx, payload);
+    return;
+  }
+
+  if (eventType === 'live_host_request_response') {
+    applyLiveHostRequestResponse(ctx, payload);
+    return;
+  }
+
+  if (eventType === 'live_invite_response') {
+    applyLiveInviteResponse(ctx, payload);
     return;
   }
 

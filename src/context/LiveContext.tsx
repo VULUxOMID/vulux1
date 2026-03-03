@@ -27,6 +27,13 @@ import { useWallet } from './WalletContext';
 import { toast } from '../components/Toast';
 import type { GlobalChatMessage, SocialUser } from '../data/contracts';
 import { liveLifecycleClient, type LiveMutationResult } from '../lib/liveLifecycleClient';
+import { spacetimeDb } from '../lib/spacetime';
+import {
+  publishLiveHostRequest,
+  publishLiveHostRequestResponse,
+  publishLiveInvite,
+  publishLiveInviteResponse,
+} from '../utils/spacetimePersistence';
 
 type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
@@ -63,7 +70,12 @@ type LiveContextType = {
     extra?: Partial<ChatMessage>,
   ) => void;
 
-  inviteToStream: (user: LiveUser) => void;
+  inviteToStream: (user: LiveUser) => Promise<boolean>;
+  requestToJoinAsCoHost: () => Promise<boolean>;
+  respondToHostRequest: (requesterUserId: string, accepted: boolean) => Promise<boolean>;
+  respondToCoHostInvite: (accepted: boolean) => Promise<boolean>;
+  pendingHostRequests: LiveUser[];
+  pendingCoHostInviteFrom: LiveUser | null;
   kickStreamer: (user: LiveUser) => void;
   banUser: (user: LiveUser) => void;
   unbanUser: (user: LiveUser) => void;
@@ -373,6 +385,198 @@ function asFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+type LiveControlEventType =
+  | 'live_host_request'
+  | 'live_host_request_response'
+  | 'live_invite'
+  | 'live_invite_response';
+
+type LiveControlEvent = {
+  id: string;
+  eventType: LiveControlEventType;
+  liveId: string;
+  requesterUserId?: string;
+  targetUserId?: string;
+  inviterUserId?: string;
+  accepted?: boolean;
+  createdAt: number;
+};
+
+type LiveControlState = {
+  pendingHostRequestUserIds: string[];
+  pendingCoHostInviteUserIds: string[];
+  pendingCoHostInviterByUserId: Record<string, string>;
+};
+
+const EMPTY_LIVE_CONTROL_STATE: LiveControlState = {
+  pendingHostRequestUserIds: [],
+  pendingCoHostInviteUserIds: [],
+  pendingCoHostInviterByUserId: {},
+};
+
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readSpacetimeTimestampMs(value: unknown): number {
+  const direct = asFiniteNumber(value);
+  if (direct !== null) {
+    return direct;
+  }
+
+  if (value && typeof value === 'object') {
+    const asObject = value as {
+      toMillis?: () => unknown;
+      microsSinceUnixEpoch?: unknown;
+      __timestamp_micros_since_unix_epoch__?: unknown;
+    };
+
+    if (typeof asObject.toMillis === 'function') {
+      const millis = asFiniteNumber(asObject.toMillis());
+      if (millis !== null) {
+        return millis;
+      }
+    }
+
+    const micros =
+      asObject.microsSinceUnixEpoch ?? asObject.__timestamp_micros_since_unix_epoch__;
+    const microsAsNumber = asFiniteNumber(micros);
+    if (microsAsNumber !== null) {
+      return Math.floor(microsAsNumber / 1000);
+    }
+  }
+
+  return Date.now();
+}
+
+function parseLiveControlEvent(row: any, liveId: string): LiveControlEvent | null {
+  const normalizedLiveId = liveId.trim().toLowerCase();
+  if (!normalizedLiveId) return null;
+
+  const roomId = asTrimmedString(row?.roomId ?? row?.room_id);
+  if (!roomId || roomId.toLowerCase() !== normalizedLiveId) {
+    return null;
+  }
+
+  const item = parseJsonRecord(row?.item);
+  const eventTypeRaw = asTrimmedString(item.eventType);
+  if (
+    eventTypeRaw !== 'live_host_request' &&
+    eventTypeRaw !== 'live_host_request_response' &&
+    eventTypeRaw !== 'live_invite' &&
+    eventTypeRaw !== 'live_invite_response'
+  ) {
+    return null;
+  }
+
+  const payloadLiveId = asTrimmedString(item.liveId) ?? roomId;
+  if (payloadLiveId.toLowerCase() !== normalizedLiveId) {
+    return null;
+  }
+
+  return {
+    id: asTrimmedString(row?.id) ?? `live-control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    eventType: eventTypeRaw,
+    liveId: payloadLiveId,
+    requesterUserId: asTrimmedString(item.requesterUserId) ?? undefined,
+    targetUserId: asTrimmedString(item.targetUserId) ?? undefined,
+    inviterUserId: asTrimmedString(item.inviterUserId) ?? undefined,
+    accepted:
+      typeof item.accepted === 'boolean'
+        ? item.accepted
+        : asTrimmedString(item.accepted)?.toLowerCase() === 'true'
+          ? true
+          : asTrimmedString(item.accepted)?.toLowerCase() === 'false'
+            ? false
+            : undefined,
+    createdAt:
+      asFiniteNumber(item.createdAt) ??
+      readSpacetimeTimestampMs(row?.createdAt ?? row?.created_at),
+  };
+}
+
+function compareLiveControlEvents(a: LiveControlEvent, b: LiveControlEvent): number {
+  const byCreatedAt = a.createdAt - b.createdAt;
+  if (byCreatedAt !== 0) {
+    return byCreatedAt;
+  }
+  return a.id.localeCompare(b.id);
+}
+
+function dedupeLiveControlUserIds(userIds: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  userIds.forEach((userId) => {
+    const normalized = userId.trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  });
+  return ordered;
+}
+
+function reduceLiveControlState(events: LiveControlEvent[]): LiveControlState {
+  const pendingHostRequests = new Set<string>();
+  const pendingCoHostInviteByUserId = new Map<string, string>();
+
+  events
+    .slice()
+    .sort(compareLiveControlEvents)
+    .forEach((event) => {
+      if (event.eventType === 'live_host_request') {
+        if (event.requesterUserId) {
+          pendingHostRequests.add(event.requesterUserId);
+        }
+        return;
+      }
+
+      if (event.eventType === 'live_host_request_response') {
+        if (event.requesterUserId) {
+          pendingHostRequests.delete(event.requesterUserId);
+        }
+        return;
+      }
+
+      if (event.eventType === 'live_invite') {
+        if (event.targetUserId) {
+          pendingHostRequests.delete(event.targetUserId);
+          pendingCoHostInviteByUserId.set(
+            event.targetUserId,
+            event.inviterUserId ?? '',
+          );
+        }
+        return;
+      }
+
+      if (event.eventType === 'live_invite_response' && event.targetUserId) {
+        pendingCoHostInviteByUserId.delete(event.targetUserId);
+      }
+    });
+
+  return {
+    pendingHostRequestUserIds: dedupeLiveControlUserIds(Array.from(pendingHostRequests)),
+    pendingCoHostInviteUserIds: dedupeLiveControlUserIds(
+      Array.from(pendingCoHostInviteByUserId.keys()),
+    ),
+    pendingCoHostInviterByUserId: Object.fromEntries(
+      Array.from(pendingCoHostInviteByUserId.entries())
+        .filter(([targetUserId]) => targetUserId.trim().length > 0),
+    ),
+  };
+}
+
 function makeLiveMutationFailure(
   code: Extract<LiveMutationResult, { ok: false }>['code'],
   message: string,
@@ -405,6 +609,33 @@ function areLiveUserIdListsEquivalent(a: string[], b: string[]): boolean {
       return false;
     }
   }
+  return true;
+}
+
+function areStringRecordsEquivalent(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  const aRecord = a ?? {};
+  const bRecord = b ?? {};
+  const aEntries = Object.entries(aRecord).filter(
+    ([key, value]) => key.trim().length > 0 && value.trim().length > 0,
+  );
+  const bEntries = Object.entries(bRecord).filter(
+    ([key, value]) => key.trim().length > 0 && value.trim().length > 0,
+  );
+
+  if (aEntries.length !== bEntries.length) {
+    return false;
+  }
+
+  const bMap = new Map(bEntries);
+  for (const [key, value] of aEntries) {
+    if (bMap.get(key) !== value) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -511,7 +742,12 @@ const defaultLiveValue: LiveContextType = {
   sendMessage: () => { },
   addSystemMessage: () => { },
 
-  inviteToStream: () => { },
+  inviteToStream: async () => false,
+  requestToJoinAsCoHost: async () => false,
+  respondToHostRequest: async () => false,
+  respondToCoHostInvite: async () => false,
+  pendingHostRequests: [],
+  pendingCoHostInviteFrom: null,
   kickStreamer: () => { },
   banUser: () => { },
   unbanUser: () => { },
@@ -721,6 +957,25 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         : [],
     [messagesRepo, queriesEnabled, selectedLiveId],
   );
+
+  const snapshotLiveControlState = useMemo<LiveControlState>(() => {
+    if (!queriesEnabled || !selectedLiveId) {
+      return EMPTY_LIVE_CONTROL_STATE;
+    }
+
+    const dbView = spacetimeDb.db as any;
+    const rows: any[] = Array.from(
+      dbView?.globalMessageItem?.iter?.() ??
+      dbView?.global_message_item?.iter?.() ??
+      [],
+    );
+
+    const events = rows
+      .map((row) => parseLiveControlEvent(row, selectedLiveId))
+      .filter((event): event is LiveControlEvent => Boolean(event));
+
+    return reduceLiveControlState(events);
+  }, [messagesRepo, queriesEnabled, selectedLiveId]);
 
   const forceCloseLiveForAccessRejection = useCallback((reason: LiveAccessRejectionReason) => {
     clearLiveEndTimers();
@@ -966,6 +1221,25 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
     const hostUserIds = new Set(nextStreamers.map((streamer) => streamer.id));
     const bannedUserIdSet = new Set(snapshotBannedUserIds ?? liveRoom.bannedUserIds ?? []);
+    const nextPendingHostRequestUserIds = snapshotLiveControlState.pendingHostRequestUserIds.filter(
+      (pendingUserId) =>
+        !shouldShowLiveOverState &&
+        !hostUserIds.has(pendingUserId) &&
+        !bannedUserIdSet.has(pendingUserId),
+    );
+    const nextPendingCoHostInviteUserIds = snapshotLiveControlState.pendingCoHostInviteUserIds.filter(
+      (pendingUserId) =>
+        !shouldShowLiveOverState &&
+        !hostUserIds.has(pendingUserId) &&
+        !bannedUserIdSet.has(pendingUserId),
+    );
+    const nextPendingInviteIdSet = new Set(nextPendingCoHostInviteUserIds);
+    const nextPendingCoHostInviterByUserId = Object.fromEntries(
+      Object.entries(snapshotLiveControlState.pendingCoHostInviterByUserId).filter(
+        ([targetUserId, inviterUserId]) =>
+          nextPendingInviteIdSet.has(targetUserId) && inviterUserId.trim().length > 0,
+      ),
+    );
 
     const watchersById = new Map<string, LiveUser>();
     snapshotPresence.forEach((presenceEntry) => {
@@ -1022,6 +1296,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         !areLiveUserListsEquivalent(prev.streamers, nextStreamers) ||
         !areLiveUserListsEquivalent(prev.watchers, nextWatchers) ||
         !areLiveUserIdListsEquivalent(prev.bannedUserIds || [], nextBannedUserIds) ||
+        !areLiveUserIdListsEquivalent(
+          prev.pendingHostRequestUserIds || [],
+          nextPendingHostRequestUserIds,
+        ) ||
+        !areLiveUserIdListsEquivalent(
+          prev.pendingCoHostInviteUserIds || [],
+          nextPendingCoHostInviteUserIds,
+        ) ||
+        !areStringRecordsEquivalent(
+          prev.pendingCoHostInviterByUserId,
+          nextPendingCoHostInviterByUserId,
+        ) ||
         !areChatMessagesEquivalent(prev.chatMessages, nextChatMessages);
 
       if (!hasChanges) {
@@ -1035,6 +1321,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         hostUser: nextHostUser,
         streamers: nextStreamers,
         watchers: nextWatchers,
+        pendingHostRequestUserIds: nextPendingHostRequestUserIds,
+        pendingCoHostInviteUserIds: nextPendingCoHostInviteUserIds,
+        pendingCoHostInviterByUserId: nextPendingCoHostInviterByUserId,
         bannedUserIds: nextBannedUserIds,
         bannedUsers: nextBannedUsers,
         chatMessages: nextChatMessages,
@@ -1091,6 +1380,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     snapshotLive,
     snapshotPresence,
     snapshotRoomMessages,
+    snapshotLiveControlState,
     liveEndingState?.liveId,
   ]);
 
@@ -1375,6 +1665,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           initialBoosts: 0,
           hostUserOverride: nextIsHost ? currentUserWithMedia : undefined,
         }),
+        pendingHostRequestUserIds: [],
+        pendingCoHostInviteUserIds: [],
+        pendingCoHostInviterByUserId: {},
         bannedUserIds: normalizedBannedUserIds,
         bannedUsers: [],
       };
@@ -1602,62 +1895,153 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const pendingHostRequests = useMemo(() => {
+    if (!liveRoom) return [];
+
+    const hostUserIds = new Set(liveRoom.streamers.map((streamer) => streamer.id));
+    return (liveRoom.pendingHostRequestUserIds || [])
+      .filter((pendingUserId) => !hostUserIds.has(pendingUserId))
+      .map((pendingUserId) => resolveLiveUser(pendingUserId))
+      .filter((entry): entry is LiveUser => Boolean(entry));
+  }, [liveRoom, resolveLiveUser]);
+
+  const pendingCoHostInviteFrom = useMemo(() => {
+    if (!liveRoom || !userId) return null;
+    if (!(liveRoom.pendingCoHostInviteUserIds || []).includes(userId)) {
+      return null;
+    }
+
+    const inviterUserId = liveRoom.pendingCoHostInviterByUserId?.[userId];
+    if (inviterUserId) {
+      return resolveLiveUser(inviterUserId) ?? liveRoom.hostUser;
+    }
+
+    return liveRoom.hostUser;
+  }, [liveRoom, resolveLiveUser, userId]);
+
   const inviteToStream = useCallback(
-    (user: LiveUser) => {
-      if (!isHost) return;
+    async (user: LiveUser): Promise<boolean> => {
+      if (!isHost) return false;
 
-      let nextRoomSnapshot: LiveRoom | null = null;
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!currentLiveId) return false;
+      if (!user.id.trim().length) return false;
 
-      setLiveRoom((prev) => {
-        if (!prev) return prev;
-        if (prev.streamers.some((streamer) => streamer.id === user.id)) {
-          return prev;
+      try {
+        await publishLiveInvite({
+          liveId: currentLiveId,
+          targetUserId: user.id,
+          source: 'host',
+        });
+        requestBackendRefresh({
+          scopes: ['live', 'global_messages'],
+          source: 'manual',
+          reason: 'live_host_invite_sent',
+        });
+        return true;
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[live] Failed to invite viewer to co-host', error);
         }
-
-        const newWatchers = prev.watchers.filter((watcher) => watcher.id !== user.id);
-        const newStreamers = [...prev.streamers, user];
-
-        nextRoomSnapshot = {
-          ...prev,
-          watchers: newWatchers,
-          streamers: newStreamers,
-          hostUser: newStreamers[0] ?? prev.hostUser,
-          chatMessages: appendBoundedChatMessage(
-            prev.chatMessages,
-            createChatMessage(`${user.name} joined as a co-host.`, undefined, 'system', 'join'),
-          ),
-        };
-        return nextRoomSnapshot;
-      });
-
-      setActiveLive((prev) => {
-        if (!prev) return prev;
-        if (prev.hosts.some((host) => host.id === user.id)) {
-          return prev;
-        }
-        return {
-          ...prev,
-          hosts: [
-            ...prev.hosts,
-            {
-              id: user.id,
-              username: user.username,
-              name: user.name,
-              age: user.age,
-              country: user.country,
-              bio: user.bio,
-              verified: user.verified,
-              avatar: user.avatarUrl,
-            },
-          ],
-        };
-      });
-
-      if (nextRoomSnapshot) {
-        syncLiveHosts(nextRoomSnapshot);
+        return false;
       }
     },
-    [isHost, syncLiveHosts],
+    [activeLive?.id, isHost, liveRoom?.id],
+  );
+
+  const requestToJoinAsCoHost = useCallback(async (): Promise<boolean> => {
+    if (isHost) return false;
+
+    const currentLiveId = liveRoom?.id ?? activeLive?.id;
+    if (!currentLiveId || !userId) return false;
+    if ((liveRoom?.pendingHostRequestUserIds || []).includes(userId)) {
+      return true;
+    }
+
+    try {
+      await publishLiveHostRequest({
+        liveId: currentLiveId,
+      });
+      requestBackendRefresh({
+        scopes: ['live', 'global_messages'],
+        source: 'manual',
+        reason: 'live_host_request_sent',
+      });
+      return true;
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[live] Failed to send host request', error);
+      }
+      return false;
+    }
+  }, [activeLive?.id, isHost, liveRoom?.id, liveRoom?.pendingHostRequestUserIds, userId]);
+
+  const respondToHostRequest = useCallback(
+    async (requesterUserId: string, accepted: boolean): Promise<boolean> => {
+      if (!isHost) return false;
+
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!currentLiveId || !requesterUserId.trim()) return false;
+
+      try {
+        if (accepted) {
+          await publishLiveInvite({
+            liveId: currentLiveId,
+            targetUserId: requesterUserId,
+            source: 'request',
+          });
+        } else {
+          await publishLiveHostRequestResponse({
+            liveId: currentLiveId,
+            requesterUserId,
+            accepted: false,
+          });
+        }
+
+        requestBackendRefresh({
+          scopes: ['live', 'global_messages'],
+          source: 'manual',
+          reason: accepted ? 'live_host_request_accepted' : 'live_host_request_declined',
+        });
+        return true;
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[live] Failed to respond to host request', error);
+        }
+        return false;
+      }
+    },
+    [activeLive?.id, isHost, liveRoom?.id],
+  );
+
+  const respondToCoHostInvite = useCallback(
+    async (accepted: boolean): Promise<boolean> => {
+      const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!currentLiveId || !userId) return false;
+      if (!(liveRoom?.pendingCoHostInviteUserIds || []).includes(userId)) {
+        return false;
+      }
+
+      try {
+        await publishLiveInviteResponse({
+          liveId: currentLiveId,
+          targetUserId: userId,
+          accepted,
+        });
+        requestBackendRefresh({
+          scopes: ['live', 'global_messages'],
+          source: 'manual',
+          reason: accepted ? 'live_host_invite_accepted' : 'live_host_invite_declined',
+        });
+        return true;
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[live] Failed to respond to host invite', error);
+        }
+        return false;
+      }
+    },
+    [activeLive?.id, liveRoom?.id, liveRoom?.pendingCoHostInviteUserIds, userId],
   );
 
   const kickStreamer = useCallback(
@@ -1728,6 +2112,17 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           streamers: newStreamers,
           watchers: prev.watchers.filter((watcher) => watcher.id !== user.id),
           hostUser: newStreamers[0] ?? prev.hostUser,
+          pendingHostRequestUserIds: (prev.pendingHostRequestUserIds || []).filter(
+            (pendingUserId) => pendingUserId !== user.id,
+          ),
+          pendingCoHostInviteUserIds: (prev.pendingCoHostInviteUserIds || []).filter(
+            (pendingUserId) => pendingUserId !== user.id,
+          ),
+          pendingCoHostInviterByUserId: Object.fromEntries(
+            Object.entries(prev.pendingCoHostInviterByUserId || {}).filter(
+              ([pendingUserId]) => pendingUserId !== user.id,
+            ),
+          ),
           bannedUserIds: hasBannedId ? prev.bannedUserIds : [...prev.bannedUserIds, user.id],
           bannedUsers: hasBannedUser ? prev.bannedUsers : [...(prev.bannedUsers || []), user],
           chatMessages: appendBoundedChatMessage(
@@ -2024,6 +2419,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           hostUser,
           streamers: [hostUser],
           watchers: [],
+          pendingHostRequestUserIds: [],
+          pendingCoHostInviteUserIds: [],
+          pendingCoHostInviterByUserId: {},
           chatMessages: [
             createChatMessage(`${hostUser.name} started the live!`, undefined, 'system', 'join'),
           ],
@@ -2121,6 +2519,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         sendMessage,
         addSystemMessage,
         inviteToStream,
+        requestToJoinAsCoHost,
+        respondToHostRequest,
+        respondToCoHostInvite,
+        pendingHostRequests,
+        pendingCoHostInviteFrom,
         kickStreamer,
         banUser,
         unbanUser,

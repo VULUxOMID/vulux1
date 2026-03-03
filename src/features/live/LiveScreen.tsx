@@ -58,7 +58,6 @@ import { MiniHostsGrid } from './components/MiniHostsGrid';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { subscribeLive } from '../../lib/spacetime';
-import { publishLiveInvite } from '../../utils/spacetimePersistence';
 import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -93,7 +92,7 @@ export default function LiveScreen() {
   const insets = useSafeAreaInsets();
   const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
-  const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
+  const { live: liveRepo, social: socialRepo } = useRepositories();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const lives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
@@ -130,6 +129,11 @@ export default function LiveScreen() {
     endLive,
     sendMessage,
     inviteToStream,
+    requestToJoinAsCoHost,
+    respondToHostRequest,
+    respondToCoHostInvite,
+    pendingHostRequests,
+    pendingCoHostInviteFrom,
     kickStreamer,
     banUser,
     unbanUser,
@@ -234,34 +238,6 @@ export default function LiveScreen() {
     return () => clearInterval(timer);
   }, [isLiveEnding, liveEndDeadlineMs]);
 
-  const sendLiveInvite = useCallback(
-    async (targetUserId: string): Promise<boolean> => {
-      const currentLiveId = liveRoom?.id ?? activeLive?.id;
-      if (!currentLiveId || !isAuthLoaded || !isSignedIn) {
-        return false;
-      }
-
-      try {
-        await publishLiveInvite({
-          liveId: currentLiveId,
-          targetUserId,
-        });
-        return true;
-      } catch (error) {
-        if (__DEV__) {
-          console.warn('[live] Failed to send invite', error);
-        }
-        return false;
-      }
-    },
-    [
-      activeLive?.id,
-      isAuthLoaded,
-      isSignedIn,
-      liveRoom?.id,
-    ],
-  );
-
   // Initialize live stream from route parameters.
   // Important: only auto-join once per route liveId. If user is banned and later unbanned,
   // they should choose to rejoin manually instead of being auto-teleported back in.
@@ -318,6 +294,7 @@ export default function LiveScreen() {
   const [userToKick, setUserToKick] = useState<LiveUser | null>(null);
   const [nextLiveId, setNextLiveId] = useState<string | null>(null);
   const [pendingInviteUser, setPendingInviteUser] = useState<LiveUser | null>(null);
+  const [pendingHostRequestUser, setPendingHostRequestUser] = useState<LiveUser | null>(null);
   const filteredInviteCandidates = useMemo(() => {
     const query = inviteQuery.trim().toLowerCase();
     if (!query) return inviteCandidates;
@@ -359,6 +336,18 @@ export default function LiveScreen() {
     return Array.from(bannedMap.values());
   }, [knownLiveUsers, liveRoom]);
 
+  const liveUsersById = useMemo(() => {
+    const byId = new Map<string, LiveUser>();
+    [currentUser, ...(liveRoom?.streamers || []), ...(liveRoom?.watchers || []), ...knownLiveUsers].forEach(
+      (user) => {
+        if (user?.id) {
+          byId.set(user.id, user);
+        }
+      },
+    );
+    return byId;
+  }, [currentUser, knownLiveUsers, liveRoom?.streamers, liveRoom?.watchers]);
+
   // Fuel state (Premium GemPlus)
   // const [fuelMinutes, setFuelMinutes] = useState(45); // Replaced with global context
   
@@ -378,6 +367,22 @@ export default function LiveScreen() {
       setActiveSheet(null);
     }
   }, [isHost, activeSheet]);
+
+  useEffect(() => {
+    if (!isHost) {
+      setPendingHostRequestUser(null);
+      return;
+    }
+
+    const nextPendingRequest = pendingHostRequests[0] ?? null;
+    setPendingHostRequestUser((previous) => {
+      if (!nextPendingRequest) return null;
+      if (previous?.id === nextPendingRequest.id) {
+        return previous;
+      }
+      return nextPendingRequest;
+    });
+  }, [isHost, pendingHostRequests]);
   
   // Speaking state (in production this comes from audio detection)
   const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
@@ -683,46 +688,27 @@ export default function LiveScreen() {
       return;
     }
 
-    const currentLiveId = liveRoom?.id ?? activeLive?.id;
-    const hostUserId = liveRoom?.hostUser.id ?? activeLive?.hosts?.[0]?.id;
-    if (!currentLiveId || !hostUserId || !currentUser?.id) {
+    if (!currentUser?.id) {
       toast.error('Host is unavailable right now.');
       return;
     }
 
-    const requesterName = currentUser.name?.trim() || 'A viewer';
-    const messageId = `live-raise-hand-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    try {
-      await messagesRepo.sendGlobalMessage({
-        clientMessageId: messageId,
-        roomId: currentLiveId,
-        message: {
-          id: messageId,
-          user: requesterName,
-          senderId: currentUser.id,
-          text: `${requesterName} requested to join as a co-host.`,
-          type: 'system',
-          createdAt: Date.now(),
-          roomId: currentLiveId,
-        },
-      });
-      toast.success('Raise-hand request sent.');
-    } catch (error) {
-      if (__DEV__) {
-        console.warn('[live] Failed to send raise-hand request', error);
-      }
-      toast.error('Could not send request. Try again.');
+    if (pendingHostRequests.some((entry) => entry.id === currentUser.id)) {
+      toast.success('Raise-hand request already sent.');
+      return;
     }
+
+    const sent = await requestToJoinAsCoHost();
+    if (sent) {
+      toast.success('Raise-hand request sent.');
+      return;
+    }
+    toast.error('Could not send request. Try again.');
   }, [
-    activeLive?.hosts,
-    activeLive?.id,
     currentUser?.id,
-    currentUser?.name,
     isHost,
-    liveRoom?.hostUser.id,
-    liveRoom?.id,
-    messagesRepo,
+    pendingHostRequests,
+    requestToJoinAsCoHost,
   ]);
 
   const handleInviteToStream = useCallback((user: LiveUser) => {
@@ -731,9 +717,13 @@ export default function LiveScreen() {
     setActiveSheet('inviteToStream');
   }, []);
 
-  const handleAcceptInvite = useCallback(() => {
+  const handleAcceptInvite = useCallback(async () => {
     if (pendingInviteUser) {
-      inviteToStream(pendingInviteUser);
+      const invited = await inviteToStream(pendingInviteUser);
+      if (!invited) {
+        toast.error(`Could not invite ${pendingInviteUser.name}. Try again.`);
+        return;
+      }
       toast.success(`Invite sent to ${pendingInviteUser.name}`);
     }
     setActiveSheet(null);
@@ -744,6 +734,52 @@ export default function LiveScreen() {
     setActiveSheet(null);
     setPendingInviteUser(null);
   }, []);
+
+  const handleAcceptHostRequest = useCallback(async () => {
+    if (!pendingHostRequestUser) return;
+
+    const accepted = await respondToHostRequest(pendingHostRequestUser.id, true);
+    if (!accepted) {
+      toast.error(`Could not invite ${pendingHostRequestUser.name}. Try again.`);
+      return;
+    }
+
+    toast.success(`Invite sent to ${pendingHostRequestUser.name}`);
+    setPendingHostRequestUser(null);
+  }, [pendingHostRequestUser, respondToHostRequest]);
+
+  const handleDeclineHostRequest = useCallback(async () => {
+    if (!pendingHostRequestUser) return;
+
+    const declined = await respondToHostRequest(pendingHostRequestUser.id, false);
+    if (!declined) {
+      toast.error(`Could not decline ${pendingHostRequestUser.name}. Try again.`);
+      return;
+    }
+
+    toast.success(`Declined ${pendingHostRequestUser.name}'s request`);
+    setPendingHostRequestUser(null);
+  }, [pendingHostRequestUser, respondToHostRequest]);
+
+  const handleAcceptCoHostInvite = useCallback(async () => {
+    const accepted = await respondToCoHostInvite(true);
+    if (!accepted) {
+      toast.error('Could not accept invite. Try again.');
+      return;
+    }
+
+    toast.success('You joined as a co-host.');
+  }, [respondToCoHostInvite]);
+
+  const handleDeclineCoHostInvite = useCallback(async () => {
+    const declined = await respondToCoHostInvite(false);
+    if (!declined) {
+      toast.error('Could not decline invite. Try again.');
+      return;
+    }
+
+    toast.success('Invite declined.');
+  }, [respondToCoHostInvite]);
 
   const handleKickStreamer = useCallback((user: LiveUser) => {
     setUserToKick(user);
@@ -1245,6 +1281,52 @@ export default function LiveScreen() {
           onCancel={handleCancelInvite}
         />
 
+        <InviteToStreamModal
+          visible={isHost && !!pendingHostRequestUser}
+          onClose={() => {
+            void handleDeclineHostRequest();
+          }}
+          user={pendingHostRequestUser}
+          title="Co-host request"
+          subtitle={
+            pendingHostRequestUser
+              ? `${pendingHostRequestUser.name} wants to join as a co-host.`
+              : undefined
+          }
+          confirmLabel="Accept request"
+          cancelLabel="Decline"
+          confirmIconName="checkmark-circle"
+          onInvite={() => {
+            void handleAcceptHostRequest();
+          }}
+          onCancel={() => {
+            void handleDeclineHostRequest();
+          }}
+        />
+
+        <InviteToStreamModal
+          visible={!isHost && !!pendingCoHostInviteFrom}
+          onClose={() => {
+            void handleDeclineCoHostInvite();
+          }}
+          user={pendingCoHostInviteFrom}
+          title="Join as co-host?"
+          subtitle={
+            pendingCoHostInviteFrom
+              ? `${pendingCoHostInviteFrom.name} invited you to co-host this live.`
+              : undefined
+          }
+          confirmLabel="Accept invite"
+          cancelLabel="Decline"
+          confirmIconName="checkmark-circle"
+          onInvite={() => {
+            void handleAcceptCoHostInvite();
+          }}
+          onCancel={() => {
+            void handleDeclineCoHostInvite();
+          }}
+        />
+
         {/* Unified Host Options Sheet — Settings / Report / Invite as tabs */}
         <ActionSheet
           visible={activeSheet === 'hostOptions'}
@@ -1575,7 +1657,17 @@ export default function LiveScreen() {
                               return;
                             }
 
-                            const inviteSent = await sendLiveInvite(item.id);
+                            const targetUser = liveUsersById.get(item.id) || {
+                              id: item.id,
+                              name: item.username,
+                              username: item.username,
+                              age: 0,
+                              country: '',
+                              bio: item.statusText || '',
+                              avatarUrl: item.avatarUrl || '',
+                            };
+
+                            const inviteSent = await inviteToStream(targetUser);
                             if (!inviteSent) {
                               toast.error(`Could not invite ${item.username}. Try again.`);
                               return;

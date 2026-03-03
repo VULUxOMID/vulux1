@@ -12,6 +12,11 @@ type InviteToStreamModalProps = {
   user: LiveUser | null;
   onInvite: () => void;
   onCancel: () => void;
+  title?: string;
+  subtitle?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  confirmIconName?: React.ComponentProps<typeof Ionicons>['name'];
 };
 
 export function InviteToStreamModal({
@@ -20,8 +25,15 @@ export function InviteToStreamModal({
   user,
   onInvite,
   onCancel,
+  title = 'Invite to stream',
+  subtitle,
+  confirmLabel = 'Invite to stream',
+  cancelLabel = 'Cancel',
+  confirmIconName = 'person-add',
 }: InviteToStreamModalProps) {
   if (!user) return null;
+
+  const resolvedSubtitle = subtitle ?? `Invite ${user.name} to join as a co-host`;
 
   return (
     <Modal
@@ -41,9 +53,9 @@ export function InviteToStreamModal({
                 <Ionicons name="person" size={22} color={colors.textMuted} />
               </View>
             )}
-            <AppText variant="h3" style={styles.title}>Invite to stream</AppText>
+            <AppText variant="h3" style={styles.title}>{title}</AppText>
             <AppText style={styles.subtitle}>
-              Invite {user.name} to join as a co-host
+              {resolvedSubtitle}
             </AppText>
           </View>
 
@@ -55,9 +67,9 @@ export function InviteToStreamModal({
             }}
           >
             <View style={[styles.optionIcon, styles.optionIconInvite]}>
-              <Ionicons name="person-add" size={24} color="#fff" />
+              <Ionicons name={confirmIconName} size={24} color="#fff" />
             </View>
-            <AppText style={styles.optionText}>Invite to stream</AppText>
+            <AppText style={styles.optionText}>{confirmLabel}</AppText>
             <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
           </Pressable>
 
@@ -69,7 +81,7 @@ export function InviteToStreamModal({
               onCancel();
             }}
           >
-            <AppText style={styles.cancelText}>Cancel</AppText>
+            <AppText style={styles.cancelText}>{cancelLabel}</AppText>
           </Pressable>
         </View>
       </View>

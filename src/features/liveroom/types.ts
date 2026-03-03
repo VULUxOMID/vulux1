@@ -45,6 +45,9 @@ export type LiveRoom = {
   hostUser: LiveUser;
   streamers: LiveUser[];
   watchers: LiveUser[];
+  pendingHostRequestUserIds?: string[];
+  pendingCoHostInviteUserIds?: string[];
+  pendingCoHostInviterByUserId?: Record<string, string>;
   chatMessages: ChatMessage[];
   boostRank: number | null;
   totalBoosts: number;
