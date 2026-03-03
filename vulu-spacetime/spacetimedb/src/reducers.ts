@@ -1732,11 +1732,14 @@ function readLivePresenceItem(ctx: any, userId: string): JsonRecord {
   return parseJsonRecord(row.item);
 }
 
+type LivePresenceActivity = 'hosting' | 'watching';
+type PublicLivePresenceActivity = LivePresenceActivity | 'blocked';
+
 function upsertPublicLivePresenceItem(
   ctx: any,
   userId: string,
   liveId: string,
-  activity: 'hosting' | 'watching',
+  activity: PublicLivePresenceActivity,
 ): void {
   const existing = ctx.db.publicLivePresenceItem.userId.find(userId);
   if (existing) {
@@ -1754,7 +1757,8 @@ function upsertPublicLivePresenceItem(
 function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): void {
   const liveId = readString(item.liveId);
   const activity = readString(item.activity);
-  const normalizedActivity = activity === 'hosting' ? 'hosting' : activity === 'watching' ? 'watching' : null;
+  const normalizedActivity: LivePresenceActivity | null =
+    activity === 'hosting' ? 'hosting' : activity === 'watching' ? 'watching' : null;
 
   const existing = ctx.db.livePresenceItem.userId.find(userId);
   if (existing) {
@@ -1771,6 +1775,19 @@ function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): voi
   if (liveId && normalizedActivity) {
     upsertPublicLivePresenceItem(ctx, userId, liveId, normalizedActivity);
   }
+}
+
+function markLivePresenceBlocked(ctx: any, userId: string, liveId: string): void {
+  const existingPresence = readLivePresenceItem(ctx, userId);
+  upsertLivePresenceItem(ctx, userId, {
+    ...existingPresence,
+    userId,
+    liveId,
+    activity: 'none',
+    rejectionCode: 'banned',
+    updatedAt: nowMs(ctx),
+  });
+  upsertPublicLivePresenceItem(ctx, userId, liveId, 'blocked');
 }
 
 function deleteLivePresenceItem(ctx: any, userId: string): void {
@@ -2516,7 +2533,7 @@ function applyLiveBan(ctx: any, payload: JsonRecord): void {
 
   const presence = readLivePresenceItem(ctx, targetUserId);
   if (readString(presence.liveId) === liveId) {
-    deleteLivePresenceItem(ctx, targetUserId);
+    markLivePresenceBlocked(ctx, targetUserId, liveId);
   }
 }
 
@@ -2535,6 +2552,14 @@ function applyLiveUnban(ctx: any, payload: JsonRecord): void {
     bannedUserIds,
     updatedAt: nowMs(ctx),
   });
+
+  const publicPresence = ctx.db.publicLivePresenceItem.userId.find(targetUserId);
+  if (
+    readString(publicPresence?.liveId) === liveId &&
+    readString(publicPresence?.activity) === 'blocked'
+  ) {
+    deleteLivePresenceItem(ctx, targetUserId);
+  }
 }
 
 function applyLiveEnd(ctx: any, payload: JsonRecord): void {
@@ -2556,6 +2581,12 @@ function applyLiveEnd(ctx: any, payload: JsonRecord): void {
   for (const row of ctx.db.livePresenceItem.iter()) {
     const item = parseJsonRecord(row.item);
     if (readString(item.liveId) === liveId) {
+      deleteLivePresenceItem(ctx, row.userId);
+    }
+  }
+
+  for (const row of ctx.db.publicLivePresenceItem.iter()) {
+    if (readString(row.liveId) === liveId) {
       deleteLivePresenceItem(ctx, row.userId);
     }
   }
@@ -3382,13 +3413,18 @@ export const setLivePresence = schemaDb.reducer(
     const authorization = authorizeLivePresencePayload(ctx, payload);
     if (!authorization.ok) {
       const normalizedUserId = readString(payload.userId);
+      const liveId = readString(payload.liveId);
       if (normalizedUserId) {
-        deleteLivePresenceItem(ctx, normalizedUserId);
+        if (authorization.code === 'banned' && liveId) {
+          markLivePresenceBlocked(ctx, normalizedUserId, liveId);
+        } else {
+          deleteLivePresenceItem(ctx, normalizedUserId);
+        }
       }
       console.info('[live_presence] ignored_rejected_presence', {
         code: authorization.code,
         userId: normalizedUserId ?? null,
-        liveId: readString(payload.liveId) ?? null,
+        liveId: liveId ?? null,
       });
       return;
     }

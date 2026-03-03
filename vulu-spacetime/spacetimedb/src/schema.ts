@@ -303,6 +303,17 @@ export const spacetimedb = schema({
             updatedAt: t.timestamp(),
         }
     ),
+    // Compatibility shim to avoid destructive migration on existing maincloud data.
+    connectionSessionItem: table(
+        { public: false },
+        {
+            connectionId: t.string().primaryKey(),
+            senderIdentity: t.string().index(),
+            vuluUserId: t.string().index(),
+            connectedAt: t.timestamp(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     userRole: table(
         { public: false },
         {

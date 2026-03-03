@@ -1454,6 +1454,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     closeLive();
   }, [closeLive, liveRoom, snapshotLive?.bannedUserIds, userId]);
 
+  useEffect(() => {
+    if (!userId || !liveRoom) return;
+    const selfPresence = snapshotPresence.find(
+      (entry) => entry.userId === userId && entry.liveId === liveRoom.id,
+    );
+    if (!selfPresence || selfPresence.activity !== 'blocked') return;
+    handleLiveAccessRejection('banned');
+  }, [handleLiveAccessRejection, liveRoom, snapshotPresence, userId]);
+
   const restoreLive = useCallback(() => {
     if (activeLive) {
       setIsMinimized(false);
