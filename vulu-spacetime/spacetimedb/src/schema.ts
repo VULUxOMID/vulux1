@@ -294,6 +294,25 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    // Compatibility shim to avoid destructive migration on existing maincloud data.
+    senderIdentityUserMap: table(
+        { public: false },
+        {
+            senderIdentity: t.string().primaryKey(),
+            vuluUserId: t.string().index(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    connectionSessionItem: table(
+        { public: false },
+        {
+            connectionId: t.string().primaryKey(),
+            senderIdentity: t.string().index(),
+            vuluUserId: t.string().index(),
+            connectedAt: t.timestamp(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     userRole: table(
         { public: false },
         {

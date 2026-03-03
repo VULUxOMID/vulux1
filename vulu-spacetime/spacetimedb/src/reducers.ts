@@ -408,6 +408,135 @@ function readCallerIdentityHex(ctx: any): string | null {
   return readIdentityString(ctx?.sender) ?? readIdentityString(ctx?.identity);
 }
 
+function readCallerConnectionId(ctx: any): string | null {
+  return readIdentityString(ctx?.connectionId);
+}
+
+function readSenderIdentityMappedUserId(ctx: any, senderIdentity: string): string | null {
+  const find = ctx?.db?.senderIdentityUserMap?.senderIdentity?.find;
+  if (typeof find !== 'function') {
+    return null;
+  }
+  const row = find(senderIdentity);
+  return readString(row?.vuluUserId);
+}
+
+function upsertSenderIdentityUserMap(ctx: any, senderIdentity: string, vuluUserId: string): void {
+  const table = ctx?.db?.senderIdentityUserMap;
+  if (!table?.senderIdentity) {
+    return;
+  }
+
+  const existing = table.senderIdentity.find(senderIdentity);
+  if (existing) {
+    table.senderIdentity.delete(senderIdentity);
+  }
+
+  table.insert({
+    senderIdentity,
+    vuluUserId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function deleteSenderIdentityUserMap(ctx: any, senderIdentity: string): void {
+  const deleteRow = ctx?.db?.senderIdentityUserMap?.senderIdentity?.delete;
+  if (typeof deleteRow !== 'function') {
+    return;
+  }
+  deleteRow(senderIdentity);
+}
+
+function rememberCallerIdentityUserMap(ctx: any, vuluUserId: string): void {
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (!senderIdentity) return;
+  const normalizedUserId = readString(vuluUserId);
+  if (!normalizedUserId) return;
+  upsertSenderIdentityUserMap(ctx, senderIdentity, normalizedUserId);
+}
+
+function upsertConnectionSessionItem(
+  ctx: any,
+  connectionId: string,
+  senderIdentity: string,
+  vuluUserId: string,
+): void {
+  const table = ctx?.db?.connectionSessionItem;
+  if (!table?.connectionId) {
+    return;
+  }
+
+  const existing = table.connectionId.find(connectionId);
+  if (existing) {
+    table.connectionId.delete(connectionId);
+  }
+
+  table.insert({
+    connectionId,
+    senderIdentity,
+    vuluUserId,
+    connectedAt: ctx.timestamp,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function deleteConnectionSessionItem(ctx: any, connectionId: string): void {
+  const deleteRow = ctx?.db?.connectionSessionItem?.connectionId?.delete;
+  if (typeof deleteRow !== 'function') {
+    return;
+  }
+  deleteRow(connectionId);
+}
+
+function hasActiveConnectionSessionForUser(ctx: any, vuluUserId: string): boolean {
+  const normalizedUserId = readString(vuluUserId);
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  for (const row of ctx.db.connectionSessionItem.iter()) {
+    if (readString(row.vuluUserId) === normalizedUserId) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveDisconnectUserId(ctx: any): string | null {
+  const mappedUserId = resolveMappedCallerUserId(ctx);
+  if (mappedUserId) return mappedUserId;
+
+  const legacyUserId = readLegacyCallerUserIdFromClaims(ctx);
+  if (legacyUserId) return legacyUserId;
+
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (senderIdentity) {
+    const senderMappedUserId = readSenderIdentityMappedUserId(ctx, senderIdentity);
+    if (senderMappedUserId) return senderMappedUserId;
+  }
+
+  if (!readCallerAuthIdentity(ctx)) {
+    return senderIdentity;
+  }
+
+  return null;
+}
+
+function registerConnectionSessionForCaller(ctx: any): void {
+  const connectionId = readCallerConnectionId(ctx);
+  if (!connectionId) {
+    return;
+  }
+
+  const senderIdentity = readCallerIdentityHex(ctx) ?? '';
+  const userId = resolveDisconnectUserId(ctx) ?? '';
+  if (userId) {
+    rememberCallerIdentityUserMap(ctx, userId);
+  }
+  upsertConnectionSessionItem(ctx, connectionId, senderIdentity, userId);
+}
+
 function callerIsDbOwnerIdentity(ctx: any): boolean {
   const callerIdentity = readIdentityString(ctx?.identity);
   return callerIdentity?.toLowerCase() === DB_OWNER_IDENTITY;
@@ -821,21 +950,41 @@ function parseLiveRoomId(roomId: string): { liveId: string; strict: boolean } | 
   return { liveId: normalizedRoomId, strict: false };
 }
 
-function assertLiveParticipationAllowed(
+type LiveParticipationRejectionCode = 'live_ended' | 'banned' | 'invite_only';
+
+type LiveParticipationAllowedResult =
+  | { ok: true; live: JsonRecord }
+  | { ok: false; code: LiveParticipationRejectionCode; message: string };
+
+function resolveLiveParticipationAllowed(
   ctx: any,
   liveId: string,
   callerUserId: string,
-): JsonRecord {
-  assertCallerNotGloballyBanned(ctx, callerUserId);
+): LiveParticipationAllowedResult {
+  if (isUserGloballyBanned(ctx, callerUserId)) {
+    return {
+      ok: false,
+      code: 'banned',
+      message: "You're banned.",
+    };
+  }
 
   const live = readLiveItem(ctx, liveId);
   if (Object.keys(live).length === 0 || isLiveEnded(live)) {
-    throw new Error('Live has ended.');
+    return {
+      ok: false,
+      code: 'live_ended',
+      message: 'Live has ended.',
+    };
   }
 
   const bannedUserIds = new Set(normalizeBannedUserIds(live.bannedUserIds));
   if (bannedUserIds.has(callerUserId)) {
-    unauthorized("You're banned.");
+    return {
+      ok: false,
+      code: 'banned',
+      message: "You're banned.",
+    };
   }
 
   if (readBoolean(live.inviteOnly) === true) {
@@ -847,15 +996,45 @@ function assertLiveParticipationAllowed(
     if (!callerIsHost) {
       const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
       if (!invitedUserIds.has(callerUserId)) {
-        unauthorized('Invite only.');
+        return {
+          ok: false,
+          code: 'invite_only',
+          message: 'Invite only.',
+        };
       }
     }
   }
 
-  return live;
+  return {
+    ok: true,
+    live,
+  };
 }
 
-function authorizeLivePresencePayload(ctx: any, payload: JsonRecord): void {
+function assertLiveParticipationAllowed(
+  ctx: any,
+  liveId: string,
+  callerUserId: string,
+): JsonRecord {
+  const result = resolveLiveParticipationAllowed(ctx, liveId, callerUserId);
+  if (!result.ok) {
+    if (result.code === 'live_ended') {
+      throw new Error(result.message);
+    }
+    unauthorized(result.message);
+  }
+
+  return result.live;
+}
+
+type LivePresenceAuthorizationResult =
+  | { ok: true }
+  | { ok: false; code: Extract<LiveParticipationRejectionCode, 'live_ended' | 'banned'>; message: string };
+
+function authorizeLivePresencePayload(
+  ctx: any,
+  payload: JsonRecord,
+): LivePresenceAuthorizationResult {
   const callerUserId = resolveCallerUserId(ctx);
   const legacyCallerUserId = readLegacyCallerUserIdFromClaims(ctx);
   const requestedUserId = readString(payload.userId);
@@ -882,7 +1061,7 @@ function authorizeLivePresencePayload(ctx: any, payload: JsonRecord): void {
   if (normalizedActivity === 'none') {
     payload.liveId = undefined;
     payload.liveTitle = undefined;
-    return;
+    return { ok: true };
   }
 
   const liveId = readString(payload.liveId);
@@ -890,12 +1069,25 @@ function authorizeLivePresencePayload(ctx: any, payload: JsonRecord): void {
     unauthorized('liveId is required when setting live presence.');
   }
 
-  const live = assertLiveParticipationAllowed(ctx, liveId, normalizedUserId);
+  const participation = resolveLiveParticipationAllowed(ctx, liveId, normalizedUserId);
+  if (!participation.ok) {
+    if (participation.code === 'invite_only') {
+      unauthorized(participation.message);
+    }
+    return {
+      ok: false,
+      code: participation.code,
+      message: participation.message,
+    };
+  }
+
+  const live = participation.live;
   if (normalizedActivity === 'hosting') {
     assertLiveOwnerOrAdmin(ctx, liveId, live);
   }
 
   payload.liveId = liveId;
+  return { ok: true };
 }
 
 function authorizeLiveInvitePayload(ctx: any, payload: JsonRecord): void {
@@ -1049,7 +1241,10 @@ function authorizeGlobalMessagePayload(
   }
 
   if (eventType === 'live_presence') {
-    authorizeLivePresencePayload(ctx, payload);
+    const authorization = authorizeLivePresencePayload(ctx, payload);
+    if (!authorization.ok) {
+      throw new Error(authorization.message);
+    }
     return eventType;
   }
 
@@ -2357,11 +2552,7 @@ function applyLiveUpdate(ctx: any, payload: JsonRecord): void {
 }
 
 function applyLivePresence(ctx: any, payload: JsonRecord): void {
-  const userId = readString(payload.userId);
-  const activity = readString(payload.activity);
-  if (!userId || !activity) return;
-
-  if (activity === 'none') {
+  function clearLivePresenceAndMaybeEndLive(userId: string): void {
     const previousPresence = readLivePresenceItem(ctx, userId);
     const previousLiveId = readString(previousPresence.liveId);
     const previousActivity = readString(previousPresence.activity);
@@ -2390,6 +2581,14 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
         }
       }
     }
+  }
+
+  const userId = readString(payload.userId);
+  const activity = readString(payload.activity);
+  if (!userId || !activity) return;
+
+  if (activity === 'none') {
+    clearLivePresenceAndMaybeEndLive(userId);
     return;
   }
 
@@ -2407,6 +2606,50 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
     updatedAt: nowMs(ctx),
   });
 }
+
+function clearLivePresenceForDisconnectedCaller(ctx: any): void {
+  const connectionId = readCallerConnectionId(ctx);
+  if (connectionId) {
+    deleteConnectionSessionItem(ctx, connectionId);
+  }
+
+  const userId = resolveDisconnectUserId(ctx);
+  const senderIdentity = readCallerIdentityHex(ctx);
+
+  if (senderIdentity) {
+    deleteSenderIdentityUserMap(ctx, senderIdentity);
+  }
+
+  if (!userId) {
+    return;
+  }
+
+  if (hasActiveConnectionSessionForUser(ctx, userId)) {
+    return;
+  }
+
+  applyLivePresence(ctx, {
+    userId,
+    activity: 'none',
+    liveId: undefined,
+    liveTitle: undefined,
+    createdAt: nowMs(ctx),
+  });
+}
+
+function handleClientDisconnected(ctx: any): void {
+  clearLivePresenceForDisconnectedCaller(ctx);
+}
+
+export const onDisconnectLiveCleanup = schemaDb.clientDisconnected((ctx) => {
+  handleClientDisconnected(ctx);
+  console.info('Client Disconnected from Vulu SpacetimeDB Module');
+});
+
+export const onConnectLiveSession = schemaDb.clientConnected((ctx) => {
+  registerConnectionSessionForCaller(ctx);
+  console.info('Client Connected to Vulu SpacetimeDB Module');
+});
 
 function applyLiveInvite(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
@@ -3245,6 +3488,7 @@ export const startLive = schemaDb.reducer(
   },
   (ctx, args) => {
     assertSelf(ctx, args.ownerUserId, 'ownerUserId');
+    rememberCallerIdentityUserMap(ctx, args.ownerUserId);
     const payload: JsonRecord = {
       eventType: 'live_start',
       liveId: args.liveId,
@@ -3313,7 +3557,22 @@ export const setLivePresence = schemaDb.reducer(
       createdAt: nowMs(ctx),
     };
 
-    authorizeLivePresencePayload(ctx, payload);
+    const authorization = authorizeLivePresencePayload(ctx, payload);
+    const normalizedUserId = readString(payload.userId);
+    if (normalizedUserId) {
+      rememberCallerIdentityUserMap(ctx, normalizedUserId);
+    }
+    if (!authorization.ok) {
+      if (normalizedUserId) {
+        deleteLivePresenceItem(ctx, normalizedUserId);
+      }
+      console.info('[live_presence] ignored_rejected_presence', {
+        code: authorization.code,
+        userId: normalizedUserId ?? null,
+        liveId: readString(payload.liveId) ?? null,
+      });
+      return;
+    }
     applyLivePresence(ctx, payload);
   },
 );
