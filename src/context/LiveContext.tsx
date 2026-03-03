@@ -338,6 +338,7 @@ function mergeProfileIdentity(base: LiveUser, profile?: ProfileIdentity): LiveUs
 
   if (
     displayName &&
+    !isGenericDisplayLabel(displayName) &&
     !isLikelyOpaqueUserId(displayName) &&
     (
       shouldPreferMappedValue(next.name, displayName) ||
@@ -836,16 +837,19 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         ...knownUser,
         id: userId,
       }
-      : {
-        id: userId,
-        name: 'You',
-        username: normalizeUsername(userId, 'you'),
-        age: 0,
-        verified: false,
-        country: '',
-        bio: '',
-        avatarUrl: '',
-      };
+      : (() => {
+        const fallbackName = resolveFriendlyDisplayName(undefined, userId);
+        return {
+          id: userId,
+          name: fallbackName,
+          username: resolveFriendlyUsername(undefined, fallbackName, userId),
+          age: 0,
+          verified: false,
+          country: '',
+          bio: '',
+          avatarUrl: '',
+        };
+      })();
 
     if (currentSocialLiveUser) {
       resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSocialLiveUser);
@@ -857,21 +861,27 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSessionUser);
     }
 
-    if (sessionIdentity.explicitDisplayName) {
+    if (
+      sessionIdentity.explicitDisplayName &&
+      shouldPreferMappedValue(resolvedUser.name, sessionIdentity.explicitDisplayName)
+    ) {
       resolvedUser = {
         ...resolvedUser,
         name: sessionIdentity.explicitDisplayName,
       };
     }
 
-    if (sessionIdentity.explicitUsername) {
+    if (
+      sessionIdentity.explicitUsername &&
+      shouldPreferMappedValue(resolvedUser.username, sessionIdentity.explicitUsername)
+    ) {
       resolvedUser = {
         ...resolvedUser,
         username: sessionIdentity.explicitUsername,
       };
     }
 
-    if (sessionIdentity.explicitAvatarUrl) {
+    if (sessionIdentity.explicitAvatarUrl && !asTrimmedString(resolvedUser.avatarUrl)) {
       resolvedUser = {
         ...resolvedUser,
         avatarUrl: sessionIdentity.explicitAvatarUrl,
