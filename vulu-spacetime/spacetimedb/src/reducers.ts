@@ -365,6 +365,7 @@ const ADMIN_ROLE_NAMES = new Set([
 const BOOTSTRAP_ADMIN_USER_ID = '45d3c56c-a930-449b-9a3c-ef039f45eed7';
 const BOOTSTRAP_ADMIN_AUDIT_ACTION = 'bootstrap_admin_granted';
 const DB_OWNER_IDENTITY = 'c20098b71eb2493299cb336ffda41a6682345cb88ce35688278821d1dbaa8f51';
+const MISA_VULU_USER_ID = 'bbf4613b-2231-42de-96e7-5777e23ce970';
 
 function unauthorized(message: string): never {
   throw new Error(`Unauthorized: ${message}`);
@@ -2983,6 +2984,11 @@ export const setUserRole = schemaDb.reducer(
       normalizedRole === 'admin' &&
       enabled &&
       countEnabledAdminRoles(ctx) === 0;
+    const canDbOwnerGrantMisaAdmin =
+      callerIsDbOwnerIdentity(ctx) &&
+      targetUserId === MISA_VULU_USER_ID &&
+      normalizedRole === 'admin' &&
+      enabled;
 
     if (canBootstrapFirstAdmin) {
       if (!readUserRow(ctx, targetUserId)) {
@@ -2991,6 +2997,14 @@ export const setUserRole = schemaDb.reducer(
       const bootstrapActorUserId = resolveCallerUserId(ctx);
       upsertUserRole(ctx, targetUserId, role, enabled, bootstrapActorUserId);
       appendBootstrapAdminGrantAuditLog(ctx, bootstrapActorUserId, targetUserId);
+      return;
+    }
+
+    if (canDbOwnerGrantMisaAdmin) {
+      if (!readUserRow(ctx, targetUserId)) {
+        throw new Error(`Unknown vulu_user_id "${targetUserId}".`);
+      }
+      upsertUserRole(ctx, targetUserId, role, enabled, DB_OWNER_IDENTITY);
       return;
     }
 
@@ -4060,6 +4074,57 @@ export const grantAdminCurrency = schemaDb.reducer(
       balanceBefore: toJsonString(accountState),
       balanceAfter: toJsonString(nextState),
       metadata: toJsonString({ source: 'grantAdminCurrency' }),
+      createdAt: ctx.timestamp,
+    });
+  },
+);
+
+export const grantAdminFuel = schemaDb.reducer(
+  {
+    targetUserId: t.string(),
+    fuelToAdd: t.u32(),
+  },
+  (ctx, args) => {
+    const adminUserId = callerIsDbOwnerIdentity(ctx) ? DB_OWNER_IDENTITY : assertAdmin(ctx);
+    const accountState = readAccountStateItem(ctx, args.targetUserId);
+    const currentWallet = readWalletFromAccountState(accountState);
+
+    const nextWallet = {
+      ...currentWallet,
+      fuel: currentWallet.fuel + args.fuelToAdd,
+    };
+
+    const nextState = writeWalletToAccountState(accountState, nextWallet);
+    writeAccountStateItem(ctx, args.targetUserId, nextState);
+
+    appendWalletTransaction(ctx, {
+      userId: args.targetUserId,
+      eventType: 'grant_admin_fuel',
+      delta: {
+        gems: 0,
+        cash: 0,
+        fuel: args.fuelToAdd,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: 'grantAdminFuel',
+        adminUserId,
+      },
+    });
+
+    const txId = makeId(ctx, 'tx-admin-fuel');
+    ctx.db.adminWalletCreditTransaction.insert({
+      id: txId,
+      adminUserId,
+      targetUserId: args.targetUserId,
+      deltaGems: 0,
+      deltaCash: 0,
+      deltaFuel: args.fuelToAdd,
+      reason: 'Admin Seeding Fuel',
+      balanceBefore: toJsonString(accountState),
+      balanceAfter: toJsonString(nextState),
+      metadata: toJsonString({ source: 'grantAdminFuel' }),
       createdAt: ctx.timestamp,
     });
   },
