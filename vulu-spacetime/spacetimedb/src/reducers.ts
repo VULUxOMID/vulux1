@@ -408,6 +408,135 @@ function readCallerIdentityHex(ctx: any): string | null {
   return readIdentityString(ctx?.sender) ?? readIdentityString(ctx?.identity);
 }
 
+function readCallerConnectionId(ctx: any): string | null {
+  return readIdentityString(ctx?.connectionId);
+}
+
+function readSenderIdentityMappedUserId(ctx: any, senderIdentity: string): string | null {
+  const find = ctx?.db?.senderIdentityUserMap?.senderIdentity?.find;
+  if (typeof find !== 'function') {
+    return null;
+  }
+  const row = find(senderIdentity);
+  return readString(row?.vuluUserId);
+}
+
+function upsertSenderIdentityUserMap(ctx: any, senderIdentity: string, vuluUserId: string): void {
+  const table = ctx?.db?.senderIdentityUserMap;
+  if (!table?.senderIdentity) {
+    return;
+  }
+
+  const existing = table.senderIdentity.find(senderIdentity);
+  if (existing) {
+    table.senderIdentity.delete(senderIdentity);
+  }
+
+  table.insert({
+    senderIdentity,
+    vuluUserId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function deleteSenderIdentityUserMap(ctx: any, senderIdentity: string): void {
+  const deleteRow = ctx?.db?.senderIdentityUserMap?.senderIdentity?.delete;
+  if (typeof deleteRow !== 'function') {
+    return;
+  }
+  deleteRow(senderIdentity);
+}
+
+function rememberCallerIdentityUserMap(ctx: any, vuluUserId: string): void {
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (!senderIdentity) return;
+  const normalizedUserId = readString(vuluUserId);
+  if (!normalizedUserId) return;
+  upsertSenderIdentityUserMap(ctx, senderIdentity, normalizedUserId);
+}
+
+function upsertConnectionSessionItem(
+  ctx: any,
+  connectionId: string,
+  senderIdentity: string,
+  vuluUserId: string,
+): void {
+  const table = ctx?.db?.connectionSessionItem;
+  if (!table?.connectionId) {
+    return;
+  }
+
+  const existing = table.connectionId.find(connectionId);
+  if (existing) {
+    table.connectionId.delete(connectionId);
+  }
+
+  table.insert({
+    connectionId,
+    senderIdentity,
+    vuluUserId,
+    connectedAt: ctx.timestamp,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function deleteConnectionSessionItem(ctx: any, connectionId: string): void {
+  const deleteRow = ctx?.db?.connectionSessionItem?.connectionId?.delete;
+  if (typeof deleteRow !== 'function') {
+    return;
+  }
+  deleteRow(connectionId);
+}
+
+function hasActiveConnectionSessionForUser(ctx: any, vuluUserId: string): boolean {
+  const normalizedUserId = readString(vuluUserId);
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  for (const row of ctx.db.connectionSessionItem.iter()) {
+    if (readString(row.vuluUserId) === normalizedUserId) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveDisconnectUserId(ctx: any): string | null {
+  const mappedUserId = resolveMappedCallerUserId(ctx);
+  if (mappedUserId) return mappedUserId;
+
+  const legacyUserId = readLegacyCallerUserIdFromClaims(ctx);
+  if (legacyUserId) return legacyUserId;
+
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (senderIdentity) {
+    const senderMappedUserId = readSenderIdentityMappedUserId(ctx, senderIdentity);
+    if (senderMappedUserId) return senderMappedUserId;
+  }
+
+  if (!readCallerAuthIdentity(ctx)) {
+    return senderIdentity;
+  }
+
+  return null;
+}
+
+function registerConnectionSessionForCaller(ctx: any): void {
+  const connectionId = readCallerConnectionId(ctx);
+  if (!connectionId) {
+    return;
+  }
+
+  const senderIdentity = readCallerIdentityHex(ctx) ?? '';
+  const userId = resolveDisconnectUserId(ctx) ?? '';
+  if (userId) {
+    rememberCallerIdentityUserMap(ctx, userId);
+  }
+  upsertConnectionSessionItem(ctx, connectionId, senderIdentity, userId);
+}
+
 function callerIsDbOwnerIdentity(ctx: any): boolean {
   const callerIdentity = readIdentityString(ctx?.identity);
   return callerIdentity?.toLowerCase() === DB_OWNER_IDENTITY;
@@ -2423,11 +2552,7 @@ function applyLiveUpdate(ctx: any, payload: JsonRecord): void {
 }
 
 function applyLivePresence(ctx: any, payload: JsonRecord): void {
-  const userId = readString(payload.userId);
-  const activity = readString(payload.activity);
-  if (!userId || !activity) return;
-
-  if (activity === 'none') {
+  function clearLivePresenceAndMaybeEndLive(userId: string): void {
     const previousPresence = readLivePresenceItem(ctx, userId);
     const previousLiveId = readString(previousPresence.liveId);
     const previousActivity = readString(previousPresence.activity);
@@ -2456,6 +2581,14 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
         }
       }
     }
+  }
+
+  const userId = readString(payload.userId);
+  const activity = readString(payload.activity);
+  if (!userId || !activity) return;
+
+  if (activity === 'none') {
+    clearLivePresenceAndMaybeEndLive(userId);
     return;
   }
 
@@ -2473,6 +2606,50 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
     updatedAt: nowMs(ctx),
   });
 }
+
+function clearLivePresenceForDisconnectedCaller(ctx: any): void {
+  const connectionId = readCallerConnectionId(ctx);
+  if (connectionId) {
+    deleteConnectionSessionItem(ctx, connectionId);
+  }
+
+  const userId = resolveDisconnectUserId(ctx);
+  const senderIdentity = readCallerIdentityHex(ctx);
+
+  if (senderIdentity) {
+    deleteSenderIdentityUserMap(ctx, senderIdentity);
+  }
+
+  if (!userId) {
+    return;
+  }
+
+  if (hasActiveConnectionSessionForUser(ctx, userId)) {
+    return;
+  }
+
+  applyLivePresence(ctx, {
+    userId,
+    activity: 'none',
+    liveId: undefined,
+    liveTitle: undefined,
+    createdAt: nowMs(ctx),
+  });
+}
+
+function handleClientDisconnected(ctx: any): void {
+  clearLivePresenceForDisconnectedCaller(ctx);
+}
+
+export const onDisconnectLiveCleanup = schemaDb.clientDisconnected((ctx) => {
+  handleClientDisconnected(ctx);
+  console.info('Client Disconnected from Vulu SpacetimeDB Module');
+});
+
+export const onConnectLiveSession = schemaDb.clientConnected((ctx) => {
+  registerConnectionSessionForCaller(ctx);
+  console.info('Client Connected to Vulu SpacetimeDB Module');
+});
 
 function applyLiveInvite(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
@@ -3311,6 +3488,7 @@ export const startLive = schemaDb.reducer(
   },
   (ctx, args) => {
     assertSelf(ctx, args.ownerUserId, 'ownerUserId');
+    rememberCallerIdentityUserMap(ctx, args.ownerUserId);
     const payload: JsonRecord = {
       eventType: 'live_start',
       liveId: args.liveId,
@@ -3380,8 +3558,11 @@ export const setLivePresence = schemaDb.reducer(
     };
 
     const authorization = authorizeLivePresencePayload(ctx, payload);
+    const normalizedUserId = readString(payload.userId);
+    if (normalizedUserId) {
+      rememberCallerIdentityUserMap(ctx, normalizedUserId);
+    }
     if (!authorization.ok) {
-      const normalizedUserId = readString(payload.userId);
       if (normalizedUserId) {
         deleteLivePresenceItem(ctx, normalizedUserId);
       }

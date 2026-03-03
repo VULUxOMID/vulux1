@@ -303,6 +303,16 @@ export const spacetimedb = schema({
             updatedAt: t.timestamp(),
         }
     ),
+    connectionSessionItem: table(
+        { public: false },
+        {
+            connectionId: t.string().primaryKey(),
+            senderIdentity: t.string().index(),
+            vuluUserId: t.string().index(),
+            connectedAt: t.timestamp(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     userRole: table(
         { public: false },
         {

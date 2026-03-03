@@ -22,11 +22,3 @@ export default spacetimedb;
 export const init = spacetimedb.init((_ctx) => {
   console.info('Vulu SpacetimeDB Module Initialized');
 });
-
-export const onConnect = spacetimedb.clientConnected((_ctx) => {
-  console.info('Client Connected to Vulu SpacetimeDB Module');
-});
-
-export const onDisconnect = spacetimedb.clientDisconnected((_ctx) => {
-  console.info('Client Disconnected from Vulu SpacetimeDB Module');
-});
