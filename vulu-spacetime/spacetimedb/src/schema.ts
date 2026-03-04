@@ -25,8 +25,7 @@ type PublicLiveDiscoveryViewRow = {
 };
 
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
-const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
-    ['sub'],
+const LEGACY_CALLER_USER_ID_PREFERRED_CLAIM_PATHS = [
     ['userId'],
     ['user_id'],
     ['uid'],
@@ -40,6 +39,9 @@ const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
     ['unsafeMetadata', 'user_id'],
     ['unsafe_metadata', 'userId'],
     ['unsafe_metadata', 'user_id'],
+] as const;
+const LEGACY_CALLER_USER_ID_LAST_RESORT_CLAIM_PATHS = [
+    ['sub'],
 ] as const;
 
 function readString(value: unknown): string | null {
@@ -141,14 +143,53 @@ function readLegacyCallerUserIdFromClaims(ctx: any): string | null {
     const claims = readJwtClaims(ctx);
     if (!claims) return null;
 
-    for (const path of LEGACY_CALLER_USER_ID_CLAIM_PATHS) {
-        const candidate = readString(readClaimPath(claims, path));
-        if (candidate) {
+    const seen = new Set<string>();
+    const candidates: string[] = [];
+    const pushCandidate = (value: unknown) => {
+        const candidate = readString(value);
+        if (!candidate || seen.has(candidate)) {
+            return;
+        }
+        seen.add(candidate);
+        candidates.push(candidate);
+    };
+
+    for (const path of LEGACY_CALLER_USER_ID_PREFERRED_CLAIM_PATHS) {
+        pushCandidate(readClaimPath(claims, path));
+    }
+    for (const path of LEGACY_CALLER_USER_ID_LAST_RESORT_CLAIM_PATHS) {
+        pushCandidate(readClaimPath(claims, path));
+    }
+
+    const usersFind = ctx?.db?.users?.vuluUserId?.find;
+    const accountStateFind = ctx?.db?.accountStateItem?.userId?.find;
+    const userIdentityIter = ctx?.db?.userIdentity?.iter;
+
+    const matchesKnownRows = (candidate: string): boolean => {
+        if (typeof usersFind === 'function' && usersFind(candidate)) {
+            return true;
+        }
+        if (typeof accountStateFind === 'function' && accountStateFind(candidate)) {
+            return true;
+        }
+        if (typeof userIdentityIter === 'function') {
+            for (const row of userIdentityIter()) {
+                const vuluUserId = readString(row?.vuluUserId ?? row?.vulu_user_id);
+                if (vuluUserId === candidate) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    for (const candidate of candidates) {
+        if (matchesKnownRows(candidate)) {
             return candidate;
         }
     }
 
-    return null;
+    return candidates[0] ?? null;
 }
 
 function readCallerAuthIdentity(ctx: any): { issuer: string; subject: string } | null {
@@ -213,8 +254,20 @@ function findMappedCallerUserIdFromJwtIdentity(ctx: any): string | null {
     return null;
 }
 
+function findMappedCallerUserIdBySenderIdentity(ctx: any): string | null {
+    const senderIdentity = readIdentityString(ctx?.sender);
+    const find = ctx?.db?.senderIdentityUserMap?.senderIdentity?.find;
+    if (!senderIdentity || typeof find !== 'function') {
+        return null;
+    }
+
+    const row = find(senderIdentity);
+    return readString(row?.vuluUserId ?? row?.vulu_user_id);
+}
+
 function findMappedCallerUserId(ctx: any): string | null {
     return (
+        findMappedCallerUserIdBySenderIdentity(ctx) ??
         findMappedCallerUserIdFromJwtIdentity(ctx) ??
         readLegacyCallerUserIdFromClaims(ctx)
     );
