@@ -60,6 +60,8 @@ const defaultProfile: UserProfile = {
 };
 const PROFILE_PERSIST_RETRY_MS = 2_000;
 const PROFILE_LOCAL_CACHE_KEY_PREFIX = '@vulu.profile.snapshot:';
+const PROFILE_DIAGNOSTIC_THROTTLE_MS = 15_000;
+const profileDiagnosticLastLogAt: Record<string, number> = {};
 
 const UserProfileContext = createContext<UserProfileContextType | undefined>(undefined);
 
@@ -186,6 +188,22 @@ function describeError(error: unknown): string {
   } catch {
     return 'Unknown profile persistence error';
   }
+}
+
+// Logging policy: diagnostics stay dev-only, throttled, and without user identifiers.
+function warnProfileDiagnosticThrottled(key: string, details?: Record<string, unknown>): void {
+  if (!__DEV__) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastLoggedAt = profileDiagnosticLastLogAt[key] ?? 0;
+  if (now - lastLoggedAt < PROFILE_DIAGNOSTIC_THROTTLE_MS) {
+    return;
+  }
+  profileDiagnosticLastLogAt[key] = now;
+
+  console.warn(`[profile][diag] ${key}`, details);
 }
 
 type AccountStateProfileSnapshot = {
@@ -479,9 +497,8 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       buildProfileLocalCacheKey(userId),
       toCachedProfilePayload(profile, updatedAtMs),
     ).catch((error) => {
-      if (__DEV__) {
-        console.warn('[profile] Failed to cache profile locally', error);
-      }
+      void error;
+      warnProfileDiagnosticThrottled('cache_profile_locally_failed');
     });
   }, []);
 
@@ -545,11 +562,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
               : 'SpacetimeDB reducers are unavailable.';
           throw new Error(fallbackMessage);
         }
-        if (reducerErrors.length > 0 && __DEV__) {
-          console.warn('[profile] Partial profile persistence failure', reducerErrors);
-        }
-        if (__DEV__) {
-          console.log('[profile] Persisted profile snapshot to SpacetimeDB');
+        if (reducerErrors.length > 0) {
+          warnProfileDiagnosticThrottled('partial_profile_persistence_failure', {
+            reducerErrorCount: reducerErrors.length,
+          });
         }
 
         if (
@@ -559,13 +575,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
           pendingPersistRef.current = null;
         }
       } catch (error) {
-        if (__DEV__) {
-          console.warn('[profile] Failed to persist profile via SpacetimeDB', error);
-        }
+        void error;
+        warnProfileDiagnosticThrottled('persist_profile_via_spacetimedb_failed');
         if (!persistRetryTimerRef.current) {
-          if (__DEV__) {
-            console.warn('[profile] Scheduling profile persist retry');
-          }
+          warnProfileDiagnosticThrottled('persist_profile_retry_scheduled');
           persistRetryTimerRef.current = setTimeout(() => {
             persistRetryTimerRef.current = null;
             flushPendingPersistRef.current();
@@ -602,14 +615,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     const updatedAtMs = Date.now();
     latestProfileVersionMsRef.current = Math.max(latestProfileVersionMsRef.current, updatedAtMs);
     persistProfileLocally(userId, profile, updatedAtMs);
-    if (__DEV__) {
-      console.log('[profile] queue persist', {
-        userId,
-        updatedAtMs,
-        name: profile.name,
-        status: profile.presenceStatus,
-      });
-    }
 
     pendingPersistRef.current = {
       userId,
@@ -709,12 +714,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         latestProfileVersionMsRef.current > 0 &&
         nextUpdatedAtMs < latestProfileVersionMsRef.current
       ) {
-        if (__DEV__) {
-          console.log('[profile] skip stale hydrate', {
-            backendUpdatedAtMs: nextUpdatedAtMs,
-            localUpdatedAtMs: latestProfileVersionMsRef.current,
-          });
-        }
         return;
       }
       if (localMutationVersionRef.current !== hydrateStartMutationVersion) {
@@ -724,13 +723,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       setUserProfile((prev) => {
         const merged = mergeUserProfile(prev, profilePatch);
         userProfileRef.current = merged;
-        if (__DEV__) {
-          console.log('[profile] applied hydrate', {
-            updatedAtMs: nextUpdatedAtMs,
-            name: merged.name,
-            status: merged.presenceStatus,
-          });
-        }
         if (nextUpdatedAtMs > 0) {
           latestProfileVersionMsRef.current = Math.max(
             latestProfileVersionMsRef.current,
