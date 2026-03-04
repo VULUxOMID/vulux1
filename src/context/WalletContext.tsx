@@ -270,9 +270,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [isAuthLoaded, isSignedIn, userId, walletRefreshNonce]);
 
   const warnWalletMutationBlocked = useCallback((action: string) => {
-    if (__DEV__) {
-      console.warn(`[wallet] blocked client-side mutation: ${action}`);
-    }
+    warnWalletDiagnosticThrottled(`blocked_client_side_mutation:${action}`);
   }, []);
 
   const addGems = useCallback((amount: number) => {
@@ -364,9 +362,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 export function useWallet() {
   const context = useContext(WalletContext);
   if (!context) {
-    if (__DEV__) {
-      console.warn('useWallet must be used within a WalletProvider. Using default values.');
-    }
+    warnWalletDiagnosticThrottled('wallet_context_missing_provider');
     // Return safe default values instead of throwing
     return {
       cash: 0,
@@ -375,23 +371,17 @@ export function useWallet() {
       withdrawalHistory: [],
       balance: { gems: 0, cash: 0 },
       addCash: () => {
-        if (__DEV__) {
-          console.warn('addCash called outside WalletProvider');
-        }
+        warnWalletDiagnosticThrottled('wallet_add_cash_outside_provider');
       },
       addGems: () => {
-        if (__DEV__) {
-          console.warn('addGems called outside WalletProvider');
-        }
+        warnWalletDiagnosticThrottled('wallet_add_gems_outside_provider');
       },
       spendCash: () => false,
       spendGems: () => false,
       exchangeGemsForCash: () => false,
       exchangeCashForGems: () => false,
       addFuel: () => {
-        if (__DEV__) {
-          console.warn('addFuel called outside WalletProvider');
-        }
+        warnWalletDiagnosticThrottled('wallet_add_fuel_outside_provider');
       },
       consumeFuel: () => false,
       requestWithdrawal: () => false,

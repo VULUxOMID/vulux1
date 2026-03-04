@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutAnimation, Platform, StyleSheet, UIManager, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
@@ -29,6 +29,7 @@ if (
 }
 
 type TabOption = 'wallet' | 'music';
+const PROFILE_DIAGNOSTIC_THROTTLE_MS = 15_000;
 
 export default function ProfileScreen() {
   const isFocused = useIsFocused();
@@ -46,6 +47,7 @@ export default function ProfileScreen() {
   const [isRankPublic, setIsRankPublic] = useState(true);
   const [activeTab, setActiveTab] = useState<TabOption>('wallet');
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const socialStatusPersistWarnAtRef = useRef(0);
 
   useEffect(() => {
     if (!queriesEnabled) return;
@@ -132,7 +134,12 @@ export default function ProfileScreen() {
         })
         .catch((error) => {
           if (__DEV__) {
-            console.warn('[profile] Failed to persist social status', error);
+            void error;
+            const now = Date.now();
+            if (now - socialStatusPersistWarnAtRef.current >= PROFILE_DIAGNOSTIC_THROTTLE_MS) {
+              socialStatusPersistWarnAtRef.current = now;
+              console.warn('[profile][diag] persist_social_status_failed');
+            }
           }
         });
     },
