@@ -998,9 +998,11 @@ function authorizeLiveInviteResponsePayload(ctx: any, payload: JsonRecord): void
 
   const normalizedTargetUserId = targetUserId ?? legacyCallerUserId ?? callerUserId;
   const live = assertLiveParticipationAllowed(ctx, liveId, normalizedTargetUserId);
-  const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
-  if (!invitedUserIds.has(normalizedTargetUserId) && !isLiveHostUser(live, normalizedTargetUserId)) {
-    unauthorized('No active invite for this user.');
+  const pendingCoHostInviteUserIds = new Set(
+    normalizePendingCoHostInviteUserIds(live.pendingCoHostInviteUserIds),
+  );
+  if (!pendingCoHostInviteUserIds.has(normalizedTargetUserId)) {
+    unauthorized('No pending co-host invite for this user.');
   }
 
   payload.liveId = liveId;
@@ -1871,6 +1873,17 @@ function normalizeInvitedUserIds(value: unknown): string[] {
   return Array.from(result);
 }
 
+function normalizePendingCoHostInviteUserIds(value: unknown): string[] {
+  if (!isArray(value)) return [];
+
+  const result = new Set<string>();
+  value.forEach((entry) => {
+    const userId = readString(entry);
+    if (userId) result.add(userId);
+  });
+  return Array.from(result);
+}
+
 function updateKnownLiveUsersFromHosts(ctx: any, hosts: JsonRecord[]): void {
   hosts.forEach((host) => {
     const userId = readString(host.id);
@@ -2360,6 +2373,9 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
   const hosts = normalizeHostList(payload.hosts);
   const bannedUserIds = normalizeBannedUserIds(payload.bannedUserIds);
   const invitedUserIds = normalizeInvitedUserIds(payload.invitedUserIds);
+  const pendingCoHostInviteUserIds = normalizePendingCoHostInviteUserIds(
+    payload.pendingCoHostInviteUserIds,
+  );
 
   const nextLiveItem: JsonRecord = {
     id: liveId,
@@ -2371,6 +2387,7 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
     images: hosts.map((host) => readString(host.avatar)).filter((value): value is string => Boolean(value)),
     bannedUserIds,
     invitedUserIds,
+    pendingCoHostInviteUserIds,
     boosted: false,
     totalBoosts: 0,
     boostRank: null,
@@ -2444,6 +2461,10 @@ function applyLiveUpdate(ctx: any, payload: JsonRecord): void {
       payload.invitedUserIds !== undefined
         ? normalizeInvitedUserIds(payload.invitedUserIds)
         : normalizeInvitedUserIds(existing.invitedUserIds),
+    pendingCoHostInviteUserIds:
+      payload.pendingCoHostInviteUserIds !== undefined
+        ? normalizePendingCoHostInviteUserIds(payload.pendingCoHostInviteUserIds)
+        : normalizePendingCoHostInviteUserIds(existing.pendingCoHostInviteUserIds),
     updatedAt: nowMs(ctx),
   };
 
@@ -2517,10 +2538,15 @@ function applyLiveInvite(ctx: any, payload: JsonRecord): void {
 
   const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
   invitedUserIds.add(targetUserId);
+  const pendingCoHostInviteUserIds = new Set(
+    normalizePendingCoHostInviteUserIds(live.pendingCoHostInviteUserIds),
+  );
+  pendingCoHostInviteUserIds.add(targetUserId);
 
   writeLiveItem(ctx, liveId, {
     ...live,
     invitedUserIds: Array.from(invitedUserIds),
+    pendingCoHostInviteUserIds: Array.from(pendingCoHostInviteUserIds),
     updatedAt: nowMs(ctx),
   });
 }
@@ -2541,6 +2567,14 @@ function applyLiveInviteResponse(ctx: any, payload: JsonRecord): void {
 
   const live = readLiveItem(ctx, liveId);
   if (Object.keys(live).length === 0 || isLiveEnded(live)) return;
+
+  const pendingCoHostInviteUserIds = new Set(
+    normalizePendingCoHostInviteUserIds(live.pendingCoHostInviteUserIds),
+  );
+  if (!pendingCoHostInviteUserIds.has(targetUserId)) {
+    return;
+  }
+  pendingCoHostInviteUserIds.delete(targetUserId);
 
   const invitedUserIds = new Set(normalizeInvitedUserIds(live.invitedUserIds));
   invitedUserIds.add(targetUserId);
@@ -2577,6 +2611,7 @@ function applyLiveInviteResponse(ctx: any, payload: JsonRecord): void {
       .filter((value): value is string => Boolean(value)),
     viewers: Math.max(toNonNegativeInt(live.viewers), hosts.length),
     invitedUserIds: Array.from(invitedUserIds),
+    pendingCoHostInviteUserIds: Array.from(pendingCoHostInviteUserIds),
     updatedAt: nowMs(ctx),
   };
 
@@ -2594,6 +2629,9 @@ function applyLiveBan(ctx: any, payload: JsonRecord): void {
 
   const bannedUserIds = new Set(normalizeBannedUserIds(live.bannedUserIds));
   bannedUserIds.add(targetUserId);
+  const pendingCoHostInviteUserIds = normalizePendingCoHostInviteUserIds(
+    live.pendingCoHostInviteUserIds,
+  ).filter((userId) => userId !== targetUserId);
 
   const hosts = normalizeHostList(live.hosts).filter((host) => readString(host.id) !== targetUserId);
 
@@ -2602,6 +2640,7 @@ function applyLiveBan(ctx: any, payload: JsonRecord): void {
     hosts,
     images: hosts.map((host) => readString(host.avatar)).filter((value): value is string => Boolean(value)),
     bannedUserIds: Array.from(bannedUserIds),
+    pendingCoHostInviteUserIds,
     viewers: Math.max(0, toNonNegativeInt(live.viewers) - 1),
     updatedAt: nowMs(ctx),
   });
@@ -2641,6 +2680,7 @@ function applyLiveEnd(ctx: any, payload: JsonRecord): void {
     hosts: [],
     images: [],
     viewers: 0,
+    pendingCoHostInviteUserIds: [],
     endedAt: nowMs(ctx),
     updatedAt: nowMs(ctx),
   });
