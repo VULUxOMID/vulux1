@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, Pressable, StyleSheet, View, Modal, TouchableWithoutFeedback } from 'react-native';
+import { Animated, Dimensions, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../components';
 import { colors, radius, spacing } from '../../theme';
@@ -110,7 +110,6 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
         />
         
         <Animated.View
-          pointerEvents="auto"
           style={[
             styles.menu,
             {
@@ -119,6 +118,7 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
               width: MENU_W,
               opacity: anim,
               transform: [{ scale }],
+              pointerEvents: 'auto',
             },
           ]}
         >
@@ -169,10 +169,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.35)' }
+      : {
+          shadowColor: '#000',
+          shadowOpacity: 0.35,
+          shadowRadius: 20,
+          shadowOffset: { width: 0, height: 10 },
+        }),
     elevation: 12,
     zIndex: 100,
   },

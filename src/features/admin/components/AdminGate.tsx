@@ -10,13 +10,16 @@ import {
     ActivityIndicator,
     ScrollView,
     Keyboard,
-    TouchableWithoutFeedback,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as SecureStore from 'expo-secure-store';
 import QRCode from 'react-native-qrcode-svg';
+import {
+    secureStoreDeleteItem,
+    secureStoreGetItem,
+    secureStoreSetItem,
+} from '../../../utils/secureStoreCompat';
 
 import * as TOTP from '../../../utils/totp';
 
@@ -57,7 +60,7 @@ export function AdminGate({ children }: AdminGateProps) {
     useEffect(() => {
         (async () => {
             try {
-                const storedSecret = await SecureStore.getItemAsync(TOTP_SECRET_KEY);
+                const storedSecret = await secureStoreGetItem(TOTP_SECRET_KEY);
                 if (!storedSecret) {
                     // Generate new secret for first-time setup
                     const newSecret = TOTP.generateSecret();
@@ -92,7 +95,7 @@ export function AdminGate({ children }: AdminGateProps) {
         const isValid = TOTP.verifyTOTP(totpCode, setupSecret);
 
         if (isValid) {
-            await SecureStore.setItemAsync(TOTP_SECRET_KEY, setupSecret);
+            await secureStoreSetItem(TOTP_SECRET_KEY, setupSecret);
 
             auditLogger.log({
                 adminId: 'current-admin',
@@ -124,7 +127,7 @@ export function AdminGate({ children }: AdminGateProps) {
         }
 
         try {
-            const storedSecret = await SecureStore.getItemAsync(TOTP_SECRET_KEY);
+            const storedSecret = await secureStoreGetItem(TOTP_SECRET_KEY);
             if (!storedSecret) {
                 setErrorMessage('Configuration error. Please restart the app.');
                 return;
@@ -165,7 +168,7 @@ export function AdminGate({ children }: AdminGateProps) {
     };
 
     const handleResetSetup = async () => {
-        await SecureStore.deleteItemAsync(TOTP_SECRET_KEY);
+        await secureStoreDeleteItem(TOTP_SECRET_KEY);
         setSetupSecret('');
         setSetupUri('');
         setIsSettingUp(true);
@@ -228,7 +231,7 @@ export function AdminGate({ children }: AdminGateProps) {
                 style={styles.container}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             >
-                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <Pressable onPress={Keyboard.dismiss} style={styles.dismissKeyboardLayer}>
                     <ScrollView
                         contentContainerStyle={[styles.authContent, { paddingTop: insets.top + 20 }]}
                         keyboardShouldPersistTaps="handled"
@@ -280,7 +283,7 @@ export function AdminGate({ children }: AdminGateProps) {
                             <Text style={styles.cancelText}>Cancel & Go Back</Text>
                         </Pressable>
                     </ScrollView>
-                </TouchableWithoutFeedback>
+                </Pressable>
             </KeyboardAvoidingView>
         );
     }
@@ -291,7 +294,7 @@ export function AdminGate({ children }: AdminGateProps) {
             style={styles.container}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <Pressable onPress={Keyboard.dismiss} style={styles.dismissKeyboardLayer}>
                 <ScrollView
                     contentContainerStyle={[styles.authContent, { paddingTop: insets.top + 40 }]}
                     keyboardShouldPersistTaps="handled"
@@ -342,7 +345,7 @@ export function AdminGate({ children }: AdminGateProps) {
                         <Text style={styles.resetText}>Reset 2FA Setup (Dev)</Text>
                     </Pressable>
                 </ScrollView>
-            </TouchableWithoutFeedback>
+            </Pressable>
         </KeyboardAvoidingView>
     );
 }
@@ -353,6 +356,9 @@ const styles = StyleSheet.create({
         backgroundColor: adminTokens.colors.pageBg,
     },
     authedContainer: {
+        flex: 1,
+    },
+    dismissKeyboardLayer: {
         flex: 1,
     },
     centeredContent: {
