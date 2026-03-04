@@ -1756,3 +1756,41 @@ export function logSpacetimeDebugSnapshot(label = 'manual'): void {
 
   console.log('[SpacetimeDB][debug_snapshot]', snapshot);
 }
+
+function normalizeSpacetimeViewName(viewName: string): string {
+  return viewName.trim().toLowerCase();
+}
+
+function subscriptionIncludesView(
+  subscription: Pick<ActiveScopedSubscription, 'views'> | Pick<ScopedSubscriptionSpec, 'views'> | null,
+  viewName: string,
+): boolean {
+  if (!subscription) {
+    return false;
+  }
+  const normalizedViewName = normalizeSpacetimeViewName(viewName);
+  if (!normalizedViewName) {
+    return false;
+  }
+  return subscription.views.some(
+    (candidateViewName) =>
+      normalizeSpacetimeViewName(candidateViewName) === normalizedViewName,
+  );
+}
+
+export function isSpacetimeViewRequested(viewName: string): boolean {
+  return (
+    subscriptionIncludesView(desiredScopedSubscription, viewName) ||
+    subscriptionIncludesView(activeScopedSubscription, viewName)
+  );
+}
+
+export function isSpacetimeViewActive(viewName: string): boolean {
+  if (!activeScopedSubscription) {
+    return false;
+  }
+  if (!isSubscriptionHandleActive(activeScopedSubscription.handle)) {
+    return false;
+  }
+  return subscriptionIncludesView(activeScopedSubscription, viewName);
+}

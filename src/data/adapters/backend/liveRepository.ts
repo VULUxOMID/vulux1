@@ -1,7 +1,11 @@
 import type { LiveRepository } from '../../contracts';
 import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
-import { spacetimeDb } from '../../../lib/spacetime';
+import {
+  isSpacetimeViewActive,
+  isSpacetimeViewRequested,
+  spacetimeDb,
+} from '../../../lib/spacetime';
 import type { LiveItem } from '../../../features/home/LiveSection';
 import type { LiveUser } from '../../../features/liveroom/types';
 
@@ -296,9 +300,13 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
   return {
     listLives(request) {
       const spacetimeLives = getSpacetimeLives();
+      const liveDiscoveryRequested = isSpacetimeViewRequested('public_live_discovery');
+      const liveDiscoveryActive = isSpacetimeViewActive('public_live_discovery');
+      const shouldUseSnapshotFallback =
+        spacetimeLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
       const byId = new Map<string, ExtendedLiveItem>();
 
-      if (spacetimeLives.length > 0) {
+      if (!shouldUseSnapshotFallback) {
         for (const live of spacetimeLives) {
           byId.set(live.id, live);
         }

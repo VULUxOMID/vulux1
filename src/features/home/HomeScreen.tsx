@@ -29,6 +29,7 @@ import {
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
 import { subscribeBootstrap, subscribeGlobalChat } from '../../lib/spacetime';
+import { useLive } from '../../context/LiveContext';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -43,14 +44,58 @@ export default function HomeScreen() {
   const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { userProfile } = useUserProfile();
+  const { activeLive, liveRoom, isHost, isLiveEnding, liveState } = useLive();
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
   const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
   const queriesEnabled =
     isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
-  const lives = useMemo<LiveItem[]>(
+  const repositoryLives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 100 }) : []),
     [liveRepo, queriesEnabled],
   );
+  const hostActiveLive = useMemo<LiveItem | null>(() => {
+    if (!queriesEnabled || !isHost || isLiveEnding || liveState === 'LIVE_CLOSED') {
+      return null;
+    }
+
+    if (activeLive) {
+      return activeLive;
+    }
+
+    if (!liveRoom) {
+      return null;
+    }
+
+    const hostAvatar = liveRoom.hostUser.avatarUrl ?? '';
+    return {
+      id: liveRoom.id,
+      title: liveRoom.title,
+      viewers: Math.max(1, liveRoom.watchers.length + liveRoom.streamers.length),
+      boosted: false,
+      images: hostAvatar ? [hostAvatar] : [],
+      hosts: [
+        {
+          id: liveRoom.hostUser.id,
+          username: liveRoom.hostUser.username,
+          name: liveRoom.hostUser.name,
+          age: liveRoom.hostUser.age,
+          country: liveRoom.hostUser.country,
+          bio: liveRoom.hostUser.bio,
+          verified: liveRoom.hostUser.verified,
+          avatar: hostAvatar,
+        },
+      ],
+    };
+  }, [activeLive, isHost, isLiveEnding, liveRoom, liveState, queriesEnabled]);
+  const lives = useMemo<LiveItem[]>(() => {
+    if (!hostActiveLive) {
+      return repositoryLives;
+    }
+    if (repositoryLives.some((live) => live.id === hostActiveLive.id)) {
+      return repositoryLives;
+    }
+    return [hostActiveLive, ...repositoryLives];
+  }, [hostActiveLive, repositoryLives]);
   const repositoryGlobalMessages = useMemo(
     () => (queriesEnabled ? messagesRepo.listGlobalMessages({ limit: 180 }) : []),
     [messagesRepo, queriesEnabled],
