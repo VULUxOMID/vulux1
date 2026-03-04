@@ -1,0 +1,11 @@
+frontend_api=modern-pangolin-27.clerk.accounts.dev
+{
+  "status": "needs_identifier",
+  "client_trust_state": "pending",
+  "supported_first_factors": [
+    {
+      "strategy": "ticket"
+    }
+  ],
+  "supported_second_factors": null
+}

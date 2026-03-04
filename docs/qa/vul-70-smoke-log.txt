@@ -1,0 +1,10 @@
+[1] Open /login and authenticate
+[2] Second-factor prompt visible: false
+[3] Home auth debug: auth u:3723af0a ss:1/1 ev:1 nv:0 st:ready
+[4] Navigate to /go-live
+[5] /go-live auth debug: auth u:3723af0a ss:1/1 ev:1 nv:0 st:ready
+[6] Navigate to /live
+[7] /live auth debug: auth u:3723af0a ss:1/1 ev:1 nv:0 st:ready
+[8] Go To Home CTA not present; navigate to / directly
+[9] Home return auth debug: auth u:3723af0a ss:1/1 ev:1 nv:0 st:ready
+[10] Smoke complete
