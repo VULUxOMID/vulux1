@@ -19,7 +19,6 @@ import {
 } from 'react-native';
 import { Redirect, useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as ScreenOrientation from 'expo-screen-orientation';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../auth/spacetimeSession';
 import { useIsFocused } from '@react-navigation/native';
@@ -59,6 +58,11 @@ import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { subscribeLive } from '../../lib/spacetime';
 import { publishLiveInvite } from '../../utils/spacetimePersistence';
+import {
+  blurActiveWebElement,
+  lockPortraitOrientationSafely,
+  unlockOrientationSafely,
+} from '../../utils/webRuntimeCompat';
 import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -151,11 +155,11 @@ export default function LiveScreen() {
 
   // Lock orientation to portrait when screen mounts
   useEffect(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    void lockPortraitOrientationSafely();
     
     return () => {
       // Unlock when leaving the screen
-      ScreenOrientation.unlockAsync();
+      void unlockOrientationSafely();
     };
   }, []);
 
@@ -174,6 +178,10 @@ export default function LiveScreen() {
   // Track profile open state in ref for pan responder
   useEffect(() => {
     isProfileOpen.current = !!selectedUser;
+    if (selectedUser) {
+      Keyboard.dismiss();
+      blurActiveWebElement();
+    }
   }, [selectedUser]);
 
   // Keyboard listeners with animated value for smooth transitions
@@ -303,7 +311,14 @@ export default function LiveScreen() {
   }, [params.id, activeLive, liveRoom, router]);
 
   // UI State — single sheet controller replaces ~10 booleans
-  const [activeSheet, setActiveSheet] = useState<ActiveSheet>(null);
+  const [activeSheet, setActiveSheetState] = useState<ActiveSheet>(null);
+  const setActiveSheet = useCallback((nextSheet: ActiveSheet) => {
+    if (nextSheet !== null) {
+      Keyboard.dismiss();
+      blurActiveWebElement();
+    }
+    setActiveSheetState(nextSheet);
+  }, []);
   const [boostSheetTab, setBoostSheetTab] = useState<'boost' | 'league'>('boost');
   const [hostOptionsTab, setHostOptionsTab] = useState<HostOptionsTab>('settings');
   const [inviteQuery, setInviteQuery] = useState('');

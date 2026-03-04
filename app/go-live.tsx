@@ -6,6 +6,7 @@ import {
   Pressable,
   Switch,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ScrollView,
   ActivityIndicator,
@@ -14,11 +15,15 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as ScreenOrientation from 'expo-screen-orientation';
 
 import { AppText } from '../src/components';
 import { colors, radius, spacing } from '../src/theme';
 import { hapticTap } from '../src/utils/haptics';
+import {
+  blurActiveWebElement,
+  lockPortraitOrientationSafely,
+  unlockOrientationSafely,
+} from '../src/utils/webRuntimeCompat';
 import { useWallet } from '../src/context/WalletContext';
 import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
@@ -59,17 +64,23 @@ export default function GoLiveScreen() {
 
   // Lock orientation to portrait
   useEffect(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    void lockPortraitOrientationSafely();
     return () => {
-      ScreenOrientation.unlockAsync();
+      void unlockOrientationSafely();
     };
   }, []);
+
+  const openFuelSheet = () => {
+    Keyboard.dismiss();
+    blurActiveWebElement();
+    setShowFuelSheet(true);
+  };
 
   const handleStartLive = async () => {
     if (pendingStart) return;
     hapticTap();
     if (isOutOfFuel) {
-      setShowFuelSheet(true);
+      openFuelSheet();
       return;
     }
     if (!hasValidTitle) {
@@ -237,7 +248,7 @@ export default function GoLiveScreen() {
               onPress={() => {
                 if (pendingStart) return;
                 hapticTap();
-                setShowFuelSheet(true);
+                openFuelSheet();
               }}
               disabled={pendingStart}
             >
