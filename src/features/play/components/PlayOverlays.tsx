@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Polyline, Svg } from 'react-native-svg';
@@ -206,10 +206,14 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.playNeonGreen,
     alignItems: 'center',
-    shadowColor: colors.playNeonGreen,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 30,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: `0px 0px 30px ${colors.playNeonGreen}` }
+      : {
+          shadowColor: colors.playNeonGreen,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.5,
+          shadowRadius: 30,
+        }),
     width: '100%',
     maxWidth: 320,
   },
@@ -217,14 +221,22 @@ const styles = StyleSheet.create({
     color: colors.textOnDark,
     textAlign: 'center',
     marginBottom: spacing.md,
-    textShadowColor: colors.playNeonPink,
-    textShadowRadius: 10,
+    ...(Platform.OS === 'web'
+      ? { textShadow: `0px 0px 10px ${colors.playNeonPink}` }
+      : {
+          textShadowColor: colors.playNeonPink,
+          textShadowRadius: 10,
+        }),
   },
   overlayAmount: {
     color: colors.playNeonGreen,
     marginBottom: spacing.sm,
-    textShadowColor: colors.playNeonGreen,
-    textShadowRadius: 20,
+    ...(Platform.OS === 'web'
+      ? { textShadow: `0px 0px 20px ${colors.playNeonGreen}` }
+      : {
+          textShadowColor: colors.playNeonGreen,
+          textShadowRadius: 20,
+        }),
   },
   overlayMessage: {
     textAlign: 'center',
@@ -235,9 +247,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xxl,
     borderRadius: radius.full,
-    shadowColor: colors.playNeonGreen,
-    shadowOpacity: 0.5,
-    shadowRadius: 15,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: `0px 0px 15px ${colors.playNeonGreen}` }
+      : {
+          shadowColor: colors.playNeonGreen,
+          shadowOpacity: 0.5,
+          shadowRadius: 15,
+        }),
   },
   overlayButtonText: {
     color: colors.textOnLight,
@@ -346,9 +362,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: spacing.lg,
     marginBottom: spacing.md,
-    shadowColor: colors.playNeonGreen,
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: `0px 0px 10px ${colors.playNeonGreen}` }
+      : {
+          shadowColor: colors.playNeonGreen,
+          shadowOpacity: 0.3,
+          shadowRadius: 10,
+        }),
   },
   paytableOkText: {
     color: colors.textOnLight,

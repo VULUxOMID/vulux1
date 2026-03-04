@@ -10,7 +10,6 @@ import {
     ActivityIndicator,
     ScrollView,
     Keyboard,
-    TouchableWithoutFeedback,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -232,7 +231,7 @@ export function AdminGate({ children }: AdminGateProps) {
                 style={styles.container}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             >
-                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <Pressable onPress={Keyboard.dismiss} style={styles.dismissKeyboardLayer}>
                     <ScrollView
                         contentContainerStyle={[styles.authContent, { paddingTop: insets.top + 20 }]}
                         keyboardShouldPersistTaps="handled"
@@ -284,7 +283,7 @@ export function AdminGate({ children }: AdminGateProps) {
                             <Text style={styles.cancelText}>Cancel & Go Back</Text>
                         </Pressable>
                     </ScrollView>
-                </TouchableWithoutFeedback>
+                </Pressable>
             </KeyboardAvoidingView>
         );
     }
@@ -295,7 +294,7 @@ export function AdminGate({ children }: AdminGateProps) {
             style={styles.container}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <Pressable onPress={Keyboard.dismiss} style={styles.dismissKeyboardLayer}>
                 <ScrollView
                     contentContainerStyle={[styles.authContent, { paddingTop: insets.top + 40 }]}
                     keyboardShouldPersistTaps="handled"
@@ -346,7 +345,7 @@ export function AdminGate({ children }: AdminGateProps) {
                         <Text style={styles.resetText}>Reset 2FA Setup (Dev)</Text>
                     </Pressable>
                 </ScrollView>
-            </TouchableWithoutFeedback>
+            </Pressable>
         </KeyboardAvoidingView>
     );
 }
@@ -357,6 +356,9 @@ const styles = StyleSheet.create({
         backgroundColor: adminTokens.colors.pageBg,
     },
     authedContainer: {
+        flex: 1,
+    },
+    dismissKeyboardLayer: {
         flex: 1,
     },
     centeredContent: {
