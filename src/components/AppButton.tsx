@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleProp, StyleSheet, Text, ViewStyle } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleProp, StyleSheet, Text, ViewStyle } from 'react-native';
 
 import { colors, radius, spacing, typography } from '../theme';
 
@@ -75,6 +75,18 @@ export function AppButton({
   const palette = buttonColors[variant];
   const isDisabled = disabled || loading;
   const hasGlow = !!palette.glow && !isDisabled;
+  const glowStyle = hasGlow
+    ? Platform.select<ViewStyle>({
+        web: {
+          boxShadow: `0px 0px 8px ${palette.glow}, 0px 4px 10px rgba(0, 0, 0, 0.35)`,
+        },
+        default: {
+          shadowColor: palette.glow,
+          shadowOpacity: 0.5,
+          shadowRadius: 8,
+        },
+      })
+    : null;
 
   const sizeStyles = {
     small: {
@@ -113,7 +125,7 @@ export function AppButton({
           paddingVertical: currentSize.paddingVertical,
           paddingHorizontal: currentSize.paddingHorizontal,
         },
-        hasGlow && { shadowColor: palette.glow, shadowOpacity: 0.5, shadowRadius: 8 },
+        glowStyle,
         isDisabled && styles.disabled,
         style,
       ]}
@@ -146,10 +158,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     borderRadius: radius.md, // Updated radius
     borderWidth: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0px 4px 10px rgba(0, 0, 0, 0.35)' }
+      : {
+          shadowColor: '#000',
+          shadowOpacity: 0.35,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 4 },
+        }),
     elevation: 4,
   },
   icon: {
@@ -163,4 +179,3 @@ const styles = StyleSheet.create({
     fontWeight: '600', // Still keep it a bit bolder for buttons
   },
 });
-

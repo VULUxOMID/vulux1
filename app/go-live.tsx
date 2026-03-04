@@ -380,10 +380,17 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.accentPrimary,
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 4px 10px ${colors.accentPrimary}4D`,
+      },
+      default: {
+        shadowColor: colors.accentPrimary,
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+      },
+    }),
   },
   description: {
     textAlign: 'center',
@@ -533,10 +540,17 @@ const styles = StyleSheet.create({
   startButton: {
     borderRadius: radius.xl,
     overflow: 'hidden',
-    shadowColor: '#3B82F6',
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 4px 12px rgba(59, 130, 246, 0.4)',
+      },
+      default: {
+        shadowColor: '#3B82F6',
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+      },
+    }),
   },
   startButtonDisabled: {
     opacity: 0.55,

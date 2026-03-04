@@ -9,7 +9,6 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
   Keyboard,
-  TouchableWithoutFeedback,
   Modal,
   Pressable,
   Image,
@@ -966,23 +965,30 @@ export default function LiveScreen() {
             borderRadius: isMinimizing ? minimizeBorderRadiusAnim : borderRadius,
             borderWidth: isMinimizing ? minimizeBorderWidth : 0,
             borderColor: colors.borderSubtle,
-            shadowColor: colors.textOnLight,
-            shadowOpacity: isMinimizing ? minimizeShadowOpacity : 0,
-            shadowRadius: isMinimizing ? minimizeShadowRadius : 0,
-            shadowOffset: { width: 0, height: 6 },
+            ...(Platform.OS === 'web'
+              ? {
+                  boxShadow: isMinimizing
+                    ? `0px 6px 16px rgba(255, 255, 255, 0.35)`
+                    : 'none',
+                }
+              : {
+                  shadowColor: colors.textOnLight,
+                  shadowOpacity: isMinimizing ? minimizeShadowOpacity : 0,
+                  shadowRadius: isMinimizing ? minimizeShadowRadius : 0,
+                  shadowOffset: { width: 0, height: 6 },
+                }),
             elevation: isMinimizing ? minimizeElevation : 0,
           },
         ]}
         {...panResponder.panHandlers}
       >
-        <View style={styles.fullScreen} pointerEvents="box-none">
+        <View style={[styles.fullScreen, styles.pointerEventsBoxNone]}>
           {/* Drag Handle Area (visual-only overlay) */}
-          <View style={styles.dragHandleArea} pointerEvents="none" />
+          <View style={[styles.dragHandleArea, styles.pointerEventsNone]} />
           
           {/* Top Bar - Fixed at top */}
           <Animated.View
-            style={[styles.topBarWrapper, { opacity: uiOpacity }]}
-            pointerEvents="box-none"
+            style={[styles.topBarWrapper, { opacity: uiOpacity }, styles.pointerEventsBoxNone]}
           >
             <LiveTopBar
             viewerCount={viewerCount}
@@ -1025,9 +1031,9 @@ export default function LiveScreen() {
           )}
 
           {/* Main Content Area */}
-          <View style={[styles.contentArea, { paddingTop: insets.top + 70 }]} pointerEvents="box-none">
+          <View style={[styles.contentArea, { paddingTop: insets.top + 70 }, styles.pointerEventsBoxNone]}>
             {/* Main Full Screen Content - Fades OUT during minimize */}
-            <Animated.View style={{ opacity: mainContentOpacity }} pointerEvents="box-none">
+            <Animated.View style={[{ opacity: mainContentOpacity }, styles.pointerEventsBoxNone]}>
               <StreamersDisplay
                 streamers={liveRoom.streamers}
                 onStreamerTap={(user) => {
@@ -1047,8 +1053,8 @@ export default function LiveScreen() {
                 zIndex: 10,
                 justifyContent: 'center',
                 alignItems: 'center',
+                pointerEvents: 'none',
               }}
-              pointerEvents="none"
             >
               <View
                 style={{
@@ -1066,11 +1072,9 @@ export default function LiveScreen() {
             </Animated.View>
 
             {/* Spacer - tapping here dismisses keyboard */}
-            <TouchableWithoutFeedback onPress={dismissKeyboard}>
-              <View style={styles.spacer} />
-            </TouchableWithoutFeedback>
+            <Pressable onPress={dismissKeyboard} style={styles.spacer} />
 
-            {/* Chat - NOT wrapped in TouchableWithoutFeedback so it can scroll */}
+            {/* Chat stays outside keyboard-dismiss pressable so it can scroll */}
             <Animated.View style={{ marginBottom: chatBottomMargin, opacity: uiOpacity }}>
               <LiveChat
                 messages={liveRoom.chatMessages}
@@ -1402,8 +1406,7 @@ export default function LiveScreen() {
                   </View>
                 </View>
               ) : (
-                <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-                  <View style={styles.reportStepContainer}>
+                <Pressable onPress={Keyboard.dismiss} accessible={false} style={styles.reportStepContainer}>
                     <Pressable
                       style={styles.reportBackRow}
                       onPress={() => {
@@ -1480,8 +1483,7 @@ export default function LiveScreen() {
                         }, 400);
                       }}
                     />
-                  </View>
-                </TouchableWithoutFeedback>
+                </Pressable>
               )}
             </>
           )}
@@ -1807,6 +1809,12 @@ const styles = StyleSheet.create({
   },
   fullScreen: {
     flex: 1,
+  },
+  pointerEventsBoxNone: {
+    pointerEvents: 'box-none',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   dragHandleArea: {
     position: 'absolute',
