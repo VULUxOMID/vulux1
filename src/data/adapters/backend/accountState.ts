@@ -1,8 +1,19 @@
 import type { BackendHttpClient } from './httpClient';
-import { getSpacetimeTelemetrySnapshot, spacetimeDb } from '../../../lib/spacetime';
+import {
+  connectSpacetimeDB,
+  getSpacetimeTelemetrySnapshot,
+  spacetimeDb,
+} from '../../../lib/spacetime';
 
 type BackendGetToken = (options?: { template?: string }) => Promise<string | null>;
 type UnknownRecord = Record<string, unknown>;
+type ReducersHandle = {
+  upsertAccountState?: (args: { userId: string; updates: string }) => Promise<unknown>;
+  sendGlobalMessage?: (args: { id: string; roomId: string; item: string }) => Promise<unknown>;
+};
+
+const WRITE_REDUCER_READINESS_WAIT_MS = 2_000;
+const WRITE_REDUCER_READINESS_POLL_MS = 120;
 
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === 'object' ? (value as UnknownRecord) : {};
@@ -66,6 +77,32 @@ function describeError(error: unknown): string {
   }
 }
 
+function resolveWritableReducers(): ReducersHandle | null {
+  const reducers = spacetimeDb.reducers as ReducersHandle;
+  if (
+    typeof reducers?.upsertAccountState === 'function' ||
+    typeof reducers?.sendGlobalMessage === 'function'
+  ) {
+    return reducers;
+  }
+  return null;
+}
+
+async function waitForWritableReducers(maxWaitMs: number): Promise<ReducersHandle | null> {
+  const deadlineMs = Date.now() + Math.max(0, maxWaitMs);
+  connectSpacetimeDB();
+
+  while (Date.now() <= deadlineMs) {
+    const reducers = resolveWritableReducers();
+    if (reducers) {
+      return reducers;
+    }
+    await delay(WRITE_REDUCER_READINESS_POLL_MS);
+  }
+
+  return resolveWritableReducers();
+}
+
 async function writeStateToSpacetime(
   userId: string,
   updates: UnknownRecord,
@@ -74,7 +111,10 @@ async function writeStateToSpacetime(
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      const reducers = spacetimeDb.reducers as any;
+      const reducers = await waitForWritableReducers(WRITE_REDUCER_READINESS_WAIT_MS);
+      if (!reducers) {
+        throw new Error('SpacetimeDB reducers unavailable for account state writes.');
+      }
       const id = `account-state-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (typeof reducers?.upsertAccountState === 'function') {
         await reducers.upsertAccountState({

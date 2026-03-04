@@ -165,31 +165,69 @@ function buildIdentityLookupKey(provider: string, issuer: string, subject: strin
     return `${provider.trim().toLowerCase()}::${issuer.trim()}::${subject.trim()}`;
 }
 
-function findMappedCallerUserId(ctx: any): string | null {
-    const authIdentity = readCallerAuthIdentity(ctx);
+function readUserIdentityByLookupKey(ctx: any, lookupKey: string) {
     const lookupFind = ctx?.db?.userIdentity?.lookupKey?.find;
-    if (!authIdentity || typeof lookupFind !== 'function') {
+    if (typeof lookupFind !== 'function') {
+        return null;
+    }
+    return lookupFind(lookupKey) ?? null;
+}
+
+function findMappedCallerUserIdFromJwtIdentity(ctx: any): string | null {
+    const authIdentity = readCallerAuthIdentity(ctx);
+    if (!authIdentity) {
         return null;
     }
 
-    const row = lookupFind(
+    const exactRow = readUserIdentityByLookupKey(
+        ctx,
         buildIdentityLookupKey(
             CURRENT_IDENTITY_PROVIDER,
             authIdentity.issuer,
             authIdentity.subject,
         ),
     );
-    return readString(row?.vuluUserId);
+    const exactMappedUserId = readString(exactRow?.vuluUserId ?? exactRow?.vulu_user_id);
+    if (exactMappedUserId) {
+        return exactMappedUserId;
+    }
+
+    const iter = ctx?.db?.userIdentity?.iter;
+    if (typeof iter !== 'function') {
+        return null;
+    }
+
+    // Fallback for issuer drift while preserving subject/provider identity mapping.
+    for (const row of iter()) {
+        const provider = readString(row?.provider)?.toLowerCase();
+        const subject = readString(row?.subject);
+        if (provider !== CURRENT_IDENTITY_PROVIDER || subject !== authIdentity.subject) {
+            continue;
+        }
+        const mappedUserId = readString(row?.vuluUserId ?? row?.vulu_user_id);
+        if (mappedUserId) {
+            return mappedUserId;
+        }
+    }
+
+    return null;
+}
+
+function findMappedCallerUserId(ctx: any): string | null {
+    return (
+        findMappedCallerUserIdFromJwtIdentity(ctx) ??
+        readLegacyCallerUserIdFromClaims(ctx)
+    );
 }
 
 function requireViewCallerUserId(ctx: any): string {
-    const callerUserId =
-        findMappedCallerUserId(ctx) ??
-        readLegacyCallerUserIdFromClaims(ctx) ??
-        readCallerAuthIdentity(ctx)?.subject ??
-        readIdentityString(ctx.sender);
+    const callerUserId = findMappedCallerUserId(ctx);
     if (callerUserId) return callerUserId;
-    throw new Error('Unauthorized: caller identity could not be resolved in view context.');
+    const senderIdentity = readIdentityString(ctx?.sender);
+    if (senderIdentity) {
+        return `__unmapped__:${senderIdentity}`;
+    }
+    return '__unmapped__';
 }
 
 export const spacetimedb = schema({
@@ -292,6 +330,24 @@ export const spacetimedb = schema({
             emailVerified: t.bool(),
             lookupKey: t.string().unique(),
             createdAt: t.timestamp(),
+        }
+    ),
+    senderIdentityUserMap: table(
+        { public: false },
+        {
+            senderIdentity: t.string().primaryKey(),
+            vuluUserId: t.string().index(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    connectionSessionItem: table(
+        { public: false },
+        {
+            connectionId: t.string().primaryKey(),
+            senderIdentity: t.string().index(),
+            vuluUserId: t.string().index(),
+            connectedAt: t.timestamp(),
+            updatedAt: t.timestamp(),
         }
     ),
     userRole: table(
