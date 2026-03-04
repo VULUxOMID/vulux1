@@ -30,6 +30,7 @@ import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
 import { subscribeBootstrap, subscribeGlobalChat } from '../../lib/spacetime';
 import { useLive } from '../../context/LiveContext';
+import { deriveHostActiveLiveFallback, mergeHomeLiveNowList } from './liveNowList';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -54,48 +55,19 @@ export default function HomeScreen() {
     [liveRepo, queriesEnabled],
   );
   const hostActiveLive = useMemo<LiveItem | null>(() => {
-    if (!queriesEnabled || !isHost || isLiveEnding || liveState === 'LIVE_CLOSED') {
-      return null;
-    }
-
-    if (activeLive) {
-      return activeLive;
-    }
-
-    if (!liveRoom) {
-      return null;
-    }
-
-    const hostAvatar = liveRoom.hostUser.avatarUrl ?? '';
-    return {
-      id: liveRoom.id,
-      title: liveRoom.title,
-      viewers: Math.max(1, liveRoom.watchers.length + liveRoom.streamers.length),
-      boosted: false,
-      images: hostAvatar ? [hostAvatar] : [],
-      hosts: [
-        {
-          id: liveRoom.hostUser.id,
-          username: liveRoom.hostUser.username,
-          name: liveRoom.hostUser.name,
-          age: liveRoom.hostUser.age,
-          country: liveRoom.hostUser.country,
-          bio: liveRoom.hostUser.bio,
-          verified: liveRoom.hostUser.verified,
-          avatar: hostAvatar,
-        },
-      ],
-    };
+    return deriveHostActiveLiveFallback({
+      queriesEnabled,
+      isHost,
+      isLiveEnding,
+      liveState,
+      activeLive,
+      liveRoom,
+    });
   }, [activeLive, isHost, isLiveEnding, liveRoom, liveState, queriesEnabled]);
-  const lives = useMemo<LiveItem[]>(() => {
-    if (!hostActiveLive) {
-      return repositoryLives;
-    }
-    if (repositoryLives.some((live) => live.id === hostActiveLive.id)) {
-      return repositoryLives;
-    }
-    return [hostActiveLive, ...repositoryLives];
-  }, [hostActiveLive, repositoryLives]);
+  const lives = useMemo<LiveItem[]>(
+    () => mergeHomeLiveNowList(repositoryLives, hostActiveLive),
+    [hostActiveLive, repositoryLives],
+  );
   const repositoryGlobalMessages = useMemo(
     () => (queriesEnabled ? messagesRepo.listGlobalMessages({ limit: 180 }) : []),
     [messagesRepo, queriesEnabled],

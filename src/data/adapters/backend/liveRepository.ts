@@ -18,6 +18,12 @@ type ExtendedLiveItem = LiveItem & {
   invitedUserIds?: string[];
 };
 
+type LiveRepositoryRuntime = {
+  dbView?: any;
+  isViewRequested?: (viewName: string) => boolean;
+  isViewActive?: (viewName: string) => boolean;
+};
+
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
@@ -194,8 +200,7 @@ function applyFreshPresenceFilter<T extends { updatedAt: number }>(presence: T[]
   return presence.filter((entry) => entry.updatedAt >= cutoffMs);
 }
 
-function getSpacetimeLives(): ExtendedLiveItem[] {
-  const dbView = spacetimeDb.db as any;
+function getSpacetimeLives(dbView: any = spacetimeDb.db as any): ExtendedLiveItem[] {
   const rows: any[] = Array.from(dbView?.publicLiveDiscovery?.iter?.() ?? []);
 
   const parsedRows: Array<ExtendedLiveItem | null> = rows.map((row) => {
@@ -233,8 +238,10 @@ function getSpacetimeLives(): ExtendedLiveItem[] {
   return parsedRows.filter((live): live is ExtendedLiveItem => live !== null);
 }
 
-function getSpacetimeLiveById(liveId: string): ExtendedLiveItem | null {
-  const dbView = spacetimeDb.db as any;
+function getSpacetimeLiveById(
+  liveId: string,
+  dbView: any = spacetimeDb.db as any,
+): ExtendedLiveItem | null {
   const normalizedLiveId = liveId.trim();
   if (!normalizedLiveId) return null;
 
@@ -245,8 +252,7 @@ function getSpacetimeLiveById(liveId: string): ExtendedLiveItem | null {
   return parseLiveRow(row);
 }
 
-function getSpacetimeBoostLeaderboard() {
-  const dbView = spacetimeDb.db as any;
+function getSpacetimeBoostLeaderboard(dbView: any = spacetimeDb.db as any) {
   const rows: any[] = Array.from(dbView?.liveBoostLeaderboardItem?.iter?.() ?? []);
 
   return rows
@@ -267,8 +273,7 @@ function getSpacetimeBoostLeaderboard() {
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 }
 
-function getSpacetimeKnownLiveUsers(): LiveUser[] {
-  const dbView = spacetimeDb.db as any;
+function getSpacetimeKnownLiveUsers(dbView: any = spacetimeDb.db as any): LiveUser[] {
   const rows: any[] = Array.from(dbView?.knownLiveUserItem?.iter?.() ?? []);
 
   return rows
@@ -276,8 +281,7 @@ function getSpacetimeKnownLiveUsers(): LiveUser[] {
     .filter((entry): entry is LiveUser => Boolean(entry));
 }
 
-function getSpacetimePresence() {
-  const dbView = spacetimeDb.db as any;
+function getSpacetimePresence(dbView: any = spacetimeDb.db as any) {
   const rows: any[] = Array.from(
     dbView?.publicLivePresenceItem?.iter?.() ??
     dbView?.public_live_presence_item?.iter?.() ??
@@ -296,12 +300,18 @@ function getSpacetimePresence() {
     .filter((entry): entry is PresenceItem => Boolean(entry));
 }
 
-export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepository {
+export function createBackendLiveRepository(
+  snapshot: BackendSnapshot,
+  runtime: LiveRepositoryRuntime = {},
+): LiveRepository {
+  const dbView = runtime.dbView ?? (spacetimeDb.db as any);
+  const isViewRequested = runtime.isViewRequested ?? isSpacetimeViewRequested;
+  const isViewActive = runtime.isViewActive ?? isSpacetimeViewActive;
   return {
     listLives(request) {
-      const spacetimeLives = getSpacetimeLives();
-      const liveDiscoveryRequested = isSpacetimeViewRequested('public_live_discovery');
-      const liveDiscoveryActive = isSpacetimeViewActive('public_live_discovery');
+      const spacetimeLives = getSpacetimeLives(dbView);
+      const liveDiscoveryRequested = isViewRequested('public_live_discovery');
+      const liveDiscoveryActive = isViewActive('public_live_discovery');
       const shouldUseSnapshotFallback =
         spacetimeLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
       const byId = new Map<string, ExtendedLiveItem>();
@@ -341,18 +351,18 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
       const normalized = liveId.trim();
       if (!normalized) return undefined;
 
-      const fromLiveItem = getSpacetimeLiveById(normalized);
+      const fromLiveItem = getSpacetimeLiveById(normalized, dbView);
       if (fromLiveItem) return fromLiveItem;
       const fromSnapshot = snapshot.lives.find((live) => live.id === normalized);
       if (fromSnapshot) return fromSnapshot;
-      return getSpacetimeLives().find((live) => live.id === normalized);
+      return getSpacetimeLives(dbView).find((live) => live.id === normalized);
     },
     listBoostLeaderboard(request) {
       const byId = new Map<string, (typeof snapshot.boostLeaderboard)[number]>();
       for (const row of snapshot.boostLeaderboard) {
         byId.set(row.id, row);
       }
-      for (const row of getSpacetimeBoostLeaderboard()) {
+      for (const row of getSpacetimeBoostLeaderboard(dbView)) {
         byId.set(row.id, row);
       }
 
@@ -365,7 +375,7 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
         if (!user?.id) continue;
         byId.set(user.id, user);
       }
-      for (const user of getSpacetimeKnownLiveUsers()) {
+      for (const user of getSpacetimeKnownLiveUsers(dbView)) {
         byId.set(user.id, user);
       }
 
@@ -378,7 +388,7 @@ export function createBackendLiveRepository(snapshot: BackendSnapshot): LiveRepo
         if (!normalized) continue;
         byUserId.set(normalized.userId, normalized);
       }
-      for (const row of getSpacetimePresence()) {
+      for (const row of getSpacetimePresence(dbView)) {
         byUserId.set(row.userId, row);
       }
 

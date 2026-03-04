@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "build": "node scripts/build-web.mjs",
     "dev": "CI=1 npx expo start --web --port 5000",
+    "test:live-regression": "tsx --test src/data/adapters/backend/liveRepository.regression.test.ts src/features/home/liveNowList.regression.test.ts",
     "env:check": "bash ./scripts/env-check.sh",
     "env:check:legacy-api": "bash ./scripts/env-check.sh --legacy-api",
     "spacetime:watch": "bash ./scripts/spacetime-watch.sh"
@@ -66,6 +67,7 @@
     "@types/three": "0.166.0",
     "babel-preset-expo": "^54.0.8",
     "http-proxy": "^1.18.1",
+    "tsx": "^4.20.6",
     "typescript": "~5.9.2"
   },
   "private": true
