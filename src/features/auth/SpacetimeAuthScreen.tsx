@@ -26,6 +26,20 @@ type ResetPasswordEmailFactor = {
   safeIdentifier?: string;
 };
 
+type SupportedSignInFactor = {
+  strategy?: unknown;
+  emailAddressId?: unknown;
+  phoneNumberId?: unknown;
+  safeIdentifier?: unknown;
+};
+
+type PendingSignInSecondFactor = {
+  strategy: 'email_code' | 'phone_code';
+  emailAddressId?: string;
+  phoneNumberId?: string;
+  safeIdentifier?: string;
+};
+
 function readClerkErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
     const firstError = (error as ClerkError).errors?.[0];
@@ -94,6 +108,78 @@ function readResetPasswordEmailFactor(resource: {
   return null;
 }
 
+function readSignInFactorList(
+  resource: {
+    supportedFirstFactors?: unknown;
+    supportedSecondFactors?: unknown;
+    supported_first_factors?: unknown;
+    supported_second_factors?: unknown;
+  } | null | undefined,
+  kind: 'first' | 'second',
+): SupportedSignInFactor[] {
+  const raw =
+    kind === 'first'
+      ? resource?.supportedFirstFactors ?? resource?.supported_first_factors
+      : resource?.supportedSecondFactors ?? resource?.supported_second_factors;
+  return Array.isArray(raw) ? (raw as SupportedSignInFactor[]) : [];
+}
+
+function hasSignInFactorStrategy(
+  resource: {
+    supportedFirstFactors?: unknown;
+    supportedSecondFactors?: unknown;
+    supported_first_factors?: unknown;
+    supported_second_factors?: unknown;
+  } | null | undefined,
+  kind: 'first' | 'second',
+  strategy: string,
+): boolean {
+  return readSignInFactorList(resource, kind).some(
+    (factor) =>
+      factor &&
+      typeof factor === 'object' &&
+      typeof factor.strategy === 'string' &&
+      factor.strategy === strategy,
+  );
+}
+
+function readPendingSignInSecondFactor(
+  resource: {
+    supportedSecondFactors?: unknown;
+    supported_second_factors?: unknown;
+  } | null | undefined,
+): PendingSignInSecondFactor | null {
+  const factors = readSignInFactorList(resource, 'second');
+
+  for (const factor of factors) {
+    if (!factor || typeof factor !== 'object' || typeof factor.strategy !== 'string') {
+      continue;
+    }
+
+    if (factor.strategy === 'email_code') {
+      return {
+        strategy: 'email_code',
+        emailAddressId:
+          typeof factor.emailAddressId === 'string' ? factor.emailAddressId : undefined,
+        safeIdentifier:
+          typeof factor.safeIdentifier === 'string' ? factor.safeIdentifier : undefined,
+      };
+    }
+
+    if (factor.strategy === 'phone_code') {
+      return {
+        strategy: 'phone_code',
+        phoneNumberId:
+          typeof factor.phoneNumberId === 'string' ? factor.phoneNumberId : undefined,
+        safeIdentifier:
+          typeof factor.safeIdentifier === 'string' ? factor.safeIdentifier : undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
 export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
   const router = useRouter();
   const { isLoaded: isSignInLoaded, signIn, setActive: setActiveSignIn } = useSignIn();
@@ -117,6 +203,9 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
   const [resetNewPassword, setResetNewPassword] = useState('');
   const [resetConfirmPassword, setResetConfirmPassword] = useState('');
   const [resetStep, setResetStep] = useState<'request' | 'confirm'>('request');
+  const [signInVerificationCode, setSignInVerificationCode] = useState('');
+  const [pendingSignInSecondFactor, setPendingSignInSecondFactor] =
+    useState<PendingSignInSecondFactor | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
@@ -127,6 +216,76 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
   const navigateToHome = useCallback(() => {
     router.replace('/');
   }, [router]);
+
+  const clearPendingSignInSecondFactor = useCallback(() => {
+    setPendingSignInSecondFactor(null);
+    setSignInVerificationCode('');
+  }, []);
+
+  const completeSignInIfPossible = useCallback(
+    async (attempt: { status: string | null; createdSessionId: string | null | undefined }) => {
+      if (
+        attempt.status === 'complete' &&
+        attempt.createdSessionId &&
+        canUseSignIn &&
+        setActiveSignIn
+      ) {
+        clearPendingSignInSecondFactor();
+        await setActiveSignIn({ session: attempt.createdSessionId });
+        navigateToHome();
+        return true;
+      }
+      return false;
+    },
+    [canUseSignIn, clearPendingSignInSecondFactor, navigateToHome, setActiveSignIn],
+  );
+
+  const beginSignInSecondFactorChallenge = useCallback(
+    async (
+      attempt: {
+        status: string | null;
+        supportedSecondFactors?: unknown;
+        supported_second_factors?: unknown;
+      } | null,
+    ) => {
+      if (!signIn) {
+        return false;
+      }
+
+      if (attempt?.status !== 'needs_second_factor') {
+        return false;
+      }
+
+      const nextFactor = readPendingSignInSecondFactor(attempt);
+      if (!nextFactor) {
+        return false;
+      }
+
+      if (nextFactor.strategy === 'email_code') {
+        await signIn.prepareSecondFactor({
+          strategy: 'email_code',
+          ...(nextFactor.emailAddressId ? { emailAddressId: nextFactor.emailAddressId } : {}),
+        });
+      } else if (nextFactor.strategy === 'phone_code') {
+        await signIn.prepareSecondFactor({
+          strategy: 'phone_code',
+          ...(nextFactor.phoneNumberId ? { phoneNumberId: nextFactor.phoneNumberId } : {}),
+        });
+      } else {
+        return false;
+      }
+
+      setPendingSignInSecondFactor(nextFactor);
+      setSignInVerificationCode('');
+      setInfoMessage(
+        `We sent a sign-in verification code to ${
+          nextFactor.safeIdentifier ?? 'your verification channel'
+        }.`,
+      );
+      return true;
+    },
+    [signIn],
+  );
 
   const handleSignIn = useCallback(async () => {
     if (!canUseSignIn || !signIn || !setActiveSignIn) {
@@ -144,20 +303,61 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     setErrorMessage(null);
     setInfoMessage(null);
     try {
-      const attempt = await signIn.create({
+      clearPendingSignInSecondFactor();
+      let attempt = await signIn.create({
+        strategy: 'password',
         identifier,
         password,
       });
 
-      if (attempt.status === 'complete' && attempt.createdSessionId) {
-        await setActiveSignIn({ session: attempt.createdSessionId });
-        navigateToHome();
+      if (await completeSignInIfPossible(attempt)) {
         return;
       }
 
-      setInfoMessage(
-        'Your sign-in needs another step in Clerk. Complete the pending step and try again.',
-      );
+      if (
+        attempt.status === 'needs_first_factor' &&
+        hasSignInFactorStrategy(attempt, 'first', 'password')
+      ) {
+        attempt = await signIn.attemptFirstFactor({
+          strategy: 'password',
+          password,
+        });
+
+        if (await completeSignInIfPossible(attempt)) {
+          return;
+        }
+      }
+
+      if (
+        attempt.status === 'needs_identifier' &&
+        hasSignInFactorStrategy(attempt, 'first', 'ticket')
+      ) {
+        const qaTicket = process.env.EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET?.trim();
+        if (qaTicket) {
+          attempt = await signIn.create({
+            strategy: 'ticket',
+            ticket: qaTicket,
+          });
+
+          if (await completeSignInIfPossible(attempt)) {
+            return;
+          }
+        }
+      }
+
+      const startedSecondFactor = await beginSignInSecondFactorChallenge(attempt);
+      if (startedSecondFactor) {
+        return;
+      }
+
+      if (attempt.status === 'needs_identifier') {
+        setInfoMessage(
+          'Clerk requires a pending sign-in step. For QA smoke, set EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET and retry.',
+        );
+        return;
+      }
+
+      setInfoMessage('Your sign-in needs another step in Clerk. Complete it and try again.');
     } catch (error) {
       setErrorMessage(
         readFriendlyIdentifierError(error) ??
@@ -168,11 +368,93 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
   }, [
     canUseSignIn,
+    clearPendingSignInSecondFactor,
+    completeSignInIfPossible,
+    beginSignInSecondFactorChallenge,
     loginEmail,
-    navigateToHome,
     password,
-    setActiveSignIn,
     signIn,
+  ]);
+
+  const handleResendSignInVerificationCode = useCallback(async () => {
+    if (!canUseSignIn || !signIn || !pendingSignInSecondFactor) {
+      setErrorMessage('Start sign-in again to request another verification code.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      if (pendingSignInSecondFactor.strategy === 'email_code') {
+        await signIn.prepareSecondFactor({
+          strategy: 'email_code',
+          ...(pendingSignInSecondFactor.emailAddressId
+            ? { emailAddressId: pendingSignInSecondFactor.emailAddressId }
+            : {}),
+        });
+      } else {
+        await signIn.prepareSecondFactor({
+          strategy: 'phone_code',
+          ...(pendingSignInSecondFactor.phoneNumberId
+            ? { phoneNumberId: pendingSignInSecondFactor.phoneNumberId }
+            : {}),
+        });
+      }
+
+      setInfoMessage(
+        `A new sign-in verification code was sent to ${
+          pendingSignInSecondFactor.safeIdentifier ?? 'your verification channel'
+        }.`,
+      );
+    } catch (error) {
+      setErrorMessage(readClerkErrorMessage(error, 'Could not send a new sign-in code.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [canUseSignIn, pendingSignInSecondFactor, signIn]);
+
+  const handleVerifySignInSecondFactor = useCallback(async () => {
+    if (!canUseSignIn || !signIn || !pendingSignInSecondFactor) {
+      setErrorMessage('Start sign-in again to complete verification.');
+      return;
+    }
+
+    const code = signInVerificationCode.trim();
+    if (!code) {
+      setErrorMessage('Enter the sign-in verification code.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      const attempt = await signIn.attemptSecondFactor({
+        strategy: pendingSignInSecondFactor.strategy,
+        code,
+      });
+
+      if (await completeSignInIfPossible(attempt)) {
+        return;
+      }
+
+      if (attempt.status === 'needs_second_factor') {
+        setInfoMessage('The code was not accepted. Request a new code and try again.');
+        return;
+      }
+
+      setInfoMessage('Your sign-in still needs another Clerk step.');
+    } catch (error) {
+      setErrorMessage(readClerkErrorMessage(error, 'The sign-in code was not accepted.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [
+    canUseSignIn,
+    completeSignInIfPossible,
+    pendingSignInSecondFactor,
+    signIn,
+    signInVerificationCode,
   ]);
 
   const handleStartPasswordReset = useCallback(async () => {
@@ -531,6 +813,39 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
               disabled={!canUseSignIn || isSubmitting}
               icon="log-in-outline"
             />
+            {pendingSignInSecondFactor ? (
+              <>
+                <AppText secondary style={styles.resetPrompt}>
+                  Enter the sign-in verification code from{' '}
+                  {pendingSignInSecondFactor.safeIdentifier ?? 'your verification channel'}.
+                </AppText>
+                <AppTextInput
+                  autoCapitalize="characters"
+                  keyboardType="number-pad"
+                  onChangeText={setSignInVerificationCode}
+                  placeholder="Sign-in verification code"
+                  style={styles.input}
+                  value={signInVerificationCode}
+                />
+                <AppButton
+                  title="Verify sign-in code"
+                  onPress={() => {
+                    void handleVerifySignInSecondFactor();
+                  }}
+                  loading={isSubmitting}
+                  disabled={!canUseSignIn || isSubmitting}
+                  icon="shield-checkmark-outline"
+                />
+                <AppButton
+                  title="Resend sign-in code"
+                  onPress={() => {
+                    void handleResendSignInVerificationCode();
+                  }}
+                  variant="outline"
+                  disabled={!canUseSignIn || isSubmitting}
+                />
+              </>
+            ) : null}
             <AppButton
               title="Need an account? Sign up"
               onPress={() => router.replace('/(auth)/register')}
