@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ClerkProvider, useAuth as useClerkAuth, useUser as useClerkUser } from '@clerk/clerk-expo';
 import { tokenCache } from '@clerk/clerk-expo/token-cache';
-import * as SecureStore from 'expo-secure-store';
 import {
   createContext,
   useCallback,
@@ -12,6 +11,11 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import {
+  secureStoreDeleteItem,
+  secureStoreGetItem,
+  secureStoreSetItem,
+} from '../utils/secureStoreCompat';
 
 import {
   connectSpacetimeDB,
@@ -240,7 +244,7 @@ function readClaimBoolean(claims: JwtClaims | null, key: string): boolean | null
 
 async function readCachedSession(): Promise<CachedVuluSession | null> {
   try {
-    const raw = await SecureStore.getItemAsync(VULU_SESSION_CACHE_KEY);
+    const raw = await secureStoreGetItem(VULU_SESSION_CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CachedVuluSession>;
     const clerkUserId = normalizeString(parsed.clerkUserId);
@@ -262,11 +266,11 @@ async function readCachedSession(): Promise<CachedVuluSession | null> {
 }
 
 async function writeCachedSession(nextSession: CachedVuluSession): Promise<void> {
-  await SecureStore.setItemAsync(VULU_SESSION_CACHE_KEY, JSON.stringify(nextSession));
+  await secureStoreSetItem(VULU_SESSION_CACHE_KEY, JSON.stringify(nextSession));
 }
 
 async function clearCachedSession(): Promise<void> {
-  await SecureStore.deleteItemAsync(VULU_SESSION_CACHE_KEY);
+  await secureStoreDeleteItem(VULU_SESSION_CACHE_KEY);
 }
 
 async function clearLegacySpacetimeStorage(): Promise<void> {
