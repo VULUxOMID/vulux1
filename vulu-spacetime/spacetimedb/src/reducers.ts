@@ -471,6 +471,24 @@ function resolveMappedCallerUserId(ctx: any): string | null {
   return readString(row?.vuluUserId);
 }
 
+function upsertSenderIdentityMapping(ctx: any, vuluUserId: string): void {
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (!senderIdentity) {
+    return;
+  }
+
+  const existing = ctx.db.senderIdentityUserMap.senderIdentity.find(senderIdentity);
+  if (existing) {
+    ctx.db.senderIdentityUserMap.senderIdentity.delete(senderIdentity);
+  }
+
+  ctx.db.senderIdentityUserMap.insert({
+    senderIdentity,
+    vuluUserId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
 function userHasAdminRole(ctx: any, userId: string | null | undefined): boolean {
   const normalizedUserId = readString(userId);
   if (!normalizedUserId) {
@@ -708,6 +726,7 @@ function resolveOrCreateUserIdentityCore(
 
       ensureUserRow(ctx, existingVuluUserId, email, subject);
       ensureDefaultUserRole(ctx, existingVuluUserId);
+      upsertSenderIdentityMapping(ctx, existingVuluUserId);
       console.info(
         `[auth] ${source} resolve_or_create_user_identity existing vulu_user_id=${existingVuluUserId}`,
       );
@@ -731,6 +750,7 @@ function resolveOrCreateUserIdentityCore(
     });
 
     ensureDefaultUserRole(ctx, vuluUserId);
+    upsertSenderIdentityMapping(ctx, vuluUserId);
     console.info(
       `[auth] ${source} resolve_or_create_user_identity created vulu_user_id=${vuluUserId}`,
     );

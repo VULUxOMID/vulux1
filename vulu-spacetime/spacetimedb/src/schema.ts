@@ -815,16 +815,30 @@ export const myIdentity = spacetimedb.view(
     t.array(myIdentityRow),
     (ctx) => {
         const authIdentity = readCallerAuthIdentity(ctx);
-        if (!authIdentity) {
-            return [];
+        let row = null;
+        if (authIdentity) {
+            const lookupKey = buildIdentityLookupKey(
+                CURRENT_IDENTITY_PROVIDER,
+                authIdentity.issuer,
+                authIdentity.subject,
+            );
+            row = ctx.db.userIdentity.lookupKey.find(lookupKey);
         }
 
-        const lookupKey = buildIdentityLookupKey(
-            CURRENT_IDENTITY_PROVIDER,
-            authIdentity.issuer,
-            authIdentity.subject,
-        );
-        const row = ctx.db.userIdentity.lookupKey.find(lookupKey);
+        if (!row) {
+            const callerUserId = findMappedCallerUserId(ctx) ?? readLegacyCallerUserIdFromClaims(ctx);
+            if (!callerUserId) {
+                return [];
+            }
+
+            for (const candidate of ctx.db.userIdentity.iter()) {
+                if (candidate.vuluUserId === callerUserId) {
+                    row = candidate;
+                    break;
+                }
+            }
+        }
+
         if (!row) {
             return [];
         }
