@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Modal, Animated, Pressable, Dimensions } from 'react-native';
+import { View, StyleSheet, Modal, Animated, Pressable, Dimensions, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -8,6 +8,7 @@ import { AppText, AppButton, CashIcon } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const USE_NATIVE_DRIVER = Platform.OS !== 'web';
 
 function formatCurrency(value: number): string {
   if (value <= 0) return '$0';
@@ -55,7 +56,7 @@ export function EventEntryModal({
       Animated.parallel([
         Animated.spring(slideAnim, {
           toValue: 0,
-          useNativeDriver: true,
+          useNativeDriver: USE_NATIVE_DRIVER,
           stiffness: 100,
           damping: 15,
           mass: 1.2, // User preference for pendulum feel
@@ -63,11 +64,11 @@ export function EventEntryModal({
         Animated.timing(fadeAnim, {
           toValue: 1,
           duration: 200,
-          useNativeDriver: true,
+          useNativeDriver: USE_NATIVE_DRIVER,
         }),
         Animated.spring(scaleAnim, {
           toValue: 1,
-          useNativeDriver: true,
+          useNativeDriver: USE_NATIVE_DRIVER,
           stiffness: 120,
           damping: 14,
           mass: 1,
@@ -77,7 +78,7 @@ export function EventEntryModal({
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 150,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }).start();
     }
 
@@ -99,12 +100,12 @@ export function EventEntryModal({
       Animated.timing(slideAnim, {
         toValue: SCREEN_HEIGHT,
         duration: 250,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }),
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 200,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }),
     ]).start(() => onClose());
   };

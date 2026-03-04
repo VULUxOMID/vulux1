@@ -29,6 +29,8 @@ import {
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
 import { subscribeBootstrap, subscribeGlobalChat } from '../../lib/spacetime';
+import { useLive } from '../../context/LiveContext';
+import { deriveHostActiveLiveFallback, mergeHomeLiveNowList } from './liveNowList';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -43,13 +45,28 @@ export default function HomeScreen() {
   const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { userProfile } = useUserProfile();
+  const { activeLive, liveRoom, isHost, isLiveEnding, liveState } = useLive();
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
   const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
   const queriesEnabled =
     isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
-  const lives = useMemo<LiveItem[]>(
+  const repositoryLives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 100 }) : []),
     [liveRepo, queriesEnabled],
+  );
+  const hostActiveLive = useMemo<LiveItem | null>(() => {
+    return deriveHostActiveLiveFallback({
+      queriesEnabled,
+      isHost,
+      isLiveEnding,
+      liveState,
+      activeLive,
+      liveRoom,
+    });
+  }, [activeLive, isHost, isLiveEnding, liveRoom, liveState, queriesEnabled]);
+  const lives = useMemo<LiveItem[]>(
+    () => mergeHomeLiveNowList(repositoryLives, hostActiveLive),
+    [hostActiveLive, repositoryLives],
   );
   const repositoryGlobalMessages = useMemo(
     () => (queriesEnabled ? messagesRepo.listGlobalMessages({ limit: 180 }) : []),
