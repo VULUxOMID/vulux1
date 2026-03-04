@@ -71,6 +71,10 @@ function readIdentityString(value: unknown): string | null {
     return null;
 }
 
+function readViewCallerIdentity(ctx: any): string | null {
+    return readIdentityString(ctx?.sender) ?? readIdentityString(ctx?.identity);
+}
+
 function parseJsonRecord(value: unknown): Record<string, unknown> {
     if (typeof value !== 'string' || value.trim().length === 0) return {};
     try {
@@ -255,7 +259,7 @@ function findMappedCallerUserIdFromJwtIdentity(ctx: any): string | null {
 }
 
 function findMappedCallerUserIdBySenderIdentity(ctx: any): string | null {
-    const senderIdentity = readIdentityString(ctx?.sender);
+    const senderIdentity = readViewCallerIdentity(ctx);
     const find = ctx?.db?.senderIdentityUserMap?.senderIdentity?.find;
     if (!senderIdentity || typeof find !== 'function') {
         return null;
@@ -276,7 +280,7 @@ function findMappedCallerUserId(ctx: any): string | null {
 function requireViewCallerUserId(ctx: any): string {
     const callerUserId = findMappedCallerUserId(ctx);
     if (callerUserId) return callerUserId;
-    const senderIdentity = readIdentityString(ctx?.sender);
+    const senderIdentity = readViewCallerIdentity(ctx);
     if (senderIdentity) {
         return `__unmapped__:${senderIdentity}`;
     }
