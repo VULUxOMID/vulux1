@@ -48,19 +48,6 @@ export default function ProfileScreen() {
   const [showStatusModal, setShowStatusModal] = useState(false);
 
   useEffect(() => {
-    if (!__DEV__) {
-      return;
-    }
-    console.log('[profile] wallet card render', {
-      userId: userId ?? null,
-      gems,
-      cash,
-      fuel,
-      activeTab,
-    });
-  }, [activeTab, cash, fuel, gems, userId]);
-
-  useEffect(() => {
     if (!queriesEnabled) return;
     requestBackendRefresh();
   }, [queriesEnabled]);

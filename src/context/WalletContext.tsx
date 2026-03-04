@@ -9,6 +9,24 @@ import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
 
 const WALLET_HYDRATION_RETRY_MS = 350;
 const WALLET_HYDRATION_MAX_RETRIES = 8;
+const WALLET_DIAGNOSTIC_THROTTLE_MS = 15_000;
+const walletDiagnosticLastLogAt: Record<string, number> = {};
+
+// Logging policy: diagnostics stay dev-only, throttled, and without user identifiers.
+function warnWalletDiagnosticThrottled(key: string, details?: Record<string, unknown>): void {
+  if (!__DEV__) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastLoggedAt = walletDiagnosticLastLogAt[key] ?? 0;
+  if (now - lastLoggedAt < WALLET_DIAGNOSTIC_THROTTLE_MS) {
+    return;
+  }
+  walletDiagnosticLastLogAt[key] = now;
+
+  console.warn(`[wallet][diag] ${key}`, details);
+}
 
 function toNonNegativeNumber(value: unknown, fallback = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -204,22 +222,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           : null;
       const hasWalletState = walletState !== null;
 
-      if (__DEV__) {
-        console.log('[wallet] hydrate fetch account_state.wallet', {
-          userId,
-          refreshNonce: walletRefreshNonce,
-          attempt,
-          accountStatePresent: Boolean(accountState),
-          walletStatePresent: hasWalletState,
-          walletState,
-        });
-      }
-
       if (!hasWalletState && attempt < WALLET_HYDRATION_MAX_RETRIES) {
         retryTimer = setTimeout(() => {
           void hydrateWallet(attempt + 1);
         }, WALLET_HYDRATION_RETRY_MS);
         return;
+      }
+
+      if (!hasWalletState) {
+        warnWalletDiagnosticThrottled('hydrate_wallet_state_missing_after_retries', {
+          attempt,
+          refreshNonce: walletRefreshNonce,
+          accountStatePresent: Boolean(accountState),
+        });
       }
 
       if (!accountState) {
@@ -242,17 +257,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setFuel(nextFuel);
       setWithdrawalHistory(nextWithdrawalHistory);
       setWalletHydrated(true);
-
-      if (__DEV__) {
-        console.log('[wallet] hydrate apply state', {
-          userId,
-          gems: nextGems,
-          cash: nextCash,
-          fuel: nextFuel,
-          withdrawalHistoryCount: nextWithdrawalHistory.length,
-          refreshNonce: walletRefreshNonce,
-        });
-      }
     };
 
     void hydrateWallet();
