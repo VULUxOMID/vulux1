@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, ScrollView, Image } from 'react-native';
+import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, ScrollView, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
@@ -18,6 +18,7 @@ import {
 
 const PROGRESS_TICK_MS = 500;
 const WINNER_VISIBILITY_MS = 10000;
+const USE_NATIVE_DRIVER = Platform.OS !== 'web';
 
 function parseEnvNumber(name: string, min = 0, max = Number.MAX_SAFE_INTEGER): number {
   const raw = process.env[name];
@@ -62,6 +63,13 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
   const buttonScaleAnim = useRef(new Animated.Value(1)).current;
   const shimmerAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const pulseAnimRef = useRef<Animated.CompositeAnimation | null>(null);
+  const resetEventState = useCallback(() => {
+    setEntries(EVENT_INITIAL_ENTRIES);
+    setDisplayEntries(EVENT_INITIAL_ENTRIES);
+    setHasEntered(false);
+    setLastWinner(null);
+    setWinnerHighlight(false);
+  }, []);
 
   // Animate entries counter
   useEffect(() => {
@@ -93,12 +101,14 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     }
 
     if (!isSignedIn || !userId) {
+      resetEventState();
       setEventHydrated(true);
       return () => {
         active = false;
       };
     }
 
+    resetEventState();
     setEventHydrated(false);
 
     const hydrateEventState = async () => {
@@ -132,7 +142,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     return () => {
       active = false;
     };
-  }, [getToken, isAuthLoaded, isSignedIn, userId]);
+  }, [getToken, isAuthLoaded, isSignedIn, resetEventState, userId]);
 
   useEffect(() => {
     if (!eventHydrated || !isAuthLoaded || !isSignedIn || !userId) {
@@ -179,7 +189,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
           toValue: 1,
           duration: 2000,
           easing: Easing.linear,
-          useNativeDriver: true,
+          useNativeDriver: USE_NATIVE_DRIVER,
         }),
         Animated.delay(1000),
       ])
@@ -207,12 +217,12 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
           Animated.timing(pulseAnim, {
             toValue: 1.2,
             duration: 500,
-            useNativeDriver: true,
+            useNativeDriver: USE_NATIVE_DRIVER,
           }),
           Animated.timing(pulseAnim, {
             toValue: 1,
             duration: 500,
-            useNativeDriver: true,
+            useNativeDriver: USE_NATIVE_DRIVER,
           }),
         ])
       );
@@ -288,12 +298,12 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
       Animated.timing(buttonScaleAnim, {
         toValue: 0.95,
         duration: 100,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }),
       Animated.timing(buttonScaleAnim, {
         toValue: 1,
         duration: 100,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }),
     ]).start();
 
@@ -305,8 +315,12 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
       return false;
     }
 
-    const didSpend = spendCash(entryCost);
-    if (!didSpend) {
+    if (entryCost > 0) {
+      const didSpend = spendCash(entryCost);
+      if (!didSpend) {
+        return false;
+      }
+    } else if (!Number.isFinite(entryCost) || entryCost < 0) {
       return false;
     }
 
