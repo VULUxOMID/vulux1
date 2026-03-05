@@ -26,7 +26,7 @@ export type SocialUser = {
   lastSeen?: string;
 };
 
-export type LivePresenceActivity = 'hosting' | 'watching';
+export type LivePresenceActivity = 'hosting' | 'watching' | 'blocked';
 
 export type LivePresence = {
   userId: string;

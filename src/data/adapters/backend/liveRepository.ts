@@ -168,7 +168,7 @@ const LIVE_PRESENCE_FRESHNESS_WINDOW_MS = (() => {
 type PresenceItem = {
   userId: string;
   liveId: string;
-  activity: 'hosting' | 'watching';
+  activity: 'hosting' | 'watching' | 'blocked';
   liveTitle?: string;
   updatedAt: number;
 };
@@ -185,7 +185,14 @@ function normalizePresenceRow(
   const userId = asString(entry.userId);
   const liveId = asString(entry.liveId);
   const activityRaw = asString(entry.activity);
-  const activity = activityRaw === 'hosting' ? 'hosting' : activityRaw === 'watching' ? 'watching' : null;
+  const activity =
+    activityRaw === 'hosting'
+      ? 'hosting'
+      : activityRaw === 'watching'
+        ? 'watching'
+        : activityRaw === 'blocked'
+          ? 'blocked'
+          : null;
   if (!userId || !liveId || !activity) {
     return null;
   }

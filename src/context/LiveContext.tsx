@@ -1454,6 +1454,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     closeLive();
   }, [closeLive, liveRoom, snapshotLive?.bannedUserIds, userId]);
 
+  useEffect(() => {
+    if (!userId || !liveRoom) return;
+    const selfPresence = snapshotPresence.find(
+      (entry) => entry.userId === userId && entry.liveId === liveRoom.id,
+    );
+    if (!selfPresence || selfPresence.activity !== 'blocked') return;
+    handleLiveAccessRejection('banned');
+  }, [handleLiveAccessRejection, liveRoom, snapshotPresence, userId]);
+
   const restoreLive = useCallback(() => {
     if (activeLive) {
       setIsMinimized(false);
@@ -1712,115 +1721,53 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     (user: LiveUser) => {
       if (!isHost) return;
       const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!currentLiveId) return;
+      if (user.id === liveRoom?.hostUser.id) return;
 
-      let nextRoomSnapshot: LiveRoom | null = null;
-
-      setLiveRoom((prev) => {
-        if (!prev) return prev;
-        if (user.id === prev.hostUser.id) return prev;
-
-        const hasBannedId = prev.bannedUserIds.includes(user.id);
-        const hasBannedUser = (prev.bannedUsers || []).some((item) => item.id === user.id);
-        const newStreamers = prev.streamers.filter((streamer) => streamer.id !== user.id);
-
-        nextRoomSnapshot = {
-          ...prev,
-          streamers: newStreamers,
-          watchers: prev.watchers.filter((watcher) => watcher.id !== user.id),
-          hostUser: newStreamers[0] ?? prev.hostUser,
-          bannedUserIds: hasBannedId ? prev.bannedUserIds : [...prev.bannedUserIds, user.id],
-          bannedUsers: hasBannedUser ? prev.bannedUsers : [...(prev.bannedUsers || []), user],
-          chatMessages: appendBoundedChatMessage(
-            prev.chatMessages,
-            createChatMessage(`${user.name} was banned from the live.`, undefined, 'system', 'ban'),
-          ),
-        };
-
-        return nextRoomSnapshot;
-      });
-
-      setActiveLive((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          hosts: prev.hosts.filter((host) => host.id !== user.id),
-        };
-      });
-
-      if (nextRoomSnapshot) {
-        if (currentLiveId) {
-          void postLiveMutation('/live/ban', {
-            liveId: currentLiveId,
-            targetUserId: user.id,
-          })
-            .then((result) => {
-              if (!result.ok) {
-                syncLiveHosts(nextRoomSnapshot as LiveRoom);
-              }
-            })
-            .finally(() => {
-              requestBackendRefresh({
-                scopes: ['live'],
-                source: 'manual',
-                reason: 'live_user_banned',
-              });
-            });
-        } else {
-          syncLiveHosts(nextRoomSnapshot);
-        }
-      }
+      void postLiveMutation('/live/ban', {
+        liveId: currentLiveId,
+        targetUserId: user.id,
+      })
+        .then((result) => {
+          if (!result.ok) {
+            toast.error(result.message);
+          }
+        })
+        .finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_user_banned',
+          });
+        });
     },
-    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation, syncLiveHosts],
+    [activeLive?.id, isHost, liveRoom?.hostUser.id, liveRoom?.id, postLiveMutation],
   );
 
   const unbanUser = useCallback(
     (user: LiveUser) => {
       if (!isHost) return;
       const currentLiveId = liveRoom?.id ?? activeLive?.id;
+      if (!currentLiveId) return;
 
-      let nextRoomSnapshot: LiveRoom | null = null;
-
-      setLiveRoom((prev) => {
-        if (!prev) return prev;
-        if (!prev.bannedUserIds.includes(user.id)) return prev;
-
-        nextRoomSnapshot = {
-          ...prev,
-          bannedUserIds: prev.bannedUserIds.filter((userId) => userId !== user.id),
-          bannedUsers: (prev.bannedUsers || []).filter((entry) => entry.id !== user.id),
-          chatMessages: appendBoundedChatMessage(
-            prev.chatMessages,
-            createChatMessage(`${user.name} was unbanned.`, undefined, 'system'),
-          ),
-        };
-
-        return nextRoomSnapshot;
-      });
-
-      if (nextRoomSnapshot) {
-        if (currentLiveId) {
-          void postLiveMutation('/live/unban', {
-            liveId: currentLiveId,
-            targetUserId: user.id,
-          })
-            .then((result) => {
-              if (!result.ok) {
-                syncLiveHosts(nextRoomSnapshot as LiveRoom);
-              }
-            })
-            .finally(() => {
-              requestBackendRefresh({
-                scopes: ['live'],
-                source: 'manual',
-                reason: 'live_user_unbanned',
-              });
-            });
-        } else {
-          syncLiveHosts(nextRoomSnapshot);
-        }
-      }
+      void postLiveMutation('/live/unban', {
+        liveId: currentLiveId,
+        targetUserId: user.id,
+      })
+        .then((result) => {
+          if (!result.ok) {
+            toast.error(result.message);
+          }
+        })
+        .finally(() => {
+          requestBackendRefresh({
+            scopes: ['live'],
+            source: 'manual',
+            reason: 'live_user_unbanned',
+          });
+        });
     },
-    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation, syncLiveHosts],
+    [activeLive?.id, isHost, liveRoom?.id, postLiveMutation],
   );
 
   const removeFromStream = useCallback(

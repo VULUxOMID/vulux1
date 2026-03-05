@@ -2201,11 +2201,14 @@ function readLivePresenceItem(ctx: any, userId: string): JsonRecord {
   return parseJsonRecord(row.item);
 }
 
+type LivePresenceActivity = 'hosting' | 'watching';
+type PublicLivePresenceActivity = LivePresenceActivity | 'blocked';
+
 function upsertPublicLivePresenceItem(
   ctx: any,
   userId: string,
   liveId: string,
-  activity: 'hosting' | 'watching',
+  activity: PublicLivePresenceActivity,
 ): void {
   const existing = ctx.db.publicLivePresenceItem.userId.find(userId);
   if (existing) {
@@ -2223,7 +2226,8 @@ function upsertPublicLivePresenceItem(
 function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): void {
   const liveId = readString(item.liveId);
   const activity = readString(item.activity);
-  const normalizedActivity = activity === 'hosting' ? 'hosting' : activity === 'watching' ? 'watching' : null;
+  const normalizedActivity: LivePresenceActivity | null =
+    activity === 'hosting' ? 'hosting' : activity === 'watching' ? 'watching' : null;
 
   const existing = ctx.db.livePresenceItem.userId.find(userId);
   if (existing) {
@@ -2240,6 +2244,19 @@ function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): voi
   if (liveId && normalizedActivity) {
     upsertPublicLivePresenceItem(ctx, userId, liveId, normalizedActivity);
   }
+}
+
+function markLivePresenceBlocked(ctx: any, userId: string, liveId: string): void {
+  const existingPresence = readLivePresenceItem(ctx, userId);
+  upsertLivePresenceItem(ctx, userId, {
+    ...existingPresence,
+    userId,
+    liveId,
+    activity: 'none',
+    rejectionCode: 'banned',
+    updatedAt: nowMs(ctx),
+  });
+  upsertPublicLivePresenceItem(ctx, userId, liveId, 'blocked');
 }
 
 function upsertEventParticipationItem(
@@ -3249,7 +3266,7 @@ function applyLiveBan(ctx: any, payload: JsonRecord): void {
 
   const presence = readLivePresenceItem(ctx, targetUserId);
   if (readString(presence.liveId) === liveId) {
-    deleteLivePresenceItem(ctx, targetUserId);
+    markLivePresenceBlocked(ctx, targetUserId, liveId);
   }
 }
 
@@ -3268,6 +3285,14 @@ function applyLiveUnban(ctx: any, payload: JsonRecord): void {
     bannedUserIds,
     updatedAt: nowMs(ctx),
   });
+
+  const publicPresence = ctx.db.publicLivePresenceItem.userId.find(targetUserId);
+  if (
+    readString(publicPresence?.liveId) === liveId &&
+    readString(publicPresence?.activity) === 'blocked'
+  ) {
+    deleteLivePresenceItem(ctx, targetUserId);
+  }
 }
 
 function applyLiveEnd(ctx: any, payload: JsonRecord): void {
@@ -4300,7 +4325,35 @@ export const setLivePresence = schemaDb.reducer(
       createdAt: nowMs(ctx),
     };
 
-    authorizeLivePresencePayload(ctx, payload);
+    try {
+      authorizeLivePresencePayload(ctx, payload);
+    } catch (error) {
+      const userId = readString(payload.userId);
+      const liveId = readString(payload.liveId);
+      const failureMessage = (error instanceof Error ? error.message : String(error)).toLowerCase();
+
+      if (userId && liveId && (failureMessage.includes("you're banned") || failureMessage.includes('you are banned'))) {
+        markLivePresenceBlocked(ctx, userId, liveId);
+        console.info('[live_presence] ignored_rejected_presence', {
+          code: 'banned',
+          userId,
+          liveId,
+        });
+        return;
+      }
+
+      if (userId && (failureMessage.includes('has ended') || failureMessage.includes('already ended'))) {
+        deleteLivePresenceItem(ctx, userId);
+        console.info('[live_presence] ignored_rejected_presence', {
+          code: 'live_ended',
+          userId,
+          liveId: liveId ?? null,
+        });
+        return;
+      }
+
+      throw error;
+    }
     applyLivePresence(ctx, payload);
   },
 );
@@ -4958,7 +5011,35 @@ export const sendGlobalMessage = schemaDb.reducer(
     item: t.string(),
   },
   (ctx, args) => {
-    routeGlobalMessage(ctx, args.id, args.roomId, args.item);
+    try {
+      routeGlobalMessage(ctx, args.id, args.roomId, args.item);
+    } catch (error) {
+      const roomId = readString(args.roomId) ?? 'global';
+      const liveRoom = parseLiveRoomId(roomId);
+      if (!liveRoom) {
+        throw error;
+      }
+
+      const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+      const code = message.includes("you're banned") || message.includes('you are banned')
+        ? 'banned'
+        : message.includes('invite only')
+          ? 'invite_only'
+          : message.includes('has ended') || message.includes('already ended')
+            ? 'live_ended'
+            : null;
+
+      if (!code) {
+        throw error;
+      }
+
+      const payload = parseJsonRecord(args.item);
+      console.info('[live_chat] ignored_rejected_message', {
+        code,
+        roomId,
+        senderId: readString(payload.senderId) ?? null,
+      });
+    }
   },
 );
 
