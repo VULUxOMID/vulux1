@@ -791,8 +791,24 @@ function buildScopedSubscriptionSpec(
   };
 }
 
+function getDefaultSelectQuery(viewName: string): string {
+  switch (viewName) {
+    case 'global_message_item':
+      // Keep full coverage but force an index-friendly range predicate.
+      return "SELECT * FROM global_message_item WHERE id >= ''";
+    case 'public_leaderboard':
+      return "SELECT * FROM public_leaderboard WHERE user_id >= ''";
+    case 'public_live_discovery':
+      return "SELECT * FROM public_live_discovery WHERE live_id >= ''";
+    case 'public_profile_summary':
+      return "SELECT * FROM public_profile_summary WHERE user_id >= ''";
+    default:
+      return `SELECT * FROM ${viewName}`;
+  }
+}
+
 function buildViewSelectQueries(views: string[]): string[] {
-  return uniqueStrings(views.map((viewName) => `SELECT * FROM ${viewName}`));
+  return uniqueStrings(views.map((viewName) => getDefaultSelectQuery(viewName)));
 }
 
 function toWindowKey(windowCursor?: SpacetimeMessageWindowCursor): string {
@@ -860,7 +876,7 @@ function buildMessageViewQueryVariants(
 
   // Fallback: subscribe to entire view (no LIMIT)
   if (includeFullViewFallback) {
-    queries.push(`SELECT * FROM ${viewName}`);
+    queries.push(getDefaultSelectQuery(viewName));
   }
   return uniqueStrings(queries);
 }
@@ -1305,7 +1321,6 @@ export function subscribeGlobalChat(
   const baseViews = [
     'public_profile_summary',
     'public_live_discovery',
-    'global_message_item',
     'my_friendships',
     'my_notifications',
     'my_conversations',
@@ -1365,7 +1380,6 @@ export function subscribeLive(liveId: string): () => void {
   const baseQueries = buildViewSelectQueries(baseViews);
   const liveQueries = uniqueStrings([
     `SELECT * FROM public_live_discovery WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
-    'SELECT * FROM public_live_discovery',
   ]);
   const presenceQueries = uniqueStrings([
     `SELECT * FROM public_live_presence_item WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
