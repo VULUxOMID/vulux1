@@ -249,6 +249,29 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    eventWidgetConfigItem: table(
+        { public: true },
+        {
+            id: t.string().primaryKey(),
+            enabled: t.bool(),
+            entryAmountCash: t.u32(),
+            drawDurationMinutes: t.u32(),
+            drawIntervalMinutes: t.u32(),
+            autoplayEnabled: t.bool(),
+            updatedBy: t.string(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    eventWidgetConfigAuditItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            action: t.string(),
+            actorUserId: t.string().index(),
+            item: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
     moderationActionItem: table(
         { public: false },
         {

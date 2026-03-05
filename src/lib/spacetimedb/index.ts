@@ -52,6 +52,8 @@ import SendCashToUserReducer from "./send_cash_to_user_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SendGlobalMessageReducer from "./send_global_message_reducer";
 import SendThreadMessageReducer from "./send_thread_message_reducer";
+import SetEventWidgetConfigReducer from "./set_event_widget_config_reducer";
+import SetEventWidgetEnabledReducer from "./set_event_widget_enabled_reducer";
 import SetLivePresenceReducer from "./set_live_presence_reducer";
 import SetSocialStatusReducer from "./set_social_status_reducer";
 import SetUserRoleReducer from "./set_user_role_reducer";
@@ -71,6 +73,8 @@ import AdminWalletCreditTransactionRow from "./admin_wallet_credit_transaction_t
 import ArtistRow from "./artist_table";
 import AuditLogItemRow from "./audit_log_item_table";
 import ConversationItemRow from "./conversation_item_table";
+import EventWidgetConfigAuditItemRow from "./event_widget_config_audit_item_table";
+import EventWidgetConfigItemRow from "./event_widget_config_item_table";
 import FriendshipRow from "./friendship_table";
 import GlobalMessageItemRow from "./global_message_item_table";
 import KnownLiveUserItemRow from "./known_live_user_item_table";
@@ -165,6 +169,31 @@ const tablesSchema = __schema({
       { name: 'audit_log_item_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AuditLogItemRow),
+  eventWidgetConfigAuditItem: __table({
+    name: 'event_widget_config_audit_item',
+    indexes: [
+      { name: 'actorUserId', algorithm: 'btree', columns: [
+        'actorUserId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'event_widget_config_audit_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, EventWidgetConfigAuditItemRow),
+  eventWidgetConfigItem: __table({
+    name: 'event_widget_config_item',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'event_widget_config_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, EventWidgetConfigItemRow),
   conversationItem: __table({
     name: 'conversation_item',
     indexes: [
@@ -602,6 +631,8 @@ const reducersSchema = __reducers(
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("send_global_message", SendGlobalMessageReducer),
   __reducerSchema("send_thread_message", SendThreadMessageReducer),
+  __reducerSchema("set_event_widget_config", SetEventWidgetConfigReducer),
+  __reducerSchema("set_event_widget_enabled", SetEventWidgetEnabledReducer),
   __reducerSchema("set_live_presence", SetLivePresenceReducer),
   __reducerSchema("set_social_status", SetSocialStatusReducer),
   __reducerSchema("set_user_role", SetUserRoleReducer),
