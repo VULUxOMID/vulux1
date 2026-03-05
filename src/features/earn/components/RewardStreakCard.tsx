@@ -154,7 +154,7 @@ export const RewardStreakCard = React.memo(function RewardStreakCard({
                 isLocked && styles.boxLocked,
               ]}
             >
-              <View style={styles.boxContent} pointerEvents="none">
+              <View style={[styles.boxContent, styles.pointerEventsNone]}>
                 {isLoading ? (
                   <ActivityIndicator color={colors.accentPremium} size="small" />
                 ) : isOpened ? (
@@ -197,7 +197,7 @@ export const RewardStreakCard = React.memo(function RewardStreakCard({
               </View>
 
               {isLocked && !isLoading ? (
-                <View style={styles.lockOverlay} pointerEvents="none">
+                <View style={[styles.lockOverlay, styles.pointerEventsNone]}>
                   <Ionicons name="lock-closed" size={14} color={colors.textMuted} />
                 </View>
               ) : null}
@@ -237,6 +237,9 @@ export const RewardStreakCard = React.memo(function RewardStreakCard({
 });
 
 const styles = StyleSheet.create({
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
   container: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,

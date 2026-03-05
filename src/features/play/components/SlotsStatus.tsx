@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
@@ -80,13 +80,27 @@ const styles = StyleSheet.create({
     color: colors.playNeonPink,
     letterSpacing: 2,
     marginBottom: spacing.xxs,
-    textShadowColor: colors.playNeonPink,
-    textShadowRadius: 8,
+    ...Platform.select({
+      web: {
+        textShadow: `0px 0px 8px ${colors.playNeonPink}`,
+      },
+      default: {
+        textShadowColor: colors.playNeonPink,
+        textShadowRadius: 8,
+      },
+    }),
   },
   jackpotValue: {
     color: colors.textOnDark,
-    textShadowColor: colors.playNeonGreen,
-    textShadowRadius: 12,
+    ...Platform.select({
+      web: {
+        textShadow: `0px 0px 12px ${colors.playNeonGreen}`,
+      },
+      default: {
+        textShadowColor: colors.playNeonGreen,
+        textShadowRadius: 12,
+      },
+    }),
     fontVariant: ['tabular-nums'],
     letterSpacing: 1,
   },
@@ -121,16 +135,30 @@ const styles = StyleSheet.create({
     backgroundColor: colors.playNeonGreenSubtle,
     borderBottomLeftRadius: radius.lgMinus,
     borderBottomRightRadius: radius.lgMinus,
-    shadowColor: colors.playNeonGreen,
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 0px 10px ${colors.playNeonGreen}80`,
+      },
+      default: {
+        shadowColor: colors.playNeonGreen,
+        shadowOpacity: 0.5,
+        shadowRadius: 10,
+      },
+    }),
   },
   chaosStatusText: {
     color: colors.playNeonGreen,
     letterSpacing: 1,
     textTransform: 'uppercase',
-    textShadowColor: colors.playNeonGreen,
-    textShadowRadius: 4,
+    ...Platform.select({
+      web: {
+        textShadow: `0px 0px 4px ${colors.playNeonGreen}`,
+      },
+      default: {
+        textShadowColor: colors.playNeonGreen,
+        textShadowRadius: 4,
+      },
+    }),
     zIndex: 1,
   },
 });

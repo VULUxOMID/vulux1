@@ -918,18 +918,18 @@ export default function ManagePhotosScreen() {
                   <Image source={{ uri: photo.uri }} style={styles.photo} />
                 )}
 
-                <View style={styles.numberContainer} pointerEvents="none">
+                <View style={[styles.numberContainer, styles.pointerEventsNone]}>
                   <AppText style={styles.numberText}>{index + 1}</AppText>
                 </View>
 
                 {photo.isVideo && (
-                  <View style={styles.videoIndicator} pointerEvents="none">
+                  <View style={[styles.videoIndicator, styles.pointerEventsNone]}>
                     <Ionicons name="videocam" size={16} color="#fff" />
                   </View>
                 )}
 
                 {photo.isVerified && (
-                  <View style={styles.verifiedBadge} pointerEvents="none">
+                  <View style={[styles.verifiedBadge, styles.pointerEventsNone]}>
                     <Ionicons name="checkmark-circle" size={24} color="#FFD700" />
                   </View>
                 )}
@@ -988,14 +988,15 @@ export default function ManagePhotosScreen() {
           ) : null}
 
           {draggingPhoto && (
-            <Animated.View pointerEvents="none" style={[
+            <Animated.View style={[
               styles.dragOverlay,
+              styles.pointerEventsNone,
               pan.getLayout(),
               { transform: [{ scale: dragScale }] },
               userProfile.avatarUrl === draggingPhoto.uri && styles.photoContainerActive,
             ]}>
               <Image source={{ uri: draggingPhoto.uri }} style={styles.dragOverlayPhoto} />
-              <View style={styles.numberContainer} pointerEvents="none">
+              <View style={[styles.numberContainer, styles.pointerEventsNone]}>
                 <AppText style={styles.numberText}>{dragStartIndexRef.current + 1}</AppText>
               </View>
             </Animated.View>
@@ -1095,7 +1096,7 @@ export default function ManagePhotosScreen() {
                   ]}
                 />
               ) : null}
-              <View pointerEvents="none" style={styles.cropFrameBorder} />
+              <View style={[styles.cropFrameBorder, styles.pointerEventsNone]} />
             </View>
           </View>
 
@@ -1141,6 +1142,9 @@ export default function ManagePhotosScreen() {
 }
 
 const styles = StyleSheet.create({
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

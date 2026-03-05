@@ -44,8 +44,7 @@ export function CurrencyPill({
       </AppText>
       {showDot ? (
         <Pressable
-          style={[styles.dot, isSmall && styles.dotSmall]}
-          pointerEvents="none"
+          style={[styles.dot, isSmall && styles.dotSmall, styles.pointerEventsNone]}
         />
       ) : null}
     </Pressable>
@@ -92,5 +91,8 @@ const styles = StyleSheet.create({
   dotSmall: {
     width: spacing.sm,
     height: spacing.sm,
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
 });

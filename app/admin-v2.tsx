@@ -383,8 +383,8 @@ function OverviewMetricCard({
                   alignItems: 'center',
                   transform: [{ translateX: -40 }],
                   width: 80,
+                  pointerEvents: 'none',
                 }}
-                pointerEvents="none"
               >
                 <View
                   style={{

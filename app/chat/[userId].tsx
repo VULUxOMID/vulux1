@@ -509,7 +509,7 @@ const UserMessageRow = React.memo(function UserMessageRow({
               </View>
             )}
 
-            <Animated.View pointerEvents="none" style={[styles.bubbleGlow, { opacity: overlayOpacity }]} />
+            <Animated.View style={[styles.bubbleGlow, { opacity: overlayOpacity }, styles.pointerEventsNone]} />
           </Animated.View>
         </View>
       </Pressable>
@@ -1400,6 +1400,7 @@ export default function ChatDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  pointerEventsNone: { pointerEvents: 'none' },
   container: { flex: 1, backgroundColor: colors.surfaceAlt },
   header: { backgroundColor: colors.surfaceAlt, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle, paddingHorizontal: 16, paddingBottom: 12 },
   headerRow: { flexDirection: 'row', alignItems: 'center' },

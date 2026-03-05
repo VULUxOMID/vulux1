@@ -5,6 +5,7 @@ import {
   PanResponder,
   PanResponderGestureState,
   Pressable,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -554,8 +555,9 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
               opacity: menuOpacity,
               transform: [{ translateY: menuTranslateY }],
             }
+            ,
+            isMenuOpen ? styles.pointerEventsAuto : styles.pointerEventsNone,
           ]}
-          pointerEvents={isMenuOpen ? 'auto' : 'none'}
           onLayout={(e) => {
             const { height: contentHeight } = e.nativeEvent.layout;
             if (contentHeight > 0 && contentHeight !== measuredContentHeight) {
@@ -639,17 +641,29 @@ const styles = StyleSheet.create({
     width: FLOATING_BUTTON_SIZE,
     zIndex: 1000,
     overflow: 'hidden',
-    // Shadow
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 4px 4.65px rgba(0, 0, 0, 0.3)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: {
+          width: 0,
+          height: 4,
+        },
+        shadowOpacity: 0.3,
+        shadowRadius: 4.65,
+      },
+    }),
     elevation: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+  },
+  pointerEventsAuto: {
+    pointerEvents: 'auto',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   blurContainer: {
     ...StyleSheet.absoluteFillObject,

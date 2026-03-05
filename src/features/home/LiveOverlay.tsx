@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
-import { View, StyleSheet, Dimensions, Animated, PanResponder, Pressable } from 'react-native';
+import { View, StyleSheet, Dimensions, Animated, PanResponder, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useLive } from '../../context/LiveContext';
@@ -246,19 +246,19 @@ function MiniLiveFloating({
           opacity: Animated.multiply(opacityAnim, fadeAnim),
           transform: position.getTranslateTransform(),
         },
+        visible ? styles.pointerEventsAuto : styles.pointerEventsNone,
       ]}
-      pointerEvents={visible ? 'auto' : 'none'}
       {...panResponder.panHandlers}
     >
       <PressableClose onClose={onClose} />
 
       {/* Mini Grid of Hosts */}
-      <View style={styles.miniGridContainer} pointerEvents="none">
+      <View style={[styles.miniGridContainer, styles.pointerEventsNone]}>
         <MiniHostsGrid hosts={hosts} fallbackImage={activeLive.images?.[0]} />
       </View>
 
       {isEnding ? (
-        <View style={styles.endingBadge} pointerEvents="none">
+        <View style={[styles.endingBadge, styles.pointerEventsNone]}>
           <Ionicons name="videocam-off-outline" size={12} color="#fff" />
           <Animated.Text style={styles.endingBadgeText}>Live ended</Animated.Text>
         </View>
@@ -289,12 +289,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderSubtle,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 6px 10px rgba(0, 0, 0, 0.35)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.35,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 6 },
+      },
+    }),
     elevation: 12,
     zIndex: 9999,
+  },
+  pointerEventsAuto: {
+    pointerEvents: 'auto',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   closeWrap: {
     position: 'absolute',

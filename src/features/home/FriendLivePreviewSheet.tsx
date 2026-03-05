@@ -444,7 +444,7 @@ export function FriendLivePreviewSheet({
     >
       <View style={styles.overlayContainer}>
         {/* Backdrop - simple dark overlay without BlurView to avoid flash */}
-        <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} pointerEvents="none">
+        <Animated.View style={[styles.backdrop, { opacity: fadeAnim }, styles.pointerEventsNone]}>
         </Animated.View>
         
         {/* Backdrop tap area */}
@@ -607,9 +607,8 @@ export function FriendLivePreviewSheet({
               {/* Gradient Overlay */}
               <LinearGradient
                 colors={['transparent', 'transparent', GRADIENT_OVERLAY_COLOR]}
-                style={StyleSheet.absoluteFill}
+                style={[StyleSheet.absoluteFill, styles.pointerEventsNone]}
                 locations={[0, 0.6, 1]}
-                pointerEvents="none"
               />
 
               {/* Viewer Count Badge - only show if viewers > 0 */}
@@ -805,6 +804,9 @@ const styles = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.75)',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   glowContainer: {
     ...StyleSheet.absoluteFillObject,
