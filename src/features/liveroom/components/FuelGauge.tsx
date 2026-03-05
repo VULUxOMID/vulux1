@@ -221,7 +221,6 @@ const styles = StyleSheet.create({
   },
   timeTextEmpty: {
     color: colors.textMuted,
-    textShadowColor: undefined,
   },
   timeTextLow: {
     color: colors.textPrimary,

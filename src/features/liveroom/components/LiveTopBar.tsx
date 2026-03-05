@@ -72,8 +72,7 @@ export function LiveTopBar({
     <LinearGradient 
       colors={['rgba(0,0,0,0.5)', 'transparent']}
       locations={[0, 1]}
-      style={[styles.container, { paddingTop: topInset + spacing.xs }]}
-      pointerEvents="box-none"
+      style={[styles.container, { paddingTop: topInset + spacing.xs }, styles.pointerEventsBoxNone]}
     >
       {/* Left side: Minimize + Boost Tag */}
       <View style={styles.leftActions}>
@@ -188,6 +187,9 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
   },
+  pointerEventsBoxNone: {
+    pointerEvents: 'box-none',
+  },
   leftActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -239,9 +241,16 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12, // Consistent size
     fontWeight: '800',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...Platform.select({
+      web: {
+        textShadow: '0px 1px 2px rgba(0,0,0,0.3)',
+      },
+      default: {
+        textShadowColor: 'rgba(0,0,0,0.3)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 2,
+      },
+    }),
   },
   viewerPill: {
     flexDirection: 'row',
@@ -255,8 +264,15 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12, // Consistent size
     fontWeight: '800',
-    textShadowColor: 'rgba(0,0,0,0.3)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    ...Platform.select({
+      web: {
+        textShadow: '0px 1px 2px rgba(0,0,0,0.3)',
+      },
+      default: {
+        textShadowColor: 'rgba(0,0,0,0.3)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 2,
+      },
+    }),
   },
 });

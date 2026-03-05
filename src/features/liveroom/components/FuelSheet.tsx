@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, Modal, Pressable, PanResponder, Animated, Dimensions } from 'react-native';
+import { View, StyleSheet, Modal, Pressable, PanResponder, Animated, Dimensions, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../../components';
@@ -326,10 +326,17 @@ const styles = StyleSheet.create({
     backgroundColor: FUEL_PURPLE,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: FUEL_PURPLE,
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 6px 16px ${FUEL_PURPLE}80`,
+      },
+      default: {
+        shadowColor: FUEL_PURPLE,
+        shadowOpacity: 0.5,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 6 },
+      },
+    }),
   },
 
   fuelLevelBadge: {
@@ -428,10 +435,17 @@ const styles = StyleSheet.create({
   },
   paymentOptionSelected: {
     backgroundColor: colors.surface,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.2)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+      },
+    }),
   },
   paymentText: {
     fontSize: 14,
@@ -480,15 +494,28 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingVertical: spacing.md,
     gap: spacing.sm,
-    shadowColor: FUEL_PURPLE,
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 4px 12px ${FUEL_PURPLE}66`,
+      },
+      default: {
+        shadowColor: FUEL_PURPLE,
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+      },
+    }),
   },
-  fillButtonDisabled: {
-    backgroundColor: colors.surfaceAlt,
-    shadowOpacity: 0,
-  },
+  fillButtonDisabled: Platform.select({
+    web: {
+      backgroundColor: colors.surfaceAlt,
+      boxShadow: 'none',
+    },
+    default: {
+      backgroundColor: colors.surfaceAlt,
+      shadowOpacity: 0,
+    },
+  }),
   fillButtonText: {
     fontSize: 17,
     fontWeight: '700',

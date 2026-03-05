@@ -201,7 +201,7 @@ export default function VideoPlayerScreen() {
       ]}
       {...panResponder.panHandlers}
     >
-      <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: backdropOpacity }]} />
+      <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }, styles.pointerEventsNone]} />
       <Animated.View style={[styles.screenContent, { transform: [{ translateY: slideY }] }]}>
       {/* Top Header Section */}
       <View style={styles.topHeader}>
@@ -340,6 +340,9 @@ export default function VideoPlayerScreen() {
 }
 
 const styles = StyleSheet.create({
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
   container: {
     flex: 1,
     backgroundColor: 'transparent',

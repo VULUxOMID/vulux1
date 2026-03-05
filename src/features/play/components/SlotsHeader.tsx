@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Polyline, Svg } from 'react-native-svg';
 
@@ -272,15 +272,28 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.playNeonGreen,
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 0px 6px ${colors.playNeonGreen}80`,
+      },
+      default: {
+        shadowColor: colors.playNeonGreen,
+        shadowOpacity: 0.5,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 0 },
+      },
+    }),
   },
-  spinButtonDisabled: {
-    backgroundColor: colors.playSurfaceDisabled,
-    shadowOpacity: 0,
-  },
+  spinButtonDisabled: Platform.select({
+    web: {
+      backgroundColor: colors.playSurfaceDisabled,
+      boxShadow: 'none',
+    },
+    default: {
+      backgroundColor: colors.playSurfaceDisabled,
+      shadowOpacity: 0,
+    },
+  }),
   spinButtonText: {
     color: colors.textOnLight,
     letterSpacing: 1,

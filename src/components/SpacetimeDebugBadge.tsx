@@ -91,7 +91,7 @@ export function SpacetimeDebugBadge() {
   }, [tone]);
 
   return (
-    <View pointerEvents="none" style={containerStyle}>
+    <View style={[containerStyle, styles.pointerEventsNone]}>
       <View style={badgeStyle}>
         <Text style={styles.prefix}>ST</Text>
         <Text style={styles.value}>
@@ -113,6 +113,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 10,
     zIndex: 9999,
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   badge: {
     minWidth: 126,

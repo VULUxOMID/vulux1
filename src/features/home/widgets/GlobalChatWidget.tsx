@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, StyleSheet, View } from 'react-native';
+import { Animated, Platform, StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
@@ -85,12 +85,10 @@ export function GlobalChatWidget({
         showChevron={true}
       />
       <View
-        pointerEvents="none"
-        style={[styles.persistentBorder, { borderColor: baseBorderColor }]}
+        style={[styles.persistentBorder, { borderColor: baseBorderColor }, styles.pointerEventsNone]}
       />
       <Animated.View
-        pointerEvents="none"
-        style={[styles.flashBorder, { opacity: flashAnim }]}
+        style={[styles.flashBorder, { opacity: flashAnim }, styles.pointerEventsNone]}
       />
     </Animated.View>
   );
@@ -107,10 +105,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDanger,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.accentDanger,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 2px 4px ${colors.accentDanger}4D`,
+      },
+      default: {
+        shadowColor: colors.accentDanger,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+      },
+    }),
   },
   badgePillText: {
     color: '#FFFFFF',
@@ -127,5 +132,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 18, // Matches HomePillCard radius
     borderColor: 'rgba(255,255,255,1)',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
 });

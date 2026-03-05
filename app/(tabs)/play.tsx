@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { StyleSheet, View, ScrollView, Pressable, Dimensions, Animated, Easing } from 'react-native';
+import { StyleSheet, View, ScrollView, Pressable, Dimensions, Animated, Easing, Platform } from 'react-native';
 import { Svg, Polyline } from 'react-native-svg';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +41,67 @@ const getSlotDimensions = () => {
   
   return { reelWidth, reelHeight, itemHeight, gap, padding, screenWidth: SCREEN_WIDTH };
 };
+
+function withOpacity(color: string, opacity: number): string {
+  if (opacity >= 1) {
+    return color;
+  }
+
+  const hex = color.trim().replace('#', '');
+  if (hex.length === 3) {
+    const r = Number.parseInt(hex[0] + hex[0], 16);
+    const g = Number.parseInt(hex[1] + hex[1], 16);
+    const b = Number.parseInt(hex[2] + hex[2], 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  }
+
+  if (hex.length === 6) {
+    const r = Number.parseInt(hex.slice(0, 2), 16);
+    const g = Number.parseInt(hex.slice(2, 4), 16);
+    const b = Number.parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  }
+
+  return color;
+}
+
+function shadowStyle(
+  color: string,
+  radius: number,
+  opacity = 1,
+  offset: { width: number; height: number } = { width: 0, height: 0 },
+) {
+  if (Platform.OS === 'web') {
+    return {
+      boxShadow: `${offset.width}px ${offset.height}px ${radius}px ${withOpacity(color, opacity)}`,
+    };
+  }
+
+  return {
+    shadowColor: color,
+    shadowOpacity: opacity,
+    shadowRadius: radius,
+    shadowOffset: offset,
+  };
+}
+
+function textShadowStyle(
+  color: string,
+  radius: number,
+  offset: { width: number; height: number } = { width: 0, height: 0 },
+) {
+  if (Platform.OS === 'web') {
+    return {
+      textShadow: `${offset.width}px ${offset.height}px ${radius}px ${color}`,
+    };
+  }
+
+  return {
+    textShadowColor: color,
+    textShadowRadius: radius,
+    textShadowOffset: offset,
+  };
+}
 
 // Storage Keys
 const STORAGE_KEYS = {
@@ -569,7 +630,7 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
               name={iconData.icon} 
               size={iconSize} 
               color={iconData.color} 
-              style={{ opacity: 0.5, shadowColor: iconData.color, shadowRadius: 20, shadowOpacity: 1 }}
+              style={{ opacity: 0.5, ...shadowStyle(iconData.color, 20, 1) }}
             />
           </Animated.View>
           
@@ -579,7 +640,7 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
               name={iconData.icon} 
               size={iconSize} 
               color={iconData.color} 
-              style={{ shadowColor: iconData.color, shadowRadius: 30, shadowOpacity: 1 }}
+              style={shadowStyle(iconData.color, 30, 1)}
             />
           </Animated.View>
 
@@ -590,7 +651,7 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
             style={[
               styles.iconGlow, 
               isWinning && styles.winningSymbol,
-              isWinning && { shadowColor: iconData.color, textShadowColor: iconData.color }
+              isWinning && { ...shadowStyle(iconData.color, 10, 1), ...textShadowStyle(iconData.color, 10) }
             ]} 
           />
         </Animated.View>
@@ -624,17 +685,15 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
       {/* 3D Depth Overlays - Reduced thickness */}
       <LinearGradient
         colors={['rgba(0,0,0,0.9)', 'rgba(0,0,0,0.4)', 'transparent']}
-        style={styles.reelGradientTop}
-        pointerEvents="none"
+        style={[styles.reelGradientTop, styles.pointerEventsNone]}
       />
       <LinearGradient
         colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.9)']}
-        style={styles.reelGradientBottom}
-        pointerEvents="none"
+        style={[styles.reelGradientBottom, styles.pointerEventsNone]}
       />
       
       {/* Glass reflection effect */}
-      <View style={styles.reelGlass} pointerEvents="none" />
+      <View style={[styles.reelGlass, styles.pointerEventsNone]} />
     </View>
   );
 }
@@ -1014,7 +1073,7 @@ function SlotsGame({
           style={styles.machineBody}
         >
           {/* Decorative Machine Texture */}
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <View style={[StyleSheet.absoluteFill, styles.pointerEventsNone]}>
             {/* Horizontal Grid */}
             <View style={styles.machineTextureLine} />
             <View style={[styles.machineTextureLine, { top: '25%' }]} />
@@ -1041,7 +1100,7 @@ function SlotsGame({
           <View style={[styles.chaosGrid, { gap, padding }]}>
               {/* Payline Visuals */}
               {winningLines.length > 0 && (
-              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              <View style={[StyleSheet.absoluteFill, styles.pointerEventsNone]}>
                   <Svg height="100%" width="100%">
                   {winningLines.map(lineIdx => {
                       const pattern = PAYLINES[lineIdx - 1];
@@ -1229,6 +1288,9 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255,255,255,0.03)',
   },
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
   bonusBanner: {
     backgroundColor: NEON_PINK,
     paddingVertical: 4,
@@ -1262,15 +1324,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 2,
     marginBottom: 2,
-    textShadowColor: NEON_PINK,
-    textShadowRadius: 8,
+    ...textShadowStyle(NEON_PINK, 8),
   },
   jackpotValue: {
     fontSize: 18,
     color: '#fff',
     fontWeight: '900',
-    textShadowColor: NEON_GREEN,
-    textShadowRadius: 12,
+    ...textShadowStyle(NEON_GREEN, 12),
     fontVariant: ['tabular-nums'],
     letterSpacing: 1,
   },
@@ -1305,9 +1365,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(204, 255, 0, 0.3)',
     borderBottomLeftRadius: 16,
     borderBottomRightRadius: 16,
-    shadowColor: NEON_GREEN,
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
+    ...shadowStyle(NEON_GREEN, 10, 0.5),
   },
   chaosStatusText: {
     fontSize: 10,
@@ -1315,8 +1373,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 1,
     textTransform: 'uppercase',
-    textShadowColor: NEON_GREEN,
-    textShadowRadius: 4,
+    ...textShadowStyle(NEON_GREEN, 4),
     zIndex: 1,
   },
   machineCasing: {
@@ -1328,10 +1385,7 @@ const styles = StyleSheet.create({
     borderLeftColor: '#444',
     borderRightColor: '#111',
     borderBottomColor: '#000',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.8,
-    shadowRadius: 8,
+    ...shadowStyle('#000', 8, 0.8, { width: 0, height: 6 }),
     maxWidth: '100%',
     zIndex: 10,
   },
@@ -1363,9 +1417,7 @@ const styles = StyleSheet.create({
   lineIndicatorActive: {
     backgroundColor: NEON_GREEN,
     borderColor: '#fff',
-    shadowColor: NEON_GREEN,
-    shadowOpacity: 0.8,
-    shadowRadius: 2,
+    ...shadowStyle(NEON_GREEN, 2, 0.8),
   },
   lineIndicatorText: {
     fontSize: 6,
@@ -1382,10 +1434,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#222',
-    shadowColor: '#000',
-    shadowOpacity: 0.8,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    ...shadowStyle('#000', 4, 0.8, { width: 0, height: 2 }),
     overflow: 'hidden',
   },
   gridOverlayLine: {
@@ -1398,17 +1447,11 @@ const styles = StyleSheet.create({
     zIndex: 0,
   },
   iconGlow: {
-    shadowColor: 'white',
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    shadowOffset: {width:0, height:0},
+    ...shadowStyle('white', 4, 0.3),
   },
   winningSymbol: {
-    shadowColor: NEON_GREEN,
-    shadowOpacity: 1,
-    shadowRadius: 10,
-    textShadowColor: NEON_GREEN,
-    textShadowRadius: 10,
+    ...shadowStyle(NEON_GREEN, 10, 1),
+    ...textShadowStyle(NEON_GREEN, 10),
   },
   buyBonusBtn: {
     flexDirection: 'row',

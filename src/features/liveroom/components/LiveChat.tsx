@@ -37,8 +37,7 @@ export function LiveChat({ messages, onUserTap }: LiveChatProps) {
           'transparent',
         ]}
         locations={[0, 0.2, 0.4, 0.6, 0.8, 1]}
-        style={styles.fadeOverlay}
-        pointerEvents="none"
+        style={[styles.fadeOverlay, styles.pointerEventsNone]}
       />
 
       <ScrollView
@@ -212,6 +211,9 @@ const styles = StyleSheet.create({
     right: 0,
     height: 100,
     zIndex: 1,
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
   },
   scrollView: {
   },

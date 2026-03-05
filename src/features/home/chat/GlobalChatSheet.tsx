@@ -728,22 +728,22 @@ export function GlobalChatSheet({
 
   return (
     <Modal visible={visible} transparent animationType="none">
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <View style={[StyleSheet.absoluteFill, styles.pointerEventsBoxNone]}>
         {/* Backdrop BEHIND the sheet - tapping closes */}
-        <Animated.View style={[styles.backdrop, { opacity: overlayOpacity }]} pointerEvents="box-none">
+        <Animated.View style={[styles.backdrop, { opacity: overlayOpacity }, styles.pointerEventsBoxNone]}>
           <Pressable
-            style={StyleSheet.absoluteFill}
+            style={[StyleSheet.absoluteFill, menuVisible ? styles.pointerEventsNone : styles.pointerEventsAuto]}
             onPress={closeAll}
-            pointerEvents={menuVisible ? 'none' : 'auto'}
           />
         </Animated.View>
 
         {/* Sheet ABOVE backdrop */}
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+        <View style={[StyleSheet.absoluteFill, styles.pointerEventsBoxNone]}>
           {/* Grabber handle just above the sheet (moves with sheetY) */}
           <Animated.View
             style={[
               styles.grabberContainer,
+              styles.pointerEventsAuto,
               {
                 position: 'absolute',
                 top: COLLAPSED_TOP - 15, // Just barely above the sheet (~10-15px gap)
@@ -753,7 +753,6 @@ export function GlobalChatSheet({
               },
             ]}
             {...panResponder.panHandlers}
-            pointerEvents="auto"
             accessibilityRole="adjustable"
             accessibilityLabel="Chat sheet grabber"
             accessibilityHint="Swipe up or down to adjust chat sheet height"
@@ -771,6 +770,7 @@ export function GlobalChatSheet({
           <Animated.View
             style={[
               styles.chatSheet,
+              styles.pointerEventsAuto,
               {
                 position: 'absolute',
                 top: COLLAPSED_TOP,
@@ -780,7 +780,6 @@ export function GlobalChatSheet({
                 marginTop: sheetY,
               },
             ]}
-            pointerEvents="auto"
           >
             {/* Header with drag zone */}
             <View style={styles.topChrome}>
@@ -1362,7 +1361,7 @@ const UserMessageRow = React.memo(function UserMessageRow({
               {item.status === 'sent' && <Ionicons name="checkmark" size={10} color={colors.textMuted} />}
               {item.status === 'failed' && <Ionicons name="alert-circle" size={10} color={colors.accentDanger} />}
             </View>
-            <Animated.View pointerEvents="none" style={[styles.bubbleGlow, { opacity: overlayOpacity }]} />
+            <Animated.View style={[styles.bubbleGlow, { opacity: overlayOpacity }, styles.pointerEventsNone]} />
           </Animated.View>
         </View>
       </Pressable>
@@ -1371,6 +1370,15 @@ const UserMessageRow = React.memo(function UserMessageRow({
 });
 
 const styles = StyleSheet.create({
+  pointerEventsAuto: {
+    pointerEvents: 'auto',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
+  pointerEventsBoxNone: {
+    pointerEvents: 'box-none',
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',

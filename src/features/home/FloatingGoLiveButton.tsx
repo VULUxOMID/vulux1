@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, ViewStyle } from 'react-native';
+import { Animated, Platform, StyleSheet, ViewStyle } from 'react-native';
 
 import { AppButton } from '../../components';
 import { NAV_BAR_HEIGHT } from '../../components/navigation/layoutConstants';
@@ -24,9 +24,9 @@ export function FloatingGoLiveButton({ visible, bottomInset, onPress }: Floating
 
   return (
     <Animated.View
-      pointerEvents={visible ? 'auto' : 'none'}
       style={[
         styles.wrap,
+        visible ? styles.pointerEventsAuto : styles.pointerEventsNone,
         {
           bottom: NAV_BAR_HEIGHT + bottomInset + spacing.md,
           opacity: anim,
@@ -59,14 +59,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 25,
   } as ViewStyle,
+  pointerEventsAuto: {
+    pointerEvents: 'auto',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
   button: {
     width: '60%',
     maxWidth: 260,
     borderRadius: radius.xl,
     paddingVertical: spacing.sm,
-    shadowColor: colors.accentDanger,
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 0px 12px ${colors.accentDanger}66`,
+      },
+      default: {
+        shadowColor: colors.accentDanger,
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 0 },
+      },
+    }),
   },
 });

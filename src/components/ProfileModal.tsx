@@ -9,6 +9,7 @@ import {
   PanResponder,
   Animated,
   Keyboard,
+  Platform,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -802,9 +803,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     marginBottom: 12,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    ...Platform.select({
+      web: {
+        textShadow: '0px 1px 4px rgba(0, 0, 0, 0.5)',
+      },
+      default: {
+        textShadowColor: 'rgba(0,0,0,0.5)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 4,
+      },
+    }),
   },
   card: {
     width: '100%',
@@ -1069,10 +1077,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentPrimary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 4px 8px rgba(0, 0, 0, 0.3)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+      },
+    }),
     elevation: 8,
     flexDirection: 'row',
   },
@@ -1188,10 +1203,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentPrimary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: colors.accentPrimary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 4px 8px ${colors.accentPrimary}66`,
+      },
+      default: {
+        shadowColor: colors.accentPrimary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
+      },
+    }),
     elevation: 8,
   },
   // Confirmation modal styles
@@ -1211,10 +1233,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.surfaceAlt,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.5)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.5,
+        shadowRadius: 20,
+      },
+    }),
     elevation: 20,
   },
   confirmIconContainer: {
@@ -1266,10 +1295,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDanger,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: colors.accentDanger,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    ...Platform.select({
+      web: {
+        boxShadow: `0px 4px 8px ${colors.accentDanger}4D`,
+      },
+      default: {
+        shadowColor: colors.accentDanger,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+      },
+    }),
     elevation: 4,
   },
   confirmYesText: {

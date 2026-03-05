@@ -8,6 +8,7 @@ import {
   Animated,
   PanResponder,
   Modal,
+  Platform,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -158,11 +159,10 @@ export function ParticipantsDrawer({
   const allHosts = liveRoom.streamers;
 
   return (
-    <View style={styles.container} pointerEvents="box-none">
+    <View style={[styles.container, styles.pointerEventsBoxNone]}>
       {/* Backdrop */}
       <Animated.View
-        style={[styles.backdrop, { opacity: backdropOpacity }]}
-        pointerEvents={visible ? 'auto' : 'none'}
+        style={[styles.backdrop, { opacity: backdropOpacity }, visible ? styles.pointerEventsAuto : styles.pointerEventsNone]}
       >
         <Pressable style={StyleSheet.absoluteFill} onPress={closeDrawer} />
       </Animated.View>
@@ -442,6 +442,15 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     elevation: 1000,
   },
+  pointerEventsAuto: {
+    pointerEvents: 'auto',
+  },
+  pointerEventsNone: {
+    pointerEvents: 'none',
+  },
+  pointerEventsBoxNone: {
+    pointerEvents: 'box-none',
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.6)',
@@ -456,10 +465,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#121318', // Darker than main background
     borderTopLeftRadius: radius.xl,
     borderBottomLeftRadius: radius.xl,
-    shadowColor: '#000',
-    shadowOpacity: 0.4,
-    shadowRadius: 25,
-    shadowOffset: { width: -8, height: 0 },
+    ...Platform.select({
+      web: {
+        boxShadow: '8px 0px 25px rgba(0, 0, 0, 0.4)',
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOpacity: 0.4,
+        shadowRadius: 25,
+        shadowOffset: { width: -8, height: 0 },
+      },
+    }),
     elevation: 1000,
     zIndex: 1000,
   },
