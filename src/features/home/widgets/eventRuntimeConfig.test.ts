@@ -70,6 +70,25 @@ test('resolveEventWidgetRuntimeConfig prefers backend config row and respects au
   assert.equal(runtime.autoplayFrequencySeconds, 0);
 });
 
+test('resolveEventWidgetRuntimeConfig parses snake_case backend config fields', () => {
+  const runtime = resolveEventWidgetRuntimeConfig(
+    null,
+    {
+      enabled: true,
+      entry_amount_cash: 77,
+      draw_duration_minutes: 9,
+      draw_interval_minutes: 5,
+      autoplay_enabled: true,
+    } as unknown as Record<string, unknown>,
+  );
+
+  assert.equal(runtime.enabled, true);
+  assert.equal(runtime.entryAmount, 77);
+  assert.equal(runtime.drawDurationMinutes, 9);
+  assert.equal(runtime.drawIntervalMinutes, 5);
+  assert.equal(runtime.autoplayFrequencySeconds, 0);
+});
+
 test('countDistinctActivePlayersNow counts distinct fresh hosting/watching users', () => {
   const nowMs = 1_700_000_000_000;
   const count = countDistinctActivePlayersNow(
