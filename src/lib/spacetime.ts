@@ -11,6 +11,7 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
 }
 
 import { DbConnection, type SubscriptionHandle } from './spacetimedb';
+import { planScopedSubscriptionTeardown } from './spacetimeSubscriptionLifecycle';
 
 const SPACETIMEDB_URI =
   process.env.EXPO_PUBLIC_SPACETIMEDB_URI || 'wss://maincloud.spacetimedb.com';
@@ -631,6 +632,7 @@ export async function setSpacetimeAuthToken(nextToken: string | null): Promise<v
 let connection: DbConnection | null = null;
 let activeScopedSubscription: ActiveScopedSubscription | null = null;
 let desiredScopedSubscription: ScopedSubscriptionSpec | null = null;
+const deferredScopedSubscriptionTeardowns = new WeakSet<SubscriptionHandle>();
 let scopedSubscriptionAttemptNonce = 0;
 const scopedSubscriptionRefCounts = new Map<string, number>();
 let shouldMaintainConnection = false;
@@ -891,18 +893,41 @@ function logActiveSubscriptions(active: ActiveScopedSubscription | null): void {
   );
 }
 
+function teardownScopedSubscriptionHandle(handle: SubscriptionHandle, reason: string): void {
+  const isEnded = typeof handle.isEnded === 'function' && handle.isEnded();
+  const isActive = typeof handle.isActive === 'function' ? handle.isActive() : true;
+  const teardownPlan = planScopedSubscriptionTeardown({
+    reason,
+    isActive,
+    isEnded,
+  });
+
+  if (teardownPlan === 'skip') {
+    deferredScopedSubscriptionTeardowns.delete(handle);
+    return;
+  }
+
+  if (teardownPlan === 'defer_until_applied') {
+    deferredScopedSubscriptionTeardowns.add(handle);
+    maybeLogVerbose('subscription_teardown_deferred_until_applied', {
+      reason,
+    });
+    return;
+  }
+
+  deferredScopedSubscriptionTeardowns.delete(handle);
+  if (typeof (handle as any).unsubscribe === 'function') {
+    (handle as any).unsubscribe();
+  }
+}
+
 function terminateActiveScopedSubscription(reason: string): void {
   const existing = activeScopedSubscription;
   activeScopedSubscription = null;
   if (!existing) return;
 
   try {
-    if (typeof existing.handle.isEnded === 'function' && existing.handle.isEnded()) {
-      return;
-    }
-    if (typeof (existing.handle as any).unsubscribe === 'function') {
-      (existing.handle as any).unsubscribe();
-    }
+    teardownScopedSubscriptionHandle(existing.handle, reason);
   } catch (error) {
     maybeLogVerbose('subscription_terminate_failed', {
       reason,
@@ -1096,7 +1121,27 @@ function subscribeToScopedSpec(nextConnection: DbConnection, spec: ScopedSubscri
     const nextSubscription = nextConnection
       .subscriptionBuilder()
       .onApplied(() => {
+        if (deferredScopedSubscriptionTeardowns.has(nextSubscription)) {
+          deferredScopedSubscriptionTeardowns.delete(nextSubscription);
+          try {
+            teardownScopedSubscriptionHandle(nextSubscription, `deferred_apply:${spec.name}`);
+          } catch (error) {
+            maybeLogVerbose('subscription_deferred_teardown_apply_failed', {
+              name: spec.name,
+              error: toErrorMessage(error),
+            });
+          }
+          return;
+        }
         if (attemptNonce !== scopedSubscriptionAttemptNonce) {
+          try {
+            teardownScopedSubscriptionHandle(nextSubscription, `stale_apply:${spec.name}`);
+          } catch (error) {
+            maybeLogVerbose('subscription_stale_apply_teardown_failed', {
+              name: spec.name,
+              error: toErrorMessage(error),
+            });
+          }
           return;
         }
         didApply = true;
@@ -1125,6 +1170,7 @@ function subscribeToScopedSpec(nextConnection: DbConnection, spec: ScopedSubscri
         logActiveSubscriptions(activeScopedSubscription);
       })
       .onError((ctx) => {
+        deferredScopedSubscriptionTeardowns.delete(nextSubscription);
         if (attemptNonce !== scopedSubscriptionAttemptNonce) {
           return;
         }
