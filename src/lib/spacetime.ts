@@ -282,6 +282,7 @@ const PUBLIC_SUBSCRIPTION_VIEWS = [
   'public_profile_summary',
   'public_leaderboard',
   'public_live_discovery',
+  'public_live_presence_item',
   'global_message_item',
 ] as const;
 

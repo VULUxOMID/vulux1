@@ -15,6 +15,11 @@ import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
 } from '../../../data/adapters/backend/accountState';
+import { subscribeSpacetimeDataChanges } from '../../../lib/spacetime';
+import {
+  EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG,
+  resolveEventWidgetRuntimeConfig,
+} from './eventRuntimeConfig';
 
 const PROGRESS_TICK_MS = 500;
 const WINNER_VISIBILITY_MS = 10000;
@@ -28,21 +33,21 @@ function parseEnvNumber(name: string, min = 0, max = Number.MAX_SAFE_INTEGER): n
   return parsed;
 }
 
-const EVENT_DRAW_MINUTES = parseEnvNumber('EXPO_PUBLIC_EVENT_DRAW_MINUTES', 1, 1440);
-const EVENT_ENTRY_COST = parseEnvNumber('EXPO_PUBLIC_EVENT_ENTRY_COST', 0, 1000000);
 const EVENT_PRIZE_POOL = parseEnvNumber('EXPO_PUBLIC_EVENT_PRIZE_POOL', 0, 1000000000);
 const EVENT_INITIAL_ENTRIES = parseEnvNumber('EXPO_PUBLIC_EVENT_INITIAL_ENTRIES', 0, 10000);
 
 export type EventWidgetProps = {
   onAnnounceWinner: (message: string) => void;
   friends: Friend[];
+  activePlayersNow: number;
 };
 
-export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
+export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: EventWidgetProps) {
   const { getToken, isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
   const { cash, spendCash } = useWallet();
-  const drawDurationMs = EVENT_DRAW_MINUTES * 60 * 1000;
-  const entryCost = EVENT_ENTRY_COST;
+  const [runtimeConfig, setRuntimeConfig] = useState(EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG);
+  const drawDurationMs = runtimeConfig.drawDurationMinutes * 60 * 1000;
+  const entryCost = runtimeConfig.entryAmount;
   const prizePool = EVENT_PRIZE_POOL;
   const [expanded, setExpanded] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -53,6 +58,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
   const [displayEntries, setDisplayEntries] = useState(EVENT_INITIAL_ENTRIES);
   const [hasEntered, setHasEntered] = useState(false);
   const [eventHydrated, setEventHydrated] = useState(false);
+  const [runtimeConfigRefreshNonce, setRuntimeConfigRefreshNonce] = useState(0);
 
   const progressRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -70,6 +76,16 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     setLastWinner(null);
     setWinnerHighlight(false);
   }, []);
+
+  useEffect(() => {
+    if (!isAuthLoaded || !isSignedIn || !userId) return;
+    return subscribeSpacetimeDataChanges((event) => {
+      if (!event.scopes.includes('wallet') && !event.scopes.includes('profile')) {
+        return;
+      }
+      setRuntimeConfigRefreshNonce((current) => current + 1);
+    });
+  }, [isAuthLoaded, isSignedIn, userId]);
 
   // Animate entries counter
   useEffect(() => {
@@ -103,6 +119,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     if (!isSignedIn || !userId) {
       resetEventState();
       setEventHydrated(true);
+      setRuntimeConfig(EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG);
       return () => {
         active = false;
       };
@@ -114,6 +131,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
     const hydrateEventState = async () => {
       const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
+      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState));
 
       const eventState =
         accountState?.eventWidget && typeof accountState.eventWidget === 'object'
@@ -143,6 +161,34 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
       active = false;
     };
   }, [getToken, isAuthLoaded, isSignedIn, resetEventState, userId]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (!isAuthLoaded) {
+      return () => {
+        active = false;
+      };
+    }
+
+    if (!isSignedIn || !userId) {
+      setRuntimeConfig(EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG);
+      return () => {
+        active = false;
+      };
+    }
+
+    const hydrateRuntimeConfig = async () => {
+      const accountState = await fetchBackendAccountState(null, getToken, userId);
+      if (!active) return;
+      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState));
+    };
+
+    void hydrateRuntimeConfig();
+    return () => {
+      active = false;
+    };
+  }, [getToken, isAuthLoaded, isSignedIn, runtimeConfigRefreshNonce, userId]);
 
   useEffect(() => {
     if (!eventHydrated || !isAuthLoaded || !isSignedIn || !userId) {
@@ -252,7 +298,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
   }, [friends, onAnnounceWinner, prizePool]);
 
   useEffect(() => {
-    if (drawDurationMs <= 0) {
+    if (!runtimeConfig.enabled || drawDurationMs <= 0) {
       setProgress(0);
       progressRef.current = 0;
       return;
@@ -282,7 +328,27 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
         winnerTimerRef.current = null;
       }
     };
-  }, [drawDurationMs, handleWinner]);
+  }, [drawDurationMs, handleWinner, runtimeConfig.enabled]);
+
+  useEffect(() => {
+    if (!runtimeConfig.enabled) {
+      setShowEntryModal(false);
+      return;
+    }
+    const frequencySeconds = runtimeConfig.autoplayFrequencySeconds;
+    if (!Number.isFinite(frequencySeconds) || frequencySeconds <= 0) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setEntries((currentEntries) => {
+        const increment = Math.max(1, Math.min(6, activePlayersNow > 0 ? Math.round(activePlayersNow * 0.08) : 1));
+        return currentEntries + increment;
+      });
+    }, Math.floor(frequencySeconds * 1000));
+
+    return () => clearInterval(timer);
+  }, [activePlayersNow, runtimeConfig.autoplayFrequencySeconds, runtimeConfig.enabled]);
 
   const toggle = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -341,6 +407,10 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
       ? `Winner: @${lastWinner}`
       : `Last winner: @${lastWinner}`
     : 'Next draw soon';
+
+  if (!runtimeConfig.enabled) {
+    return null;
+  }
 
   // Collapsed state content - shown below header
   const collapsedContent = (
@@ -403,9 +473,9 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
               shimmer={shimmerAnim}
             />
             <StatBox
-              value={displayEntries.toLocaleString()}
-              label="Entries"
-              icon="people-outline"
+              value={Math.max(0, Math.floor(activePlayersNow)).toLocaleString()}
+              label="Active Now"
+              icon="pulse-outline"
               color={colors.textSecondary}
             />
           </View>
@@ -448,7 +518,7 @@ export function EventWidget({ onAnnounceWinner, friends }: EventWidgetProps) {
         entryCost={entryCost}
         currentBalance={cash}
         prizePool={prizePool}
-        drawMinutes={EVENT_DRAW_MINUTES}
+        drawMinutes={runtimeConfig.drawIntervalMinutes}
       />
     </>
   );
