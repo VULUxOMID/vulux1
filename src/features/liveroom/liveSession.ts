@@ -2,8 +2,8 @@ import type { ChatMessage, LiveUser } from './types';
 
 export const liveSessionUser: LiveUser = {
   id: 'current-user',
-  name: 'You',
-  username: 'you',
+  name: 'Unknown',
+  username: 'user',
   age: 0,
   verified: false,
   country: '',

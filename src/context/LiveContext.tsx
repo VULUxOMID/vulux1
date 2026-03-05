@@ -27,6 +27,7 @@ import { useWallet } from './WalletContext';
 import { toast } from '../components/Toast';
 import type { GlobalChatMessage, SocialUser } from '../data/contracts';
 import { liveLifecycleClient, type LiveMutationResult } from '../lib/liveLifecycleClient';
+import { spacetimeDb } from '../lib/spacetime';
 
 type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
@@ -244,6 +245,141 @@ type SessionIdentityUser = {
   username?: string | null;
   imageUrl?: string | null;
 };
+
+type ProfileIdentity = {
+  displayName?: string;
+  username?: string;
+  avatarUrl?: string;
+};
+
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object') {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readTimestampMs(value: unknown): number {
+  const direct = asFiniteNumber(value);
+  if (direct !== null) return direct;
+
+  if (value && typeof value === 'object') {
+    const asObject = value as {
+      toMillis?: () => unknown;
+      microsSinceUnixEpoch?: unknown;
+      __timestamp_micros_since_unix_epoch__?: unknown;
+    };
+
+    if (typeof asObject.toMillis === 'function') {
+      const millis = asFiniteNumber(asObject.toMillis());
+      if (millis !== null) return millis;
+    }
+
+    const micros = asObject.microsSinceUnixEpoch ?? asObject.__timestamp_micros_since_unix_epoch__;
+    const microsAsNumber = asFiniteNumber(micros);
+    if (microsAsNumber !== null) {
+      return Math.floor(microsAsNumber / 1000);
+    }
+  }
+
+  return 0;
+}
+
+function normalizeIdentityToken(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase().replace(/^@+/, '').replace(/\s+/g, '_');
+}
+
+function isUsernameLikeDisplayName(
+  name: string | undefined,
+  username: string | undefined,
+  profileUsername: string | undefined,
+): boolean {
+  const normalizedName = normalizeIdentityToken(name);
+  if (!normalizedName) return false;
+
+  const normalizedUsername = normalizeIdentityToken(username);
+  if (normalizedUsername && normalizedName === normalizedUsername) {
+    return true;
+  }
+
+  const normalizedProfileUsername = normalizeIdentityToken(profileUsername);
+  if (normalizedProfileUsername && normalizedName === normalizedProfileUsername) {
+    return true;
+  }
+
+  return false;
+}
+
+function firstPhotoUri(photos: unknown): string | undefined {
+  if (!Array.isArray(photos)) return undefined;
+  for (const item of photos) {
+    if (!item || typeof item !== 'object') continue;
+    const uri = asTrimmedString((item as { uri?: unknown }).uri);
+    if (uri) {
+      return uri;
+    }
+  }
+  return undefined;
+}
+
+function mergeProfileIdentity(base: LiveUser, profile?: ProfileIdentity): LiveUser {
+  if (!profile) return base;
+
+  const displayName = asTrimmedString(profile.displayName) ?? undefined;
+  const username = asTrimmedString(profile.username) ?? undefined;
+  const avatarUrl = asTrimmedString(profile.avatarUrl) ?? undefined;
+  let next = base;
+
+  if (
+    displayName &&
+    !isGenericDisplayLabel(displayName) &&
+    !isLikelyOpaqueUserId(displayName) &&
+    (
+      shouldPreferMappedValue(next.name, displayName) ||
+      isUsernameLikeDisplayName(next.name, next.username, username)
+    )
+  ) {
+    next = {
+      ...next,
+      name: displayName,
+    };
+  }
+
+  if (username && shouldPreferMappedValue(next.username, username)) {
+    next = {
+      ...next,
+      username,
+    };
+  }
+
+  if (avatarUrl) {
+    next = {
+      ...next,
+      avatarUrl,
+    };
+  }
+
+  return next;
+}
+
+function makeIdentitySeedUser(userId: string): LiveUser {
+  return {
+    id: userId,
+    name: userId,
+    username: userId,
+    age: 0,
+    verified: false,
+    country: '',
+    bio: '',
+    avatarUrl: '',
+  };
+}
 
 function toLiveUserFromSession(userId: string, sessionUser: SessionIdentityUser | null | undefined): LiveUser {
   const preferredName = sessionUser?.fullName?.trim() || sessionUser?.username?.trim() || undefined;
@@ -606,6 +742,65 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     [socialUsers, userId],
   );
 
+  const profileIdentityById = useMemo(() => {
+    const identities = new Map<string, ProfileIdentity>();
+    if (!queriesEnabled) {
+      return identities;
+    }
+
+    const dbView = spacetimeDb.db as any;
+    const globalRows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
+    globalRows
+      .sort(
+        (a, b) =>
+          readTimestampMs(a?.createdAt ?? a?.created_at) -
+          readTimestampMs(b?.createdAt ?? b?.created_at),
+      )
+      .forEach((row) => {
+        const item = parseJsonRecord(row?.item);
+        if (asTrimmedString(item.eventType) !== 'user_profile') return;
+        const profileUserId = asTrimmedString(item.userId);
+        if (!profileUserId) return;
+
+        const current = identities.get(profileUserId) ?? {};
+        const next: ProfileIdentity = {
+          displayName: asTrimmedString(item.displayName) ?? current.displayName,
+          username: asTrimmedString(item.username) ?? current.username,
+          avatarUrl: asTrimmedString(item.avatarUrl) ?? current.avatarUrl,
+        };
+        identities.set(profileUserId, next);
+      });
+
+    const myProfileRows: any[] = Array.from(dbView?.myProfile?.iter?.() ?? dbView?.my_profile?.iter?.() ?? []);
+    const myProfileRow = myProfileRows[0];
+    if (myProfileRow) {
+      const profile = parseJsonRecord(myProfileRow?.profile);
+      const profileUserId =
+        asTrimmedString(myProfileRow?.userId ?? myProfileRow?.user_id) ??
+        asTrimmedString(profile.userId) ??
+        userId ??
+        null;
+      if (profileUserId) {
+        const current = identities.get(profileUserId) ?? {};
+        identities.set(profileUserId, {
+          displayName:
+            asTrimmedString(profile.displayName) ??
+            asTrimmedString(profile.name) ??
+            current.displayName,
+          username:
+            asTrimmedString(profile.username) ??
+            current.username,
+          avatarUrl:
+            asTrimmedString(profile.avatarUrl) ??
+            firstPhotoUri(profile.photos) ??
+            current.avatarUrl,
+        });
+      }
+    }
+
+    return identities;
+  }, [knownLiveUsers, queriesEnabled, socialUsers, userId]);
+
   const sessionIdentity = useMemo(() => {
     const explicitDisplayName = sessionUser?.fullName?.trim();
     const explicitUsername = sessionUser?.username?.trim();
@@ -642,40 +837,51 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         ...knownUser,
         id: userId,
       }
-      : {
-        id: userId,
-        name: 'You',
-        username: normalizeUsername(userId, 'you'),
-        age: 0,
-        verified: false,
-        country: '',
-        bio: '',
-        avatarUrl: '',
-      };
+      : (() => {
+        const fallbackName = resolveFriendlyDisplayName(undefined, userId);
+        return {
+          id: userId,
+          name: fallbackName,
+          username: resolveFriendlyUsername(undefined, fallbackName, userId),
+          age: 0,
+          verified: false,
+          country: '',
+          bio: '',
+          avatarUrl: '',
+        };
+      })();
 
     if (currentSocialLiveUser) {
       resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSocialLiveUser);
     }
 
+    resolvedUser = mergeProfileIdentity(resolvedUser, profileIdentityById.get(userId));
+
     if (currentSessionUser) {
       resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSessionUser);
     }
 
-    if (sessionIdentity.explicitDisplayName) {
+    if (
+      sessionIdentity.explicitDisplayName &&
+      shouldPreferMappedValue(resolvedUser.name, sessionIdentity.explicitDisplayName)
+    ) {
       resolvedUser = {
         ...resolvedUser,
         name: sessionIdentity.explicitDisplayName,
       };
     }
 
-    if (sessionIdentity.explicitUsername) {
+    if (
+      sessionIdentity.explicitUsername &&
+      shouldPreferMappedValue(resolvedUser.username, sessionIdentity.explicitUsername)
+    ) {
       resolvedUser = {
         ...resolvedUser,
         username: sessionIdentity.explicitUsername,
       };
     }
 
-    if (sessionIdentity.explicitAvatarUrl) {
+    if (sessionIdentity.explicitAvatarUrl && !asTrimmedString(resolvedUser.avatarUrl)) {
       resolvedUser = {
         ...resolvedUser,
         avatarUrl: sessionIdentity.explicitAvatarUrl,
@@ -683,7 +889,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     }
 
     return withFriendlyLiveUser(resolvedUser);
-  }, [currentSessionUser, currentSocialUser, knownLiveUsers, sessionIdentity, userId]);
+  }, [currentSessionUser, currentSocialUser, knownLiveUsers, profileIdentityById, sessionIdentity, userId]);
 
   const currentUserWithMedia = useMemo(
     () => ({
@@ -697,14 +903,27 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const byId = new Map<string, LiveUser>();
 
     knownLiveUsers.forEach((user) => {
-      byId.set(user.id, withFriendlyLiveUser({
-        ...user,
-        username: resolveFriendlyUsername(user.username, user.name, user.id),
-      }));
+      byId.set(
+        user.id,
+        withFriendlyLiveUser(
+          mergeProfileIdentity(
+            {
+              ...user,
+              username: resolveFriendlyUsername(user.username, user.name, user.id),
+            },
+            profileIdentityById.get(user.id),
+          ),
+        ),
+      );
     });
 
     socialUsers.forEach((socialUser) => {
-      const fromSocial = withFriendlyLiveUser(toLiveUserFromSocial(socialUser));
+      const fromSocial = withFriendlyLiveUser(
+        mergeProfileIdentity(
+          toLiveUserFromSocial(socialUser),
+          profileIdentityById.get(socialUser.id),
+        ),
+      );
       const existing = byId.get(socialUser.id);
       if (!existing) {
         byId.set(socialUser.id, fromSocial);
@@ -723,9 +942,25 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       );
     });
 
-    byId.set(currentUserWithMedia.id, withFriendlyLiveUser(currentUserWithMedia));
+    profileIdentityById.forEach((profileIdentity, profileUserId) => {
+      const existing = byId.get(profileUserId) ?? makeIdentitySeedUser(profileUserId);
+      byId.set(
+        profileUserId,
+        withFriendlyLiveUser(mergeProfileIdentity(existing, profileIdentity)),
+      );
+    });
+
+    byId.set(
+      currentUserWithMedia.id,
+      withFriendlyLiveUser(
+        mergeProfileIdentity(
+          currentUserWithMedia,
+          profileIdentityById.get(currentUserWithMedia.id),
+        ),
+      ),
+    );
     return byId;
-  }, [currentUserWithMedia, knownLiveUsers, socialUsers]);
+  }, [currentUserWithMedia, knownLiveUsers, profileIdentityById, socialUsers]);
 
   const resolveLiveUser = useCallback(
     (targetUserId?: string, fallbackName?: string): LiveUser | undefined => {
