@@ -11,6 +11,7 @@ type BalanceCardProps = {
   cashBalance?: number;
   gemsBalance?: number;
   fuelBalance?: number;
+  isLoading?: boolean;
   rank?: number;
   isRankPublic?: boolean;
   onToggleRankPrivacy?: (value: boolean) => void;
@@ -21,6 +22,7 @@ export function GemsBalanceCard({
   cashBalance = 0,
   gemsBalance = 0,
   fuelBalance = 0,
+  isLoading = false,
   rank,
   isRankPublic,
   onToggleRankPrivacy,
@@ -53,7 +55,7 @@ export function GemsBalanceCard({
                 <Ionicons name="prism" size={20} color={colors.accentPrimary} />
               </View>
               <AppText variant="h2" style={styles.balanceValue}>
-                {formatValue(gemsBalance)}
+                {isLoading ? '--' : formatValue(gemsBalance)}
               </AppText>
               <AppText variant="micro" secondary style={styles.label}>Gems</AppText>
             </View>
@@ -63,7 +65,7 @@ export function GemsBalanceCard({
                 <CashIcon size={20} color={colors.accentSuccess} />
               </View>
               <AppText variant="h2" style={styles.balanceValue}>
-                {formatValue(cashBalance)}
+                {isLoading ? '--' : formatValue(cashBalance)}
               </AppText>
               <AppText variant="micro" secondary style={styles.label}>Cash</AppText>
             </View>
@@ -72,7 +74,9 @@ export function GemsBalanceCard({
               <View style={styles.iconContainer}>
                 <Ionicons name="rocket" size={20} color={colors.accentDanger} />
               </View>
-              <AppText variant="h2" style={styles.balanceValue}>{fuelBalance}m</AppText>
+              <AppText variant="h2" style={styles.balanceValue}>
+                {isLoading ? '--' : `${fuelBalance}m`}
+              </AppText>
               <AppText variant="micro" secondary style={styles.label}>Fuel</AppText>
             </View>
           </View>

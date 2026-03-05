@@ -15,6 +15,7 @@ type FuelGaugeProps = {
   fuelMinutes: number; // current fuel units (drains by 1 every second)
   maxFuel?: number;
   isDraining?: boolean; // true when in live
+  labelOverride?: string;
   onPress?: () => void;
 };
 
@@ -22,6 +23,7 @@ export function FuelGauge({
   fuelMinutes,
   maxFuel = MAX_FUEL_MINUTES,
   isDraining = false,
+  labelOverride,
   onPress,
 }: FuelGaugeProps) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -79,8 +81,9 @@ export function FuelGauge({
     outputRange: [0.4, 0.7],
   });
 
-  const isLow = fuelMinutes <= 10;
-  const isEmpty = fuelMinutes <= 0;
+  const isPlaceholder = typeof labelOverride === 'string' && labelOverride.length > 0;
+  const isLow = !isPlaceholder && fuelMinutes <= 10;
+  const isEmpty = !isPlaceholder && fuelMinutes <= 0;
 
   // Format time display based on per-second fuel drain.
   const formatFuel = (fuelUnits: number) => {
@@ -139,7 +142,7 @@ export function FuelGauge({
               isEmpty && styles.timeTextEmpty,
               isLow && !isEmpty && styles.timeTextLow,
             ]}>
-              {isEmpty ? '0s' : formatFuel(fuelMinutes)}
+              {labelOverride ?? (isEmpty ? '0s' : formatFuel(fuelMinutes))}
             </AppText>
           </View>
 
