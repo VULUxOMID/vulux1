@@ -1,4 +1,5 @@
 import { schema, table, t } from 'spacetimedb/server';
+import { readViewCallerIdentity, selectLegacyCallerUserId } from './viewIdentityResolver';
 
 type PublicProfileSummaryViewRow = {
     userId: string;
@@ -31,23 +32,6 @@ const PROFILE_VIEW_METRIC_LABEL_V2 = 'Corrected v2 (deduped, self-view excluded)
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
 const EVENT_METRICS_TIMEZONE = 'UTC';
 const EVENT_ACTIVE_WINDOW_MS = 120_000;
-const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
-    ['sub'],
-    ['userId'],
-    ['user_id'],
-    ['uid'],
-    ['metadata', 'userId'],
-    ['metadata', 'user_id'],
-    ['publicMetadata', 'userId'],
-    ['publicMetadata', 'user_id'],
-    ['public_metadata', 'userId'],
-    ['public_metadata', 'user_id'],
-    ['unsafeMetadata', 'userId'],
-    ['unsafeMetadata', 'user_id'],
-    ['unsafe_metadata', 'userId'],
-    ['unsafe_metadata', 'user_id'],
-] as const;
-
 function readString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
@@ -240,16 +224,18 @@ function readClaimPath(claims: Record<string, unknown>, path: readonly string[])
 
 function readLegacyCallerUserIdFromClaims(ctx: any): string | null {
     const claims = readJwtClaims(ctx);
-    if (!claims) return null;
-
-    for (const path of LEGACY_CALLER_USER_ID_CLAIM_PATHS) {
-        const candidate = readString(readClaimPath(claims, path));
-        if (candidate) {
-            return candidate;
+    return selectLegacyCallerUserId(claims, (candidate) => {
+        if (ctx?.db?.users?.vuluUserId?.find?.(candidate)) {
+            return true;
         }
-    }
-
-    return null;
+        if (ctx?.db?.accountStateItem?.userId?.find?.(candidate)) {
+            return true;
+        }
+        if (ctx?.db?.userIdentity?.vuluUserId?.find?.(candidate)) {
+            return true;
+        }
+        return false;
+    });
 }
 
 function readCallerAuthIdentity(ctx: any): { issuer: string; subject: string } | null {
@@ -266,7 +252,18 @@ function buildIdentityLookupKey(provider: string, issuer: string, subject: strin
     return `${provider.trim().toLowerCase()}::${issuer.trim()}::${subject.trim()}`;
 }
 
-function findMappedCallerUserId(ctx: any): string | null {
+function findMappedCallerUserIdBySenderIdentity(ctx: any): string | null {
+    const senderIdentity = readViewCallerIdentity(ctx);
+    const lookupFind = ctx?.db?.senderIdentityUserMap?.senderIdentity?.find;
+    if (!senderIdentity || typeof lookupFind !== 'function') {
+        return null;
+    }
+
+    const row = lookupFind(senderIdentity);
+    return readString(row?.vuluUserId);
+}
+
+function findMappedCallerUserIdByJwtIdentity(ctx: any): string | null {
     const authIdentity = readCallerAuthIdentity(ctx);
     const lookupFind = ctx?.db?.userIdentity?.lookupKey?.find;
     if (!authIdentity || typeof lookupFind !== 'function') {
@@ -283,14 +280,16 @@ function findMappedCallerUserId(ctx: any): string | null {
     return readString(row?.vuluUserId);
 }
 
+function findMappedCallerUserId(ctx: any): string | null {
+    return (
+        findMappedCallerUserIdBySenderIdentity(ctx) ??
+        findMappedCallerUserIdByJwtIdentity(ctx) ??
+        readLegacyCallerUserIdFromClaims(ctx)
+    );
+}
+
 function requireViewCallerUserId(ctx: any): string {
-    const callerUserId =
-        findMappedCallerUserId(ctx) ??
-        readLegacyCallerUserIdFromClaims(ctx) ??
-        readCallerAuthIdentity(ctx)?.subject ??
-        readIdentityString(ctx.sender);
-    if (callerUserId) return callerUserId;
-    throw new Error('Unauthorized: caller identity could not be resolved in view context.');
+    return findMappedCallerUserId(ctx) ?? readViewCallerIdentity(ctx) ?? '__unmapped__';
 }
 
 export const spacetimedb = schema({

@@ -6,6 +6,11 @@ import {
 } from '../data/adapters/backend/accountState';
 import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
 import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
+import {
+  hasAuthoritativeWalletForUser,
+  shouldRefreshWalletFromBackendEvent,
+  shouldRefreshWalletFromSpacetimeEvent,
+} from './walletHydration';
 
 const WALLET_HYDRATION_RETRY_MS = 350;
 const WALLET_HYDRATION_MAX_RETRIES = 8;
@@ -148,10 +153,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const gemsRef = useRef(gems);
   const cashRef = useRef(cash);
   const getTokenRef = useRef(getToken);
+  const walletUserIdRef = useRef<string | null>(null);
+  const walletHydratedRef = useRef(walletHydrated);
+  const walletStateAvailableRef = useRef(walletStateAvailable);
 
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    walletHydratedRef.current = walletHydrated;
+  }, [walletHydrated]);
+
+  useEffect(() => {
+    walletStateAvailableRef.current = walletStateAvailable;
+  }, [walletStateAvailable]);
 
   // Keep refs in sync with state
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
@@ -164,13 +180,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     const unsubscribeDataChanges = subscribeSpacetimeDataChanges((event) => {
-      if (event.scopes.includes('wallet')) {
+      if (shouldRefreshWalletFromSpacetimeEvent(event, walletHydratedRef.current)) {
         setWalletRefreshNonce((value) => value + 1);
       }
     });
 
     const unsubscribeBackendRefresh = subscribeBackendRefresh((event) => {
-      if (!event.scopes || event.scopes.includes('wallet') || event.forceFull) {
+      if (shouldRefreshWalletFromBackendEvent(event, walletHydratedRef.current)) {
         setWalletRefreshNonce((value) => value + 1);
       }
     });
@@ -186,6 +202,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const resetWalletState = () => {
+      walletUserIdRef.current = null;
       gemsRef.current = 0;
       cashRef.current = 0;
       fuelRef.current = 0;
@@ -210,7 +227,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    setWalletHydrated(false);
+    const hasCurrentUserWallet = hasAuthoritativeWalletForUser(
+      walletUserIdRef.current,
+      userId,
+      walletStateAvailableRef.current,
+    );
+
+    if (!hasCurrentUserWallet) {
+      setWalletHydrated(false);
+      setWalletStateAvailable(false);
+    }
 
     const hydrateWallet = async (attempt = 0) => {
       const accountState = await fetchBackendAccountState(
@@ -242,11 +268,40 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
 
       if (!accountState) {
+        if (
+          hasAuthoritativeWalletForUser(
+            walletUserIdRef.current,
+            userId,
+            walletStateAvailableRef.current,
+          )
+        ) {
+          setWalletHydrated(true);
+          return;
+        }
+
         setWalletStateAvailable(false);
         setWalletHydrated(true);
         return;
       }
 
+      if (!hasWalletState) {
+        if (
+          hasAuthoritativeWalletForUser(
+            walletUserIdRef.current,
+            userId,
+            walletStateAvailableRef.current,
+          )
+        ) {
+          setWalletHydrated(true);
+          return;
+        }
+
+        setWalletStateAvailable(false);
+        setWalletHydrated(true);
+        return;
+      }
+
+      walletUserIdRef.current = userId;
       setWalletStateAvailable(hasWalletState);
       const normalizedWalletState = walletState ?? {};
 

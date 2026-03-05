@@ -12,6 +12,7 @@ import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { spacetimeDb, subscribeBootstrap } from '../../lib/spacetime';
+import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { colors, spacing } from '../../theme';
 import { hapticTap } from '../../utils/haptics';
 import { GemsBalanceCard } from './GemsBalanceCard';
@@ -42,7 +43,7 @@ export default function ProfileScreen() {
   const leaderboardRepo = useLeaderboardRepo();
   const socialRepo = useSocialRepo();
   const { userProfile, updateUserProfile } = useUserProfile();
-  const { gems, cash, fuel } = useWallet();
+  const { gems, cash, fuel, walletHydrated, walletStateAvailable } = useWallet();
   const router = useRouter();
   const [isRankPublic, setIsRankPublic] = useState(true);
   const [activeTab, setActiveTab] = useState<TabOption>('wallet');
@@ -209,6 +210,11 @@ export default function ProfileScreen() {
   }, []);
 
   const renderTabContent = () => {
+    const showAuthoritativeWallet = hasAuthoritativeWallet(
+      walletHydrated,
+      walletStateAvailable,
+    );
+
     switch (activeTab) {
       case 'wallet':
         return (
@@ -217,6 +223,7 @@ export default function ProfileScreen() {
               cashBalance={cash}
               gemsBalance={gems}
               fuelBalance={fuel}
+              isLoading={!showAuthoritativeWallet}
               rank={currentRank}
               isRankPublic={isRankPublic}
               onToggleRankPrivacy={setIsRankPublic}

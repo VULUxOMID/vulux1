@@ -3,6 +3,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AppText, CurrencyPill } from '../../components';
+import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { colors, spacing } from '../../theme';
 import { useWallet } from '../../context';
 import { FuelGauge } from '../liveroom/components/FuelGauge';
@@ -14,7 +15,11 @@ type TopBarProps = {
 
 function DefaultTopActions() {
   const router = useRouter();
-  const { fuel, cash } = useWallet();
+  const { fuel, cash, walletHydrated, walletStateAvailable } = useWallet();
+  const showAuthoritativeWallet = hasAuthoritativeWallet(
+    walletHydrated,
+    walletStateAvailable,
+  );
 
   const formatCash = (amount: number) => {
     if (amount >= 1000) {
@@ -27,11 +32,12 @@ function DefaultTopActions() {
     <>
       <FuelGauge
         fuelMinutes={fuel}
+        labelOverride={showAuthoritativeWallet ? undefined : '--'}
         onPress={() => router.push('/(tabs)/shop')}
       />
       <CurrencyPill
         icon="cash"
-        label={formatCash(cash)}
+        label={showAuthoritativeWallet ? formatCash(cash) : '--'}
         color={colors.accentSuccess}
         onPress={() => router.push('/(tabs)/shop')}
         showDot
