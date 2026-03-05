@@ -25,6 +25,8 @@ type PublicLiveDiscoveryViewRow = {
 };
 
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
+const EVENT_METRICS_TIMEZONE = 'UTC';
+const EVENT_ACTIVE_WINDOW_MS = 120_000;
 const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
     ['sub'],
     ['userId'],
@@ -98,6 +100,69 @@ function toNonNegativeInt(value: unknown, fallback = 0): number {
     const parsed = readNumber(value);
     if (parsed === null) return fallback;
     return Math.max(0, Math.floor(parsed));
+}
+
+function readBoolean(value: unknown): boolean | null {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function readIsoMs(value: unknown): number | null {
+    const directNumber = readNumber(value);
+    if (directNumber !== null) {
+        return directNumber;
+    }
+
+    const isoValue = readString(value);
+    if (!isoValue) return null;
+
+    const parsed = Date.parse(isoValue);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toIsoUtc(valueMs: number): string {
+    try {
+        return new Date(valueMs).toISOString();
+    } catch {
+        return new Date().toISOString();
+    }
+}
+
+function startOfUtcDayMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function startOfUtcIsoWeekMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    const dayOfWeek = date.getUTCDay();
+    const offsetToMonday = (dayOfWeek + 6) % 7;
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - offsetToMonday);
+}
+
+function startOfUtcMonthMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+}
+
+function readLiveEventEnabled(liveItemValue: unknown, nowMs: number): boolean {
+    const liveItem = parseJsonRecord(liveItemValue);
+    const event = liveItem.event;
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        return false;
+    }
+
+    const eventRecord = event as Record<string, unknown>;
+    const enabled = readBoolean(eventRecord.enabled);
+    if (enabled === false) {
+        return false;
+    }
+
+    const endedAtMs = toNonNegativeInt(eventRecord.endedAt);
+    if (endedAtMs > 0 && endedAtMs <= nowMs) {
+        return false;
+    }
+
+    return true;
 }
 
 function readWalletBalancesFromState(stateValue: unknown): {
@@ -238,6 +303,19 @@ export const spacetimedb = schema({
             balanceAfter: t.string(), // json
             metadata: t.string(), // json
             createdAt: t.timestamp(),
+        }
+    ),
+    eventParticipationItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            liveId: t.string().index(),
+            userId: t.string().index(),
+            dayBucketStartIsoUtc: t.string().index(),
+            activity: t.string(),
+            source: t.string(),
+            firstSeenAtIsoUtc: t.string(),
+            lastSeenAtIsoUtc: t.string(),
         }
     ),
     auditLogItem: table(
@@ -503,6 +581,22 @@ const publicLiveDiscoveryRow = t.row('PublicLiveDiscoveryRow', {
     viewerCount: t.u32(),
 });
 
+const eventMetricsOverviewRow = t.row('EventMetricsOverviewRow', {
+    bucketTimezone: t.string(),
+    asOfIsoUtc: t.string(),
+    todayStartIsoUtc: t.string(),
+    weekStartIsoUtc: t.string(),
+    monthStartIsoUtc: t.string(),
+    activeWindowMs: t.u32(),
+    activePlayersNow: t.u32(),
+    totalPlayersToday: t.u32(),
+    totalPlayersWeek: t.u32(),
+    totalPlayersMonth: t.u32(),
+    totalEntriesToday: t.u32(),
+    totalEntriesWeek: t.u32(),
+    totalEntriesMonth: t.u32(),
+});
+
 const myAccountStateRow = t.row('MyAccountStateRow', {
     userId: t.string(),
     state: t.string(),
@@ -603,6 +697,87 @@ export const publicLiveDiscovery = spacetimedb.anonymousView(
     { name: 'public_live_discovery', public: true },
     t.array(publicLiveDiscoveryRow),
     (ctx) => ctx.from.publicLiveDiscoveryItem.build(),
+);
+
+export const eventMetricsOverview = spacetimedb.view(
+    { name: 'event_metrics_overview', public: true },
+    t.array(eventMetricsOverviewRow),
+    (ctx) => {
+        const nowMs = Date.now();
+        const todayStartMs = startOfUtcDayMs(nowMs);
+        const weekStartMs = startOfUtcIsoWeekMs(nowMs);
+        const monthStartMs = startOfUtcMonthMs(nowMs);
+        const activeThresholdMs = nowMs - EVENT_ACTIVE_WINDOW_MS;
+
+        const eventEnabledLiveIds = new Set<string>();
+        for (const row of ctx.db.liveItem.iter()) {
+            if (readLiveEventEnabled(row.item, nowMs)) {
+                eventEnabledLiveIds.add(row.id);
+            }
+        }
+
+        const activePlayers = new Set<string>();
+        for (const row of ctx.db.livePresenceItem.iter()) {
+            const userId = readString(row.userId);
+            const liveId = readString(row.liveId);
+            if (!userId || !liveId || !eventEnabledLiveIds.has(liveId)) {
+                continue;
+            }
+
+            const updatedAtMs = readIsoMs(parseJsonRecord(row.item).updatedAt) ?? nowMs;
+            if (updatedAtMs >= activeThresholdMs) {
+                activePlayers.add(userId);
+            }
+        }
+
+        let totalEntriesToday = 0;
+        let totalEntriesWeek = 0;
+        let totalEntriesMonth = 0;
+        const uniquePlayersToday = new Set<string>();
+        const uniquePlayersWeek = new Set<string>();
+        const uniquePlayersMonth = new Set<string>();
+
+        for (const row of ctx.db.eventParticipationItem.iter()) {
+            const userId = readString(row.userId);
+            const dayBucketStartMs = readIsoMs(row.dayBucketStartIsoUtc);
+            if (!userId || dayBucketStartMs === null) {
+                continue;
+            }
+
+            if (dayBucketStartMs >= monthStartMs) {
+                totalEntriesMonth += 1;
+                uniquePlayersMonth.add(userId);
+            }
+
+            if (dayBucketStartMs >= weekStartMs) {
+                totalEntriesWeek += 1;
+                uniquePlayersWeek.add(userId);
+            }
+
+            if (dayBucketStartMs >= todayStartMs) {
+                totalEntriesToday += 1;
+                uniquePlayersToday.add(userId);
+            }
+        }
+
+        return [
+            {
+                bucketTimezone: EVENT_METRICS_TIMEZONE,
+                asOfIsoUtc: toIsoUtc(nowMs),
+                todayStartIsoUtc: toIsoUtc(todayStartMs),
+                weekStartIsoUtc: toIsoUtc(weekStartMs),
+                monthStartIsoUtc: toIsoUtc(monthStartMs),
+                activeWindowMs: EVENT_ACTIVE_WINDOW_MS,
+                activePlayersNow: activePlayers.size,
+                totalPlayersToday: uniquePlayersToday.size,
+                totalPlayersWeek: uniquePlayersWeek.size,
+                totalPlayersMonth: uniquePlayersMonth.size,
+                totalEntriesToday,
+                totalEntriesWeek,
+                totalEntriesMonth,
+            },
+        ];
+    },
 );
 
 export const myAccountState = spacetimedb.view(

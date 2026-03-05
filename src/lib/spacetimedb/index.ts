@@ -71,6 +71,7 @@ import AdminWalletCreditTransactionRow from "./admin_wallet_credit_transaction_t
 import ArtistRow from "./artist_table";
 import AuditLogItemRow from "./audit_log_item_table";
 import ConversationItemRow from "./conversation_item_table";
+import EventMetricsOverviewRow from "./event_metrics_overview_table";
 import FriendshipRow from "./friendship_table";
 import GlobalMessageItemRow from "./global_message_item_table";
 import KnownLiveUserItemRow from "./known_live_user_item_table";
@@ -545,6 +546,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyRolesRow),
+  eventMetricsOverview: __table({
+    name: 'event_metrics_overview',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, EventMetricsOverviewRow),
   publicLeaderboard: __table({
     name: 'public_leaderboard',
     indexes: [
