@@ -396,6 +396,26 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    // Compatibility shim for legacy identity mapping rows that still exist in hosted maincloud.
+    senderIdentityUserMap: table(
+        { public: false },
+        {
+            senderIdentity: t.string().primaryKey(),
+            vuluUserId: t.string().index(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    // Compatibility shim for legacy connection rows that still exist in hosted maincloud.
+    connectionSessionItem: table(
+        { public: false },
+        {
+            connectionId: t.string().primaryKey(),
+            senderIdentity: t.string().index(),
+            vuluUserId: t.string().index(),
+            connectedAt: t.timestamp(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     withdrawalRequestItem: table(
         { public: false },
         {
@@ -456,7 +476,7 @@ export const spacetimedb = schema({
             username: t.string().index(),
             avatarUrl: t.string(),
             badge: t.option(t.string()),
-            spotlightStatus: t.option(t.string()).index(),
+            spotlightStatus: t.option(t.string()),
         }
     ),
     publicLeaderboardItem: table(
@@ -472,7 +492,7 @@ export const spacetimedb = schema({
         { public: false },
         {
             liveId: t.string().primaryKey(),
-            hostUserId: t.option(t.string()).index(),
+            hostUserId: t.option(t.string()),
             hostUsername: t.option(t.string()),
             hostAvatarUrl: t.option(t.string()),
             title: t.string(),
