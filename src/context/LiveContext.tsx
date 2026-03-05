@@ -174,12 +174,12 @@ function resolveFriendlyUsername(
 function isGenericDisplayLabel(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return true;
-  return normalized === 'unknown' || normalized.startsWith('user ');
+  return normalized === 'unknown' || normalized === 'you' || normalized.startsWith('user ');
 }
 
 function shouldPreferMappedValue(currentValue: string | undefined, mappedValue: string | undefined): boolean {
   const normalizedMapped = mappedValue?.trim();
-  if (!normalizedMapped || isLikelyOpaqueUserId(normalizedMapped)) {
+  if (!normalizedMapped || isLikelyOpaqueUserId(normalizedMapped) || isGenericDisplayLabel(normalizedMapped)) {
     return false;
   }
 
@@ -1343,7 +1343,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const resolvedHosts = (live.hosts || []).map((host) => {
+      const resolvedHosts = (effectiveLive.hosts || []).map((host) => {
         const normalizedHostId =
           typeof host.id === 'string' && host.id.trim().length > 0 ? host.id.trim() : undefined;
         const mappedUser = normalizedHostId
@@ -1364,7 +1364,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       });
 
       const liveWithResolvedHosts: LiveItem = {
-        ...live,
+        ...effectiveLive,
         hosts: resolvedHosts,
       };
 
@@ -1386,7 +1386,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setLiveState('LIVE_FULL');
       setLiveRoom(nextRoom);
       setIsHost(nextIsHost);
-      void syncLivePresence(nextIsHost ? 'hosting' : 'watching', live.id, live.title);
+      void syncLivePresence(nextIsHost ? 'hosting' : 'watching', liveWithResolvedHosts.id, liveWithResolvedHosts.title);
       requestBackendRefresh({
         scopes: ['live', 'global_messages'],
         source: 'manual',
