@@ -282,6 +282,9 @@ const PUBLIC_SUBSCRIPTION_VIEWS = [
   'public_profile_summary',
   'public_leaderboard',
   'public_live_discovery',
+  'public_live_presence_item',
+  'event_metrics_overview',
+  'event_widget_config_item',
   'global_message_item',
 ] as const;
 
@@ -290,6 +293,7 @@ const IDENTITY_SUBSCRIPTION_VIEWS = [
   'my_roles',
   'my_profile',
   'my_account_state',
+  'my_profile_view_metrics',
   'my_notifications',
   'my_friendships',
   'my_conversations',
@@ -300,6 +304,8 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   public_profile_summary: ['social', 'search'],
   public_leaderboard: ['leaderboard'],
   public_live_discovery: ['live', 'search'],
+  event_metrics_overview: ['events', 'live'],
+  event_widget_config_item: ['events'],
   public_live_presence_item: ['live'],
   global_message_item: ['global_messages', 'messages'],
   track: ['music'],
@@ -310,6 +316,7 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   my_roles: ['roles'],
   my_profile: ['profile'],
   my_account_state: ['wallet', 'profile'],
+  my_profile_view_metrics: ['profile', 'counts'],
   my_notifications: ['notifications', 'counts'],
   my_friendships: ['friendships', 'social', 'search', 'counts'],
   my_conversations: ['messages', 'conversations', 'counts'],
@@ -320,6 +327,8 @@ const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
   public_profile_summary: ['publicProfileSummary'],
   public_leaderboard: ['publicLeaderboard'],
   public_live_discovery: ['publicLiveDiscovery'],
+  event_metrics_overview: ['eventMetricsOverview', 'event_metrics_overview'],
+  event_widget_config_item: ['eventWidgetConfigItem', 'event_widget_config_item'],
   public_live_presence_item: ['publicLivePresenceItem', 'public_live_presence_item'],
   global_message_item: ['globalMessageItem', 'global_message_item'],
   track: ['track'],
@@ -330,6 +339,7 @@ const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
   my_roles: ['myRoles', 'my_roles'],
   my_profile: ['myProfile', 'my_profile'],
   my_account_state: ['myAccountState', 'my_account_state'],
+  my_profile_view_metrics: ['myProfileViewMetrics', 'my_profile_view_metrics'],
   my_notifications: ['myNotifications', 'my_notifications'],
   my_friendships: ['myFriendships', 'my_friendships'],
   my_conversations: ['myConversations', 'my_conversations'],
@@ -1701,6 +1711,49 @@ export async function announceSpacetimeUserProfile(
   }
 
   announcedProfileFingerprintByUserId.set(userId, fingerprint);
+}
+
+export type SpacetimeProfileViewTrackRequest = {
+  viewerUserId: string;
+  profileUserId: string;
+  openedAtMs?: number;
+  source?: string;
+  dedupeWindowMs?: number;
+};
+
+export async function trackSpacetimeProfileView(
+  request: SpacetimeProfileViewTrackRequest,
+): Promise<void> {
+  const viewerUserId = normalizeProfileValue(request.viewerUserId);
+  const profileUserId = normalizeProfileValue(request.profileUserId);
+  if (!viewerUserId || !profileUserId) {
+    return;
+  }
+
+  const openedAtMs = Math.max(0, Math.floor(request.openedAtMs ?? Date.now()));
+  const reducers = spacetimeDb.reducers as any;
+  if (typeof reducers?.trackProfileView !== 'function') {
+    return;
+  }
+
+  const eventId = [
+    'profile-view-v2',
+    encodeURIComponent(viewerUserId),
+    encodeURIComponent(profileUserId),
+    String(openedAtMs),
+  ].join('::');
+
+  await reducers.trackProfileView({
+    id: eventId,
+    viewerUserId,
+    profileUserId,
+    occurredAtMs: String(openedAtMs),
+    source: normalizeProfileValue(request.source) || 'profile_modal_open',
+    dedupeWindowMs:
+      typeof request.dedupeWindowMs === 'number' && Number.isFinite(request.dedupeWindowMs)
+        ? Math.max(0, Math.floor(request.dedupeWindowMs))
+        : undefined,
+  });
 }
 
 export const disconnectSpacetimeDB = () => {

@@ -24,7 +24,13 @@ type PublicLiveDiscoveryViewRow = {
     viewerCount: number;
 };
 
+const PROFILE_VIEW_METRIC_NAME = 'profile_views';
+const PROFILE_VIEW_METRIC_LABEL_LEGACY = 'Legacy (pre-cutover)';
+const PROFILE_VIEW_METRIC_LABEL_V2 = 'Corrected v2 (deduped, self-view excluded)';
+
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
+const EVENT_METRICS_TIMEZONE = 'UTC';
+const EVENT_ACTIVE_WINDOW_MS = 120_000;
 const LEGACY_CALLER_USER_ID_CLAIM_PATHS = [
     ['sub'],
     ['userId'],
@@ -98,6 +104,101 @@ function toNonNegativeInt(value: unknown, fallback = 0): number {
     const parsed = readNumber(value);
     if (parsed === null) return fallback;
     return Math.max(0, Math.floor(parsed));
+}
+
+function readBoolean(value: unknown): boolean | null {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function readIsoMs(value: unknown): number | null {
+    const directNumber = readNumber(value);
+    if (directNumber !== null) {
+        return directNumber;
+    }
+
+    const isoValue = readString(value);
+    if (!isoValue) return null;
+
+    const parsed = Date.parse(isoValue);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toIsoUtc(valueMs: number): string {
+    try {
+        return new Date(valueMs).toISOString();
+    } catch {
+        return new Date().toISOString();
+    }
+}
+
+function startOfUtcDayMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function startOfUtcIsoWeekMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    const dayOfWeek = date.getUTCDay();
+    const offsetToMonday = (dayOfWeek + 6) % 7;
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - offsetToMonday);
+}
+
+function startOfUtcMonthMs(valueMs: number): number {
+    const date = new Date(valueMs);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+}
+
+function readLiveEventEnabled(liveItemValue: unknown, nowMs: number): boolean {
+    const liveItem = parseJsonRecord(liveItemValue);
+    const event = liveItem.event;
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        return false;
+    }
+
+    const eventRecord = event as Record<string, unknown>;
+    const enabled = readBoolean(eventRecord.enabled);
+    if (enabled === false) {
+        return false;
+    }
+
+    const endedAtMs = toNonNegativeInt(eventRecord.endedAt);
+    if (endedAtMs > 0 && endedAtMs <= nowMs) {
+        return false;
+    }
+
+    return true;
+}
+
+function readGlobalEventWidgetEnabled(ctx: any): boolean {
+    const row = ctx?.db?.eventWidgetConfigItem?.id?.find?.('global');
+    const enabled = readBoolean((row as Record<string, unknown> | undefined)?.enabled);
+    return enabled !== false;
+}
+
+function timestampToMs(value: unknown): number {
+    const direct = readNumber(value);
+    if (direct !== null) return direct;
+
+    if (value && typeof value === 'object') {
+        const withToMillis = value as { toMillis?: () => unknown };
+        if (typeof withToMillis.toMillis === 'function') {
+            const millis = readNumber(withToMillis.toMillis());
+            if (millis !== null) return millis;
+        }
+
+        const withMicros = value as {
+            microsSinceUnixEpoch?: unknown;
+            __timestamp_micros_since_unix_epoch__?: unknown;
+        };
+        const micros = readNumber(
+            withMicros.microsSinceUnixEpoch ?? withMicros.__timestamp_micros_since_unix_epoch__,
+        );
+        if (micros !== null) {
+            return Math.floor(micros / 1000);
+        }
+    }
+
+    return Date.now();
 }
 
 function readWalletBalancesFromState(stateValue: unknown): {
@@ -240,10 +341,46 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    eventParticipationItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            liveId: t.string().index(),
+            userId: t.string().index(),
+            dayBucketStartIsoUtc: t.string().index(),
+            activity: t.string(),
+            source: t.string(),
+            firstSeenAtIsoUtc: t.string(),
+            lastSeenAtIsoUtc: t.string(),
+        }
+    ),
     auditLogItem: table(
         { public: false },
         {
             id: t.string().primaryKey(),
+            actorUserId: t.string().index(),
+            item: t.string(), // json
+            createdAt: t.timestamp(),
+        }
+    ),
+    eventWidgetConfigItem: table(
+        { public: true },
+        {
+            id: t.string().primaryKey(),
+            enabled: t.bool(),
+            entryAmountCash: t.u32(),
+            drawDurationMinutes: t.u32(),
+            drawIntervalMinutes: t.u32(),
+            autoplayEnabled: t.bool(),
+            updatedBy: t.string(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    eventWidgetConfigAuditItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            action: t.string(),
             actorUserId: t.string().index(),
             item: t.string(), // json
             createdAt: t.timestamp(),
@@ -410,6 +547,67 @@ export const spacetimedb = schema({
             createdAt: t.timestamp(),
         }
     ),
+    profileViewMetricCutoverItem: table(
+        { public: false },
+        {
+            metricName: t.string().primaryKey(),
+            activeVersion: t.string(),
+            cutoverAtMs: t.string(),
+            dedupeWindowMs: t.u32(),
+            migrationMode: t.string(),
+            notes: t.option(t.string()),
+            updatedBy: t.option(t.string()),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    profileViewAttemptV2Item: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            viewerUserId: t.string().index(),
+            profileUserId: t.string().index(),
+            metricVersion: t.string(),
+            occurredAtMs: t.string(),
+            dedupeWindowMs: t.u32(),
+            counted: t.bool(),
+            dropReason: t.option(t.string()),
+            source: t.option(t.string()),
+            createdAt: t.timestamp(),
+        }
+    ),
+    profileViewDedupeStateV2Item: table(
+        { public: false },
+        {
+            key: t.string().primaryKey(),
+            viewerUserId: t.string().index(),
+            profileUserId: t.string().index(),
+            lastCountedAtMs: t.string(),
+            lastEventId: t.string(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    profileViewAggregateV2Item: table(
+        { public: false },
+        {
+            profileUserId: t.string().primaryKey(),
+            countedTotal: t.u32(),
+            uniqueViewerTotal: t.u32(),
+            lastCountedAtMs: t.string(),
+            updatedAt: t.timestamp(),
+        }
+    ),
+    profileViewUniqueViewerV2Item: table(
+        { public: false },
+        {
+            key: t.string().primaryKey(),
+            profileUserId: t.string().index(),
+            viewerUserId: t.string().index(),
+            firstCountedAtMs: t.string(),
+            lastCountedAtMs: t.string(),
+            viewCount: t.u32(),
+            updatedAt: t.timestamp(),
+        }
+    ),
     liveItem: table({ public: false }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
     liveBoostLeaderboardItem: table({ public: true }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
     knownLiveUserItem: table({ public: true }, { id: t.string().primaryKey(), item: t.string(), updatedAt: t.timestamp() }),
@@ -503,6 +701,22 @@ const publicLiveDiscoveryRow = t.row('PublicLiveDiscoveryRow', {
     viewerCount: t.u32(),
 });
 
+const eventMetricsOverviewRow = t.row('EventMetricsOverviewRow', {
+    bucketTimezone: t.string(),
+    asOfIsoUtc: t.string(),
+    todayStartIsoUtc: t.string(),
+    weekStartIsoUtc: t.string(),
+    monthStartIsoUtc: t.string(),
+    activeWindowMs: t.u32(),
+    activePlayersNow: t.u32(),
+    totalPlayersToday: t.u32(),
+    totalPlayersWeek: t.u32(),
+    totalPlayersMonth: t.u32(),
+    totalEntriesToday: t.u32(),
+    totalEntriesWeek: t.u32(),
+    totalEntriesMonth: t.u32(),
+});
+
 const myAccountStateRow = t.row('MyAccountStateRow', {
     userId: t.string(),
     state: t.string(),
@@ -587,6 +801,19 @@ const myRoleRow = t.row('MyRoleRow', {
     grantedBy: t.option(t.string()),
 });
 
+const myProfileViewMetricsRow = t.row('MyProfileViewMetricsRow', {
+    userId: t.string(),
+    activeMetricVersion: t.string(),
+    dedupeWindowMs: t.u32(),
+    cutoverAtMs: t.string(),
+    correctedTotalCount: t.u32(),
+    correctedUniqueViewerCount: t.u32(),
+    legacyPreCutoverNotificationCount: t.u32(),
+    legacyLabel: t.string(),
+    correctedLabel: t.string(),
+    updatedAt: t.timestamp(),
+});
+
 export const publicProfileSummary = spacetimedb.anonymousView(
     { name: 'public_profile_summary', public: true },
     t.array(publicProfileSummaryRow),
@@ -603,6 +830,89 @@ export const publicLiveDiscovery = spacetimedb.anonymousView(
     { name: 'public_live_discovery', public: true },
     t.array(publicLiveDiscoveryRow),
     (ctx) => ctx.from.publicLiveDiscoveryItem.build(),
+);
+
+export const eventMetricsOverview = spacetimedb.view(
+    { name: 'event_metrics_overview', public: true },
+    t.array(eventMetricsOverviewRow),
+    (ctx) => {
+        const nowMs = Date.now();
+        const todayStartMs = startOfUtcDayMs(nowMs);
+        const weekStartMs = startOfUtcIsoWeekMs(nowMs);
+        const monthStartMs = startOfUtcMonthMs(nowMs);
+        const activeThresholdMs = nowMs - EVENT_ACTIVE_WINDOW_MS;
+
+        const eventEnabledLiveIds = new Set<string>();
+        if (readGlobalEventWidgetEnabled(ctx)) {
+            for (const row of ctx.db.liveItem.iter()) {
+                if (readLiveEventEnabled(row.item, nowMs)) {
+                    eventEnabledLiveIds.add(row.id);
+                }
+            }
+        }
+
+        const activePlayers = new Set<string>();
+        for (const row of ctx.db.livePresenceItem.iter()) {
+            const userId = readString(row.userId);
+            const liveId = readString(row.liveId);
+            if (!userId || !liveId || !eventEnabledLiveIds.has(liveId)) {
+                continue;
+            }
+
+            const updatedAtMs = readIsoMs(parseJsonRecord(row.item).updatedAt) ?? nowMs;
+            if (updatedAtMs >= activeThresholdMs) {
+                activePlayers.add(userId);
+            }
+        }
+
+        let totalEntriesToday = 0;
+        let totalEntriesWeek = 0;
+        let totalEntriesMonth = 0;
+        const uniquePlayersToday = new Set<string>();
+        const uniquePlayersWeek = new Set<string>();
+        const uniquePlayersMonth = new Set<string>();
+
+        for (const row of ctx.db.eventParticipationItem.iter()) {
+            const userId = readString(row.userId);
+            const dayBucketStartMs = readIsoMs(row.dayBucketStartIsoUtc);
+            if (!userId || dayBucketStartMs === null) {
+                continue;
+            }
+
+            if (dayBucketStartMs >= monthStartMs) {
+                totalEntriesMonth += 1;
+                uniquePlayersMonth.add(userId);
+            }
+
+            if (dayBucketStartMs >= weekStartMs) {
+                totalEntriesWeek += 1;
+                uniquePlayersWeek.add(userId);
+            }
+
+            if (dayBucketStartMs >= todayStartMs) {
+                totalEntriesToday += 1;
+                uniquePlayersToday.add(userId);
+            }
+        }
+
+        return [
+            {
+                bucketTimezone: EVENT_METRICS_TIMEZONE,
+                asOfIsoUtc: toIsoUtc(nowMs),
+                todayStartIsoUtc: toIsoUtc(todayStartMs),
+                weekStartIsoUtc: toIsoUtc(weekStartMs),
+                monthStartIsoUtc: toIsoUtc(monthStartMs),
+                activeWindowMs: EVENT_ACTIVE_WINDOW_MS,
+                activePlayersNow: activePlayers.size,
+                totalPlayersToday: uniquePlayersToday.size,
+                totalPlayersWeek: uniquePlayersWeek.size,
+                totalPlayersMonth: uniquePlayersMonth.size,
+                totalEntriesToday,
+                totalEntriesWeek,
+                totalEntriesMonth,
+            },
+        ];
+    },
 );
 
 export const myAccountState = spacetimedb.view(
@@ -756,6 +1066,58 @@ export const myRoles = spacetimedb.view(
         }
 
         return rows;
+    },
+);
+
+export const myProfileViewMetrics = spacetimedb.view(
+    { name: 'my_profile_view_metrics', public: true },
+    t.array(myProfileViewMetricsRow),
+    (ctx) => {
+        const callerUserId = requireViewCallerUserId(ctx);
+        const cutover =
+            ctx.db.profileViewMetricCutoverItem.metricName.find(PROFILE_VIEW_METRIC_NAME) ??
+            null;
+
+        const activeMetricVersion = readString(cutover?.activeVersion) ?? 'v2';
+        const dedupeWindowMs = Math.max(0, toNonNegativeInt(cutover?.dedupeWindowMs, 30 * 60 * 1000));
+        const cutoverAtMs = Math.max(0, toNonNegativeInt(cutover?.cutoverAtMs, 0));
+        const corrected = ctx.db.profileViewAggregateV2Item.profileUserId.find(callerUserId);
+        const correctedTotalCount = Math.max(0, toNonNegativeInt(corrected?.countedTotal, 0));
+        const correctedUniqueViewerCount = Math.max(0, toNonNegativeInt(corrected?.uniqueViewerTotal, 0));
+
+        let legacyPreCutoverNotificationCount = 0;
+        for (const row of ctx.db.notificationItem.iter()) {
+            if (row.userId !== callerUserId) continue;
+            if (timestampToMs(row.createdAt) >= cutoverAtMs && cutoverAtMs > 0) continue;
+
+            const item = parseJsonRecord(row.item);
+            if (readString(item.type) !== 'profile_view') continue;
+            legacyPreCutoverNotificationCount += Math.max(0, toNonNegativeInt(item.viewCount, 1));
+        }
+
+        const updatedAt =
+            cutover?.updatedAt ??
+            corrected?.updatedAt ??
+            ctx.db.accountStateItem.userId.find(callerUserId)?.updatedAt ??
+            null;
+        if (!updatedAt) {
+            return [];
+        }
+
+        return [
+            {
+                userId: callerUserId,
+                activeMetricVersion,
+                dedupeWindowMs,
+                cutoverAtMs: String(cutoverAtMs),
+                correctedTotalCount,
+                correctedUniqueViewerCount,
+                legacyPreCutoverNotificationCount,
+                legacyLabel: PROFILE_VIEW_METRIC_LABEL_LEGACY,
+                correctedLabel: PROFILE_VIEW_METRIC_LABEL_V2,
+                updatedAt,
+            },
+        ];
     },
 );
 

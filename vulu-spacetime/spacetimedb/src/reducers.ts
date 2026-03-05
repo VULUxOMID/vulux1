@@ -1,6 +1,13 @@
 import { t } from 'spacetimedb/server';
 
 import { spacetimedb as schemaDb } from './schema';
+import {
+  PROFILE_VIEW_DEFAULT_DEDUPE_WINDOW_MS,
+  PROFILE_VIEW_METRIC_NAME,
+  PROFILE_VIEW_METRIC_VERSION_V2,
+  evaluateProfileViewDecision,
+  normalizeProfileViewDedupeWindowMs,
+} from './profileViewMetrics';
 
 type JsonRecord = Record<string, unknown>;
 type JsonArray = unknown[];
@@ -12,6 +19,7 @@ const GEMS_TO_FUEL_RATE = 4;
 const GEM_TO_CASH_RATE = 10;
 const CASH_TO_GEM_RATE = 10;
 const AD_REWARD_GEMS = 10;
+const PROFILE_VIEW_DEFAULT_MIGRATION_MODE = 'start_fresh_from_cutover';
 
 const FUEL_PACK_COSTS: Record<number, { gems: number; cash: number }> = {
   30: { gems: 12, cash: 120 },
@@ -262,6 +270,11 @@ function toIsoString(ms: number): string {
   }
 }
 
+function startOfUtcDayMs(valueMs: number): number {
+  const date = new Date(valueMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
 function buildDefaultDisplayName(
   email: string | null | undefined,
   subject: string | null | undefined,
@@ -365,6 +378,16 @@ const ADMIN_ROLE_NAMES = new Set([
 const BOOTSTRAP_ADMIN_USER_ID = '45d3c56c-a930-449b-9a3c-ef039f45eed7';
 const BOOTSTRAP_ADMIN_AUDIT_ACTION = 'bootstrap_admin_granted';
 const DB_OWNER_IDENTITY = 'c20098b71eb2493299cb336ffda41a6682345cb88ce35688278821d1dbaa8f51';
+const EVENT_WIDGET_CONFIG_ROW_ID = 'global';
+const EVENT_WIDGET_DEFAULT_ENTRY_AMOUNT_CASH = 0;
+const EVENT_WIDGET_DEFAULT_DRAW_DURATION_MINUTES = LIVE_EVENT_DURATION_MS / 60_000;
+const EVENT_WIDGET_DEFAULT_DRAW_INTERVAL_MINUTES = LIVE_EVENT_WINNER_INTERVAL_MS / 60_000;
+const EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN = 0;
+const EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX = 1_000_000;
+const EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN = 1;
+const EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX = 24 * 60;
+const EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN = 1;
+const EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX = 24 * 60;
 
 function unauthorized(message: string): never {
   throw new Error(`Unauthorized: ${message}`);
@@ -666,6 +689,137 @@ function appendBootstrapAdminGrantAuditLog(
     id: makeId(ctx, 'audit-bootstrap-admin'),
     actorUserId,
     item: toJsonString(item),
+    createdAt: ctx.timestamp,
+  });
+}
+
+type EventWidgetConfig = {
+  enabled: boolean;
+  entryAmountCash: number;
+  drawDurationMinutes: number;
+  drawIntervalMinutes: number;
+  autoplayEnabled: boolean;
+  updatedBy: string;
+  updatedAtMs: number;
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function readBoundedInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = readNumber(value);
+  if (parsed === null) return fallback;
+  return clampInt(parsed, min, max);
+}
+
+function readBoundedIntPatch(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  return readBoundedInt(value, fallback, min, max);
+}
+
+function readBooleanPatch(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = readBooleanLike(value);
+  return parsed === null ? fallback : parsed;
+}
+
+function readEventWidgetConfig(ctx: any): EventWidgetConfig {
+  const row = ctx.db.eventWidgetConfigItem.id.find(EVENT_WIDGET_CONFIG_ROW_ID);
+  const drawDurationMinutes = readBoundedInt(
+    row?.drawDurationMinutes,
+    EVENT_WIDGET_DEFAULT_DRAW_DURATION_MINUTES,
+    EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN,
+    EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX,
+  );
+  const drawIntervalMinutes = Math.min(
+    drawDurationMinutes,
+    readBoundedInt(
+      row?.drawIntervalMinutes,
+      EVENT_WIDGET_DEFAULT_DRAW_INTERVAL_MINUTES,
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX,
+    ),
+  );
+
+  return {
+    enabled: readBooleanLike(row?.enabled) ?? true,
+    entryAmountCash: readBoundedInt(
+      row?.entryAmountCash,
+      EVENT_WIDGET_DEFAULT_ENTRY_AMOUNT_CASH,
+      EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN,
+      EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX,
+    ),
+    drawDurationMinutes,
+    drawIntervalMinutes,
+    autoplayEnabled: readBooleanLike(row?.autoplayEnabled) ?? true,
+    updatedBy: readString(row?.updatedBy) ?? 'system',
+    updatedAtMs: timestampToMs(row?.updatedAt ?? ctx.timestamp),
+  };
+}
+
+function writeEventWidgetConfig(
+  ctx: any,
+  config: EventWidgetConfig,
+): void {
+  const existing = ctx.db.eventWidgetConfigItem.id.find(EVENT_WIDGET_CONFIG_ROW_ID);
+  if (existing) {
+    ctx.db.eventWidgetConfigItem.id.delete(EVENT_WIDGET_CONFIG_ROW_ID);
+  }
+
+  ctx.db.eventWidgetConfigItem.insert({
+    id: EVENT_WIDGET_CONFIG_ROW_ID,
+    enabled: config.enabled,
+    entryAmountCash: config.entryAmountCash,
+    drawDurationMinutes: config.drawDurationMinutes,
+    drawIntervalMinutes: config.drawIntervalMinutes,
+    autoplayEnabled: config.autoplayEnabled,
+    updatedBy: config.updatedBy,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function appendEventWidgetConfigAudit(
+  ctx: any,
+  actorUserId: string,
+  action: string,
+  previousConfig: EventWidgetConfig,
+  nextConfig: EventWidgetConfig,
+): void {
+  const changedFields: string[] = [];
+  if (previousConfig.enabled !== nextConfig.enabled) changedFields.push('enabled');
+  if (previousConfig.entryAmountCash !== nextConfig.entryAmountCash) changedFields.push('entryAmountCash');
+  if (previousConfig.drawDurationMinutes !== nextConfig.drawDurationMinutes) changedFields.push('drawDurationMinutes');
+  if (previousConfig.drawIntervalMinutes !== nextConfig.drawIntervalMinutes) changedFields.push('drawIntervalMinutes');
+  if (previousConfig.autoplayEnabled !== nextConfig.autoplayEnabled) changedFields.push('autoplayEnabled');
+
+  ctx.db.eventWidgetConfigAuditItem.insert({
+    id: makeId(ctx, 'event-widget-config-audit'),
+    action,
+    actorUserId,
+    item: toJsonString({
+      category: 'event_widget_config',
+      actionType: action,
+      actorUserId,
+      changedFields,
+      previousConfig,
+      nextConfig,
+      createdAt: nowMs(ctx),
+    }),
     createdAt: ctx.timestamp,
   });
 }
@@ -1482,6 +1636,290 @@ function hasWalletPurchaseToken(
   return false;
 }
 
+function buildProfileViewPairKey(viewerUserId: string, profileUserId: string): string {
+  return `${viewerUserId}::${profileUserId}`;
+}
+
+function buildProfileViewUniqueViewerKey(profileUserId: string, viewerUserId: string): string {
+  return `${profileUserId}::${viewerUserId}`;
+}
+
+type ProfileViewMetricCutoverState = {
+  activeVersion: string;
+  cutoverAtMs: number;
+  dedupeWindowMs: number;
+  migrationMode: string;
+  notes: string | null;
+};
+
+function upsertProfileViewMetricCutoverItem(
+  ctx: any,
+  params: {
+    activeVersion: string;
+    cutoverAtMs: number;
+    dedupeWindowMs: number;
+    migrationMode: string;
+    notes: string | null;
+    updatedBy: string | null;
+  },
+): void {
+  const existing = ctx.db.profileViewMetricCutoverItem.metricName.find(PROFILE_VIEW_METRIC_NAME);
+  if (existing) {
+    ctx.db.profileViewMetricCutoverItem.metricName.delete(PROFILE_VIEW_METRIC_NAME);
+  }
+
+  ctx.db.profileViewMetricCutoverItem.insert({
+    metricName: PROFILE_VIEW_METRIC_NAME,
+    activeVersion: params.activeVersion,
+    cutoverAtMs: String(Math.max(0, Math.floor(params.cutoverAtMs))),
+    dedupeWindowMs: normalizeProfileViewDedupeWindowMs(params.dedupeWindowMs),
+    migrationMode: readString(params.migrationMode) ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+    notes: params.notes ?? undefined,
+    updatedBy: params.updatedBy ?? undefined,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function ensureProfileViewMetricCutoverState(
+  ctx: any,
+  updatedBy: string | null = null,
+): ProfileViewMetricCutoverState {
+  const existing = ctx.db.profileViewMetricCutoverItem.metricName.find(PROFILE_VIEW_METRIC_NAME);
+  if (existing) {
+    return {
+      activeVersion: readString(existing.activeVersion) ?? PROFILE_VIEW_METRIC_VERSION_V2,
+      cutoverAtMs: toNonNegativeInt(existing.cutoverAtMs),
+      dedupeWindowMs: normalizeProfileViewDedupeWindowMs(existing.dedupeWindowMs),
+      migrationMode:
+        readString(existing.migrationMode) ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+      notes: readString(existing.notes),
+    };
+  }
+
+  const state: ProfileViewMetricCutoverState = {
+    activeVersion: PROFILE_VIEW_METRIC_VERSION_V2,
+    cutoverAtMs: nowMs(ctx),
+    dedupeWindowMs: PROFILE_VIEW_DEFAULT_DEDUPE_WINDOW_MS,
+    migrationMode: PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+    notes: 'v2 deduped profile-view metric started at cutover time.',
+  };
+  upsertProfileViewMetricCutoverItem(ctx, {
+    ...state,
+    updatedBy,
+  });
+  return state;
+}
+
+function appendProfileViewAttemptV2Item(
+  ctx: any,
+  params: {
+    id: string;
+    viewerUserId: string | null;
+    profileUserId: string | null;
+    metricVersion: string;
+    occurredAtMs: number;
+    dedupeWindowMs: number;
+    counted: boolean;
+    dropReason: string | null;
+    source: string | null;
+  },
+): void {
+  ctx.db.profileViewAttemptV2Item.insert({
+    id: params.id,
+    viewerUserId: params.viewerUserId ?? '',
+    profileUserId: params.profileUserId ?? '',
+    metricVersion: readString(params.metricVersion) ?? PROFILE_VIEW_METRIC_VERSION_V2,
+    occurredAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+    dedupeWindowMs: normalizeProfileViewDedupeWindowMs(params.dedupeWindowMs),
+    counted: params.counted,
+    dropReason: params.dropReason ?? undefined,
+    source: params.source ?? undefined,
+    createdAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewDedupeStateV2Item(
+  ctx: any,
+  params: {
+    viewerUserId: string;
+    profileUserId: string;
+    lastCountedAtMs: number;
+    lastEventId: string;
+  },
+): void {
+  const key = buildProfileViewPairKey(params.viewerUserId, params.profileUserId);
+  const existing = ctx.db.profileViewDedupeStateV2Item.key.find(key);
+  if (existing) {
+    ctx.db.profileViewDedupeStateV2Item.key.delete(key);
+  }
+
+  ctx.db.profileViewDedupeStateV2Item.insert({
+    key,
+    viewerUserId: params.viewerUserId,
+    profileUserId: params.profileUserId,
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.lastCountedAtMs))),
+    lastEventId: params.lastEventId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewAggregateV2Item(
+  ctx: any,
+  params: {
+    profileUserId: string;
+    countedTotal: number;
+    uniqueViewerTotal: number;
+    lastCountedAtMs: number;
+  },
+): void {
+  const existing = ctx.db.profileViewAggregateV2Item.profileUserId.find(params.profileUserId);
+  if (existing) {
+    ctx.db.profileViewAggregateV2Item.profileUserId.delete(params.profileUserId);
+  }
+
+  ctx.db.profileViewAggregateV2Item.insert({
+    profileUserId: params.profileUserId,
+    countedTotal: Math.max(0, toNonNegativeInt(params.countedTotal)),
+    uniqueViewerTotal: Math.max(0, toNonNegativeInt(params.uniqueViewerTotal)),
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.lastCountedAtMs))),
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewUniqueViewerV2Item(
+  ctx: any,
+  params: {
+    profileUserId: string;
+    viewerUserId: string;
+    occurredAtMs: number;
+  },
+): { isNewUniqueViewer: boolean } {
+  const key = buildProfileViewUniqueViewerKey(params.profileUserId, params.viewerUserId);
+  const existing = ctx.db.profileViewUniqueViewerV2Item.key.find(key);
+  if (!existing) {
+    ctx.db.profileViewUniqueViewerV2Item.insert({
+      key,
+      profileUserId: params.profileUserId,
+      viewerUserId: params.viewerUserId,
+      firstCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+      lastCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+      viewCount: 1,
+      updatedAt: ctx.timestamp,
+    });
+    return { isNewUniqueViewer: true };
+  }
+
+  ctx.db.profileViewUniqueViewerV2Item.key.delete(key);
+  ctx.db.profileViewUniqueViewerV2Item.insert({
+    key,
+    profileUserId: params.profileUserId,
+    viewerUserId: params.viewerUserId,
+    firstCountedAtMs: readString(existing.firstCountedAtMs) ?? String(params.occurredAtMs),
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+    viewCount: Math.max(1, toNonNegativeInt(existing.viewCount, 1) + 1),
+    updatedAt: ctx.timestamp,
+  });
+  return { isNewUniqueViewer: false };
+}
+
+function applyTrackProfileViewV2(ctx: any, payload: JsonRecord): void {
+  const eventId = readString(payload.id) ?? makeId(ctx, 'profile-view-v2');
+  const viewerUserId = readString(payload.viewerUserId);
+  const profileUserId = readString(payload.profileUserId);
+  const source = readString(payload.source);
+  const metricCutover = ensureProfileViewMetricCutoverState(ctx, viewerUserId ?? null);
+  const existingAttempt = ctx.db.profileViewAttemptV2Item.id.find(eventId);
+  if (existingAttempt) {
+    return;
+  }
+
+  const pairKey =
+    viewerUserId && profileUserId
+      ? buildProfileViewPairKey(viewerUserId, profileUserId)
+      : null;
+  const dedupeState = pairKey
+    ? ctx.db.profileViewDedupeStateV2Item.key.find(pairKey)
+    : null;
+  const decision = evaluateProfileViewDecision({
+    viewerUserId,
+    profileUserId,
+    nowMs: nowMs(ctx),
+    occurredAtMs: payload.occurredAtMs ?? payload.viewedAtMs ?? payload.viewedAt ?? payload.createdAt,
+    cutoverAtMs: metricCutover.cutoverAtMs,
+    dedupeWindowMs:
+      payload.dedupeWindowMs ??
+      payload.dedupeWindow ??
+      metricCutover.dedupeWindowMs,
+    lastCountedAtMs: dedupeState?.lastCountedAtMs,
+  });
+
+  appendProfileViewAttemptV2Item(ctx, {
+    id: eventId,
+    viewerUserId,
+    profileUserId,
+    metricVersion: metricCutover.activeVersion,
+    occurredAtMs: decision.occurredAtMs,
+    dedupeWindowMs: decision.dedupeWindowMs,
+    counted: decision.counted,
+    dropReason: decision.dropReason,
+    source,
+  });
+
+  if (!decision.counted || !viewerUserId || !profileUserId) {
+    return;
+  }
+
+  upsertProfileViewDedupeStateV2Item(ctx, {
+    viewerUserId,
+    profileUserId,
+    lastCountedAtMs: decision.occurredAtMs,
+    lastEventId: eventId,
+  });
+
+  const { isNewUniqueViewer } = upsertProfileViewUniqueViewerV2Item(ctx, {
+    profileUserId,
+    viewerUserId,
+    occurredAtMs: decision.occurredAtMs,
+  });
+  const aggregate = ctx.db.profileViewAggregateV2Item.profileUserId.find(profileUserId);
+  const countedTotal = Math.max(0, toNonNegativeInt(aggregate?.countedTotal, 0) + 1);
+  const uniqueViewerTotal = Math.max(
+    0,
+    toNonNegativeInt(aggregate?.uniqueViewerTotal, 0) + (isNewUniqueViewer ? 1 : 0),
+  );
+  upsertProfileViewAggregateV2Item(ctx, {
+    profileUserId,
+    countedTotal,
+    uniqueViewerTotal,
+    lastCountedAtMs: decision.occurredAtMs,
+  });
+
+  const profileSummary = readPublicProfileSummaryItem(ctx, viewerUserId);
+  const viewerDisplayName = resolveFriendlyUserLabel(viewerUserId, [
+    readString(profileSummary?.username),
+    viewerUserId,
+  ]);
+  const viewerAvatarUrl = readString(profileSummary?.avatarUrl) ?? '';
+  const notificationId = `notif-profile-view-v2-${eventId}`;
+  upsertNotificationItem(ctx, notificationId, profileUserId, {
+    id: notificationId,
+    type: 'profile_view',
+    createdAt: decision.occurredAtMs,
+    read: false,
+    viewer: {
+      id: viewerUserId,
+      name: viewerDisplayName,
+      avatar: viewerAvatarUrl,
+      level: 0,
+    },
+    viewCount: 1,
+    lastViewed: decision.occurredAtMs,
+    metricVersion: metricCutover.activeVersion,
+    migrationMode: metricCutover.migrationMode,
+    countedEventId: eventId,
+  });
+}
+
 function upsertNotificationItem(ctx: any, id: string, userId: string, item: JsonRecord): void {
   const existing = ctx.db.notificationItem.id.find(id);
   if (existing) {
@@ -1705,6 +2143,48 @@ function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): voi
   if (liveId && normalizedActivity) {
     upsertPublicLivePresenceItem(ctx, userId, liveId, normalizedActivity);
   }
+}
+
+function upsertEventParticipationItem(
+  ctx: any,
+  userId: string,
+  liveId: string,
+  activity: 'hosting' | 'watching',
+): void {
+  const live = readLiveItem(ctx, liveId);
+  if (Object.keys(live).length === 0) {
+    return;
+  }
+
+  const event = isRecord(live.event) ? live.event : {};
+  if (readBoolean(event.enabled) === false) {
+    return;
+  }
+
+  const now = nowMs(ctx);
+  const endedAt = toNonNegativeInt(event.endedAt);
+  if (endedAt > 0 && endedAt <= now) {
+    return;
+  }
+
+  const dayBucketStartIsoUtc = toIsoString(startOfUtcDayMs(now));
+  const rowId = `${liveId}::${userId}::${dayBucketStartIsoUtc}`;
+  const existing = ctx.db.eventParticipationItem.id.find(rowId);
+
+  if (existing) {
+    ctx.db.eventParticipationItem.id.delete(rowId);
+  }
+
+  ctx.db.eventParticipationItem.insert({
+    id: rowId,
+    liveId,
+    userId,
+    dayBucketStartIsoUtc,
+    activity,
+    source: 'set_live_presence',
+    firstSeenAtIsoUtc: readString(existing?.firstSeenAtIsoUtc) ?? toIsoString(now),
+    lastSeenAtIsoUtc: toIsoString(now),
+  });
 }
 
 function deleteLivePresenceItem(ctx: any, userId: string): void {
@@ -2253,11 +2733,13 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
   if (!liveId) return;
 
+  const eventWidgetConfig = readEventWidgetConfig(ctx);
   const ownerUserId =
     readString(payload.ownerUserId) ?? readString(payload.hostUserId) ?? readString(payload.fromUserId);
   const title = readString(payload.title) ?? 'Live';
   const inviteOnly = readBoolean(payload.inviteOnly) ?? false;
   const now = nowMs(ctx);
+  const eventDurationMs = eventWidgetConfig.drawDurationMinutes * 60_000;
   const hosts = normalizeHostList(payload.hosts);
   const bannedUserIds = normalizeBannedUserIds(payload.bannedUserIds);
   const invitedUserIds = normalizeInvitedUserIds(payload.invitedUserIds);
@@ -2278,11 +2760,11 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
     createdAt: now,
     updatedAt: now,
     event: {
-      enabled: true,
-      drawIntervalMinutes: 15,
-      durationHours: 24,
+      enabled: eventWidgetConfig.enabled && eventWidgetConfig.autoplayEnabled,
+      drawIntervalMinutes: eventWidgetConfig.drawIntervalMinutes,
+      durationHours: Math.max(1, Math.ceil(eventWidgetConfig.drawDurationMinutes / 60)),
       startedAt: now,
-      endsAt: now + LIVE_EVENT_DURATION_MS,
+      endsAt: now + eventDurationMs,
       lastWinnerAt: 0,
       winners: [] as JsonArray,
     },
@@ -2406,6 +2888,13 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
     liveTitle: readString(payload.liveTitle) ?? '',
     updatedAt: nowMs(ctx),
   });
+
+  upsertEventParticipationItem(
+    ctx,
+    userId,
+    liveId,
+    activity === 'hosting' ? 'hosting' : 'watching',
+  );
 }
 
 function applyLiveInvite(ctx: any, payload: JsonRecord): void {
@@ -2536,20 +3025,29 @@ function applyLiveEventTick(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
   if (!liveId) return;
 
+  const eventWidgetConfig = readEventWidgetConfig(ctx);
+  if (!eventWidgetConfig.enabled) return;
+
   const live = readLiveItem(ctx, liveId);
   if (Object.keys(live).length === 0) return;
 
   const event = isRecord(live.event) ? live.event : {};
-  const enabled = readBoolean(event.enabled) ?? true;
+  const enabled = readBoolean(event.enabled) ?? eventWidgetConfig.autoplayEnabled;
   if (!enabled) return;
 
   const now = nowMs(ctx);
   const startedAt = toNonNegativeInt(event.startedAt, now);
-  const endsAt = toNonNegativeInt(event.endsAt, startedAt + LIVE_EVENT_DURATION_MS);
+  const endsAt = toNonNegativeInt(
+    event.endsAt,
+    startedAt + (eventWidgetConfig.drawDurationMinutes * 60_000),
+  );
   const lastWinnerAt = toNonNegativeInt(event.lastWinnerAt);
-  const intervalMinutes = Math.max(
-    1,
-    toNonNegativeInt(event.drawIntervalMinutes, LIVE_EVENT_WINNER_INTERVAL_MS / 60_000),
+  const intervalMinutes = Math.min(
+    eventWidgetConfig.drawDurationMinutes,
+    Math.max(
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+      toNonNegativeInt(event.drawIntervalMinutes, eventWidgetConfig.drawIntervalMinutes),
+    ),
   );
   const intervalMs = intervalMinutes * 60_000;
 
@@ -3004,6 +3502,102 @@ export const setUserRole = schemaDb.reducer(
   },
 );
 
+export const setEventWidgetConfig = schemaDb.reducer(
+  {
+    entryAmountCash: t.option(t.u32()),
+    drawDurationMinutes: t.option(t.u32()),
+    drawIntervalMinutes: t.option(t.u32()),
+    autoplayEnabled: t.option(t.bool()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const argsRecord = args as JsonRecord;
+    const entryAmountCashArg = args.entryAmountCash ?? argsRecord.entry_amount_cash;
+    const drawDurationMinutesArg =
+      args.drawDurationMinutes ?? argsRecord.draw_duration_minutes;
+    const drawIntervalMinutesArg =
+      args.drawIntervalMinutes ?? argsRecord.draw_interval_minutes;
+    const autoplayEnabledArg = args.autoplayEnabled ?? argsRecord.autoplay_enabled;
+
+    const hasAnyUpdate =
+      entryAmountCashArg !== undefined ||
+      drawDurationMinutesArg !== undefined ||
+      drawIntervalMinutesArg !== undefined ||
+      autoplayEnabledArg !== undefined;
+    if (!hasAnyUpdate) {
+      throw new Error(
+        'At least one of entryAmountCash, drawDurationMinutes, drawIntervalMinutes, or autoplayEnabled is required.',
+      );
+    }
+
+    const previousConfig = readEventWidgetConfig(ctx);
+    const drawDurationMinutes = readBoundedIntPatch(
+      drawDurationMinutesArg,
+      previousConfig.drawDurationMinutes,
+      EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN,
+      EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX,
+    );
+    const drawIntervalMinutes = Math.min(
+      drawDurationMinutes,
+      readBoundedIntPatch(
+        drawIntervalMinutesArg,
+        previousConfig.drawIntervalMinutes,
+        EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+        EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX,
+      ),
+    );
+
+    const nextConfig: EventWidgetConfig = {
+      ...previousConfig,
+      entryAmountCash: readBoundedIntPatch(
+        entryAmountCashArg,
+        previousConfig.entryAmountCash,
+        EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN,
+        EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX,
+      ),
+      drawDurationMinutes,
+      drawIntervalMinutes,
+      autoplayEnabled: readBooleanPatch(autoplayEnabledArg, previousConfig.autoplayEnabled),
+      updatedBy: adminUserId,
+      updatedAtMs: nowMs(ctx),
+    };
+
+    writeEventWidgetConfig(ctx, nextConfig);
+    appendEventWidgetConfigAudit(
+      ctx,
+      adminUserId,
+      'event_widget_config_updated',
+      previousConfig,
+      nextConfig,
+    );
+  },
+);
+
+export const setEventWidgetEnabled = schemaDb.reducer(
+  {
+    enabled: t.bool(),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const previousConfig = readEventWidgetConfig(ctx);
+    const nextConfig: EventWidgetConfig = {
+      ...previousConfig,
+      enabled: readBooleanLike(args.enabled) === true,
+      updatedBy: adminUserId,
+      updatedAtMs: nowMs(ctx),
+    };
+
+    writeEventWidgetConfig(ctx, nextConfig);
+    appendEventWidgetConfigAudit(
+      ctx,
+      adminUserId,
+      nextConfig.enabled ? 'event_widget_enabled' : 'event_widget_disabled',
+      previousConfig,
+      nextConfig,
+    );
+  },
+);
+
 export const createUserProfile = schemaDb.reducer(
   {
     userId: t.string(),
@@ -3038,6 +3632,72 @@ export const upsertAccountState = schemaDb.reducer(
       userId: args.userId,
       updates: parseJsonRecord(args.updates),
       createdAt: nowMs(ctx),
+    });
+  },
+);
+
+export const trackProfileView = schemaDb.reducer(
+  {
+    id: t.string(),
+    viewerUserId: t.string(),
+    profileUserId: t.string(),
+    occurredAtMs: t.option(t.string()),
+    source: t.option(t.string()),
+    dedupeWindowMs: t.option(t.u32()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.viewerUserId, 'viewerUserId');
+    const eventId = readString(args.id);
+    if (!eventId) {
+      throw new Error('id is required.');
+    }
+
+    applyTrackProfileViewV2(ctx, {
+      id: eventId,
+      viewerUserId: args.viewerUserId,
+      profileUserId: args.profileUserId,
+      occurredAtMs: readString(args.occurredAtMs),
+      source: readString(args.source),
+      dedupeWindowMs: args.dedupeWindowMs,
+      createdAt: nowMs(ctx),
+    });
+  },
+);
+
+export const setProfileViewMetricCutover = schemaDb.reducer(
+  {
+    activeVersion: t.option(t.string()),
+    cutoverAtMs: t.option(t.string()),
+    dedupeWindowMs: t.option(t.u32()),
+    migrationMode: t.option(t.string()),
+    notes: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const existing = ensureProfileViewMetricCutoverState(ctx, adminUserId);
+    const nextActiveVersion = readString(args.activeVersion) ?? existing.activeVersion;
+    if (
+      nextActiveVersion !== PROFILE_VIEW_METRIC_VERSION_V2 &&
+      nextActiveVersion !== 'legacy'
+    ) {
+      throw new Error('activeVersion must be "legacy" or "v2".');
+    }
+
+    const nextCutoverAtMs = toNonNegativeInt(args.cutoverAtMs, existing.cutoverAtMs);
+    const nextDedupeWindowMs = normalizeProfileViewDedupeWindowMs(
+      args.dedupeWindowMs ?? existing.dedupeWindowMs,
+    );
+    const nextMigrationMode =
+      readString(args.migrationMode) ?? existing.migrationMode ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE;
+    const nextNotes = readString(args.notes) ?? existing.notes;
+
+    upsertProfileViewMetricCutoverItem(ctx, {
+      activeVersion: nextActiveVersion,
+      cutoverAtMs: nextCutoverAtMs,
+      dedupeWindowMs: nextDedupeWindowMs,
+      migrationMode: nextMigrationMode,
+      notes: nextNotes,
+      updatedBy: adminUserId,
     });
   },
 );

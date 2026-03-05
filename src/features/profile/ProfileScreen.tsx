@@ -11,7 +11,7 @@ import { useLeaderboardRepo, useNotificationsRepo, useSocialRepo } from '../../d
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { subscribeBootstrap } from '../../lib/spacetime';
+import { spacetimeDb, subscribeBootstrap } from '../../lib/spacetime';
 import { colors, spacing } from '../../theme';
 import { hapticTap } from '../../utils/haptics';
 import { GemsBalanceCard } from './GemsBalanceCard';
@@ -75,7 +75,7 @@ export default function ProfileScreen() {
 
   const profileStats = useMemo(() => {
     let addedYou = 0;
-    let viewedYou = 0;
+    let legacyViewedYou = 0;
 
     notifications.forEach((notification) => {
       if (
@@ -86,14 +86,24 @@ export default function ProfileScreen() {
         addedYou += 1;
       }
       if (notification.type === 'profile_view') {
-        viewedYou += notification.viewCount;
+        legacyViewedYou += notification.viewCount;
       }
     });
+
+    const dbView = spacetimeDb.db as any;
+    const metricsRows: any[] = Array.from(
+      dbView?.myProfileViewMetrics?.iter?.() ?? dbView?.my_profile_view_metrics?.iter?.() ?? [],
+    );
+    const metricsRow = metricsRows[0] ?? null;
+    const correctedViewedYouRaw = Number(metricsRow?.correctedTotalCount);
+    const correctedViewedYou = Number.isFinite(correctedViewedYouRaw)
+      ? Math.max(0, Math.floor(correctedViewedYouRaw))
+      : legacyViewedYou;
 
     return {
       friends: friends.length,
       addedYou,
-      viewedYou,
+      viewedYou: correctedViewedYou,
     };
   }, [friends.length, notifications]);
 
