@@ -453,30 +453,30 @@ export const spacetimedb = schema({
         { public: true },
         {
             userId: t.string().primaryKey(),
-            username: t.string(),
+            username: t.string().index(),
             avatarUrl: t.string(),
             badge: t.option(t.string()),
-            spotlightStatus: t.option(t.string()),
+            spotlightStatus: t.option(t.string()).index(),
         }
     ),
     publicLeaderboardItem: table(
         { public: false },
         {
             userId: t.string().primaryKey(),
-            score: t.u32(),
-            gold: t.u32(),
-            gems: t.u32(),
+            score: t.u32().index(),
+            gold: t.u32().index(),
+            gems: t.u32().index(),
         }
     ),
     publicLiveDiscoveryItem: table(
         { public: false },
         {
             liveId: t.string().primaryKey(),
-            hostUserId: t.option(t.string()),
+            hostUserId: t.option(t.string()).index(),
             hostUsername: t.option(t.string()),
             hostAvatarUrl: t.option(t.string()),
             title: t.string(),
-            viewerCount: t.u32(),
+            viewerCount: t.u32().index(),
         }
     ),
     friendship: table(
@@ -525,7 +525,7 @@ export const spacetimedb = schema({
             id: t.string().primaryKey(),
             roomId: t.string().index(),
             item: t.string(), // json
-            createdAt: t.timestamp(),
+            createdAt: t.timestamp().index(),
         }
     ),
     mentionUserItem: table(
