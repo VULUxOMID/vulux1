@@ -12,6 +12,8 @@ export type BackendRealtimeStatus = 'connecting' | 'connected' | 'disconnected' 
 
 const ENDPOINT_NOT_FOUND_COOLDOWN_MS = 5 * 60_000;
 const MAX_RECONNECT_BACKOFF_MS = 60_000;
+const REALTIME_PROTOCOL = 'vulu.realtime.v1';
+const REALTIME_AUTH_PROTOCOL_PREFIX = 'vulu.auth.bearer.';
 
 function isMissingRealtimeEndpoint(reason: string): boolean {
   const normalized = reason.toLowerCase();
@@ -59,6 +61,10 @@ function parseEvent(rawData: unknown): BackendRealtimeEvent | null {
   } catch {
     return null;
   }
+}
+
+function buildRealtimeProtocols(token: string): string[] {
+  return [REALTIME_PROTOCOL, `${REALTIME_AUTH_PROTOCOL_PREFIX}${token}`];
 }
 
 export type BackendRealtimeClient = {
@@ -111,6 +117,7 @@ class BackendRealtimeClientImpl implements BackendRealtimeClient {
 
     void (async () => {
       let connectionUrl = baseUrl;
+      let connectionProtocols: string[] = [];
       try {
         const token = await this.options?.getToken();
         if (!token || !this.options) {
@@ -121,11 +128,11 @@ class BackendRealtimeClientImpl implements BackendRealtimeClient {
         }
 
         const url = new URL(baseUrl);
-        url.searchParams.set('token', token);
         if (this.options.userId) {
           url.searchParams.set('userId', this.options.userId);
         }
         connectionUrl = url.toString();
+        connectionProtocols = buildRealtimeProtocols(token);
       } catch {
         this.opening = false;
         this.setStatus('disconnected');
@@ -133,7 +140,7 @@ class BackendRealtimeClientImpl implements BackendRealtimeClient {
         return;
       }
 
-      const socket = new WebSocket(connectionUrl);
+      const socket = new WebSocket(connectionUrl, connectionProtocols);
       this.socket = socket;
 
       socket.onopen = () => {
