@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "build": "node scripts/build-web.mjs",
     "dev": "CI=1 npx expo start --web --port 5000",
-    "test:live-regression": "tsx --test src/data/adapters/backend/liveRepository.regression.test.ts src/features/home/liveNowList.regression.test.ts",
+    "test:live-regression": "tsx --test src/data/adapters/backend/liveRepository.regression.test.ts src/features/home/liveNowList.regression.test.ts src/lib/spacetimeSubscriptionLifecycle.test.ts",
     "test:event-runtime": "tsx --test src/features/home/widgets/eventRuntimeConfig.test.ts",
     "env:check": "bash ./scripts/env-check.sh",
     "env:check:legacy-api": "bash ./scripts/env-check.sh --legacy-api",
