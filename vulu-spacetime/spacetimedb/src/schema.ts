@@ -269,44 +269,18 @@ function buildIdentityLookupKey(provider: string, issuer: string, subject: strin
 function findMappedCallerUserId(ctx: any): string | null {
     const authIdentity = readCallerAuthIdentity(ctx);
     const lookupFind = ctx?.db?.userIdentity?.lookupKey?.find;
-    if (authIdentity && typeof lookupFind === 'function') {
-        const row = lookupFind(
-            buildIdentityLookupKey(
-                CURRENT_IDENTITY_PROVIDER,
-                authIdentity.issuer,
-                authIdentity.subject,
-            ),
-        );
-        const mapped = readString(row?.vuluUserId);
-        if (mapped) {
-            return mapped;
-        }
-    }
-
-    const senderIdentity = readIdentityString(ctx?.sender);
-    if (!senderIdentity) {
+    if (!authIdentity || typeof lookupFind !== 'function') {
         return null;
     }
 
-    for (const row of ctx?.db?.senderIdentityUserMap?.iter?.() ?? []) {
-        if (readString(row?.senderIdentity) === senderIdentity) {
-            const mapped = readString(row?.vuluUserId);
-            if (mapped) {
-                return mapped;
-            }
-        }
-    }
-
-    for (const row of ctx?.db?.connectionSessionItem?.iter?.() ?? []) {
-        if (readString(row?.senderIdentity) === senderIdentity) {
-            const mapped = readString(row?.vuluUserId);
-            if (mapped) {
-                return mapped;
-            }
-        }
-    }
-
-    return null;
+    const row = lookupFind(
+        buildIdentityLookupKey(
+            CURRENT_IDENTITY_PROVIDER,
+            authIdentity.issuer,
+            authIdentity.subject,
+        ),
+    );
+    return readString(row?.vuluUserId);
 }
 
 function requireViewCallerUserId(ctx: any): string {

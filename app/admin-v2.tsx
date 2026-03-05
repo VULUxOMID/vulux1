@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View, RefreshControl, PanResponder } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Redirect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Circle, Defs, LinearGradient, Path, Stop, Svg } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -500,8 +500,6 @@ function OverviewMetricCard({
 }
 
 export default function AdminV2Screen() {
-  return <Redirect href="/admin" />;
-
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { isAdmin } = useAdminAuth();

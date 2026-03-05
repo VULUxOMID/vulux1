@@ -25,34 +25,10 @@ import {
   getAdminSessionTimeoutMs,
   setAdminSessionTimeoutMinutes as persistAdminSessionTimeoutMinutes,
 } from '../services/adminSessionManager';
-import {
-  spacetimeDb,
-  subscribeSpacetimeDataChanges,
-  subscribeSpacetimeTelemetry,
-} from '../../../lib/spacetime';
 
 type AdminChallengeReason = 'initial' | 'expired' | 'background' | 'locked';
 
 const ADMIN_IDLE_WARNING_SECONDS = Math.floor(ADMIN_IDLE_WARNING_MS / 1000);
-
-function readLiveRoleNamesFromDb(): string[] {
-  const dbView = spacetimeDb.db as Record<string, unknown>;
-  const table =
-    (dbView.myRoles as { iter?: () => Iterable<{ role?: unknown }> } | undefined) ??
-    (dbView.my_roles as { iter?: () => Iterable<{ role?: unknown }> } | undefined);
-  if (!table || typeof table.iter !== 'function') {
-    return [];
-  }
-
-  const rows = Array.from(table.iter());
-  return Array.from(
-    new Set(
-      rows
-        .map((row) => (typeof row.role === 'string' ? row.role.trim().toLowerCase() : ''))
-        .filter((role) => role.length > 0),
-    ),
-  );
-}
 
 interface AdminContextState {
   isAdmin: boolean;
@@ -86,18 +62,14 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   );
   const [sessionTimeoutReady, setSessionTimeoutReady] = useState(false);
   const [clockMs, setClockMs] = useState(() => Date.now());
-  const [liveRoleNames, setLiveRoleNames] = useState<string[]>([]);
 
   const expiryLoggedRef = useRef(false);
   const authedUserIdRef = useRef<string | null>(null);
 
   const { user, roles } = useAuth();
   const userId = user?.uid ?? null;
-  const effectiveRoles = useMemo(
-    () => (liveRoleNames.length > 0 ? liveRoleNames : roles),
-    [liveRoleNames, roles],
-  );
-  const adminRole = useMemo(() => resolveHighestAdminRole(effectiveRoles), [effectiveRoles]);
+
+  const adminRole = useMemo(() => resolveHighestAdminRole(roles), [roles]);
 
   const isAdminUser = Boolean(adminRole);
   const isOwner = adminRole === 'OWNER';
@@ -177,38 +149,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
     return () => {
       active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const syncLiveRoles = () => {
-      const nextRoles = readLiveRoleNamesFromDb();
-      setLiveRoleNames((currentRoles) => {
-        const currentKey = currentRoles.join('|');
-        const nextKey = nextRoles.join('|');
-        return currentKey === nextKey ? currentRoles : nextRoles;
-      });
-    };
-
-    syncLiveRoles();
-
-    const unsubscribeData = subscribeSpacetimeDataChanges((event) => {
-      if (event.scopes.includes('roles')) {
-        syncLiveRoles();
-      }
-    });
-    const unsubscribeTelemetry = subscribeSpacetimeTelemetry((snapshot) => {
-      if (
-        snapshot.connectionState === 'connected' &&
-        (snapshot.subscriptionState === 'active' || snapshot.subscriptionState === 'subscribing')
-      ) {
-        syncLiveRoles();
-      }
-    });
-
-    return () => {
-      unsubscribeData();
-      unsubscribeTelemetry();
     };
   }, []);
 
