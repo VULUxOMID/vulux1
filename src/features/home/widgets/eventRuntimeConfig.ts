@@ -8,6 +8,48 @@ function asRecord(value: unknown): UnknownRecord | null {
     : null;
 }
 
+function isIterable(value: unknown): value is Iterable<unknown> {
+  return (
+    value !== null &&
+    value !== undefined &&
+    typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function'
+  );
+}
+
+function readTableRows(table: UnknownRecord): Iterable<unknown> {
+  const iter = table.iter;
+  if (typeof iter === 'function') {
+    try {
+      const iterated = (iter as () => unknown).call(table);
+      if (isIterable(iterated)) {
+        return iterated;
+      }
+    } catch {
+      // Spacetime table iterators can throw while rows are still hydrating.
+    }
+  }
+
+  const rows = table.rows;
+  if (rows && typeof rows === 'object') {
+    const values = (rows as { values?: () => unknown }).values;
+    if (typeof values === 'function') {
+      try {
+        const byValues = values.call(rows);
+        if (isIterable(byValues)) {
+          return byValues;
+        }
+      } catch {
+        // Keep best-effort reads defensive in partially-initialized states.
+      }
+    }
+  }
+  if (isIterable(rows)) {
+    return rows;
+  }
+
+  return [];
+}
+
 function parseEnvNumber(name: string, min: number, max: number, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -32,12 +74,10 @@ function readFirstRowFromTable(dbState: unknown, tableKeys: readonly string[]): 
 
   for (const tableKey of tableKeys) {
     const table = asRecord(dbRecord[tableKey]);
-    const iter = table ? (table as { iter?: () => Iterable<unknown> }).iter : undefined;
-    if (typeof iter !== 'function') continue;
-    for (const row of iter()) {
+    if (!table) continue;
+    for (const row of readTableRows(table)) {
       const record = asRecord(row);
       if (record) return record;
-      break;
     }
   }
 

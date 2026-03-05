@@ -300,6 +300,12 @@ const IDENTITY_SUBSCRIPTION_VIEWS = [
   'my_conversation_messages',
 ] as const;
 
+const OPTIONAL_BOOTSTRAP_VIEWS = new Set<string>([
+  'event_metrics_overview',
+  'event_widget_config_item',
+  'my_profile_view_metrics',
+]);
+
 const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   public_profile_summary: ['social', 'search'],
   public_leaderboard: ['leaderboard'],
@@ -1237,11 +1243,16 @@ export function subscribeBootstrap(): () => void {
     ...PUBLIC_SUBSCRIPTION_VIEWS,
     ...identityViews,
   ];
+  const fallbackViews = views.filter((viewName) => !OPTIONAL_BOOTSTRAP_VIEWS.has(viewName));
+  const querySets = [buildViewSelectQueries(views)];
+  if (fallbackViews.length > 0 && fallbackViews.length !== views.length) {
+    querySets.push(buildViewSelectQueries(fallbackViews));
+  }
   const spec = buildScopedSubscriptionSpec(
     'bootstrap',
     'bootstrap',
     views,
-    [buildViewSelectQueries(views)],
+    querySets,
   );
   return activateScopedSubscription(spec);
 }

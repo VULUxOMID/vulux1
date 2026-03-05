@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   countDistinctActivePlayersNow,
+  readActivePlayersNowFromEventOverview,
   resolveEventWidgetRuntimeConfig,
 } from './eventRuntimeConfig';
 
@@ -82,4 +83,28 @@ test('countDistinctActivePlayersNow counts distinct fresh hosting/watching users
   );
 
   assert.equal(count, 2);
+});
+
+test('readActivePlayersNowFromEventOverview is null-safe when table iter throws during hydration', () => {
+  const dbState = {
+    eventMetricsOverview: {
+      iter() {
+        throw new TypeError("Cannot read properties of undefined (reading 'rows')");
+      },
+    },
+  };
+
+  assert.equal(readActivePlayersNowFromEventOverview(dbState), null);
+});
+
+test('readActivePlayersNowFromEventOverview supports map-like table rows fallback', () => {
+  const dbState = {
+    eventMetricsOverview: {
+      rows: new Map([
+        ['singleton', { active_players_now: 12 }],
+      ]),
+    },
+  };
+
+  assert.equal(readActivePlayersNowFromEventOverview(dbState), 12);
 });
