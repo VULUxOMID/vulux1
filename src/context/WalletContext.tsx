@@ -114,6 +114,8 @@ export interface WithdrawalRequest {
 interface WalletContextType {
   gems: number;
   cash: number;
+  walletHydrated: boolean;
+  walletStateAvailable: boolean;
   addGems: (amount: number) => void;
   addCash: (amount: number) => void;
   exchangeGemsForCash: (gemsAmount: number) => boolean;
@@ -138,6 +140,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [fuel, setFuel] = useState(0);
   const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalRequest[]>([]);
   const [walletHydrated, setWalletHydrated] = useState(false);
+  const [walletStateAvailable, setWalletStateAvailable] = useState(false);
   const [walletRefreshNonce, setWalletRefreshNonce] = useState(0);
 
   // Refs to avoid stale closures in callbacks
@@ -190,6 +193,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setCash(0);
       setFuel(0);
       setWithdrawalHistory([]);
+      setWalletStateAvailable(false);
       setWalletHydrated(true);
     };
 
@@ -238,10 +242,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
 
       if (!accountState) {
+        setWalletStateAvailable(false);
         setWalletHydrated(true);
         return;
       }
 
+      setWalletStateAvailable(hasWalletState);
       const normalizedWalletState = walletState ?? {};
 
       const nextGems = toNonNegativeNumber(normalizedWalletState.gems);
@@ -339,6 +345,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       value={{
         gems,
         cash,
+        walletHydrated,
+        walletStateAvailable,
         addGems,
         addCash,
         exchangeGemsForCash,
@@ -368,6 +376,8 @@ export function useWallet() {
       cash: 0,
       gems: 0,
       fuel: 0,
+      walletHydrated: false,
+      walletStateAvailable: false,
       withdrawalHistory: [],
       balance: { gems: 0, cash: 0 },
       addCash: () => {

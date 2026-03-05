@@ -135,7 +135,7 @@ export default function LiveScreen() {
   const isAppActive = useAppIsActive();
   const params = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
+  const { userId, isLoaded: isAuthLoaded, isSignedIn, hasSession } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
   const { live: liveRepo, social: socialRepo } = useRepositories();
   const [liveDataRefreshNonce, setLiveDataRefreshNonce] = useState(0);
@@ -327,7 +327,6 @@ export default function LiveScreen() {
   // Important: only auto-join once per route liveId. If user is banned and later unbanned,
   // they should choose to rejoin manually instead of being auto-teleported back in.
   useEffect(() => {
-    const routeLiveId = typeof params.id === 'string' ? params.id : undefined;
     if (!routeLiveId) {
       autoJoinAttemptedLiveIdRef.current = null;
       return;
@@ -335,33 +334,19 @@ export default function LiveScreen() {
     if (activeLive) return;
     if (autoJoinAttemptedLiveIdRef.current === routeLiveId) return;
 
-    const live = lives.find((item) => item.id === routeLiveId);
+    const live =
+      lives.find((item) => item.id === routeLiveId) ??
+      liveRepo.findLiveById(routeLiveId);
     if (!live) return;
 
-    autoJoinAttemptedLiveIdRef.current = routeLiveId;
-    switchLiveRoom(live);
-  }, [params.id, activeLive, switchLiveRoom, lives]);
+    const joined = switchLiveRoom(live);
+    if (joined) {
+      autoJoinAttemptedLiveIdRef.current = routeLiveId;
+    }
+  }, [activeLive, lives, liveRepo, routeLiveId, switchLiveRoom]);
 
-  // If this route has already attempted auto-join but the room is no longer active
-  // (for example after a forced ban close), leave /live to avoid stale screen state.
-  useEffect(() => {
-    const routeLiveId = typeof params.id === 'string' ? params.id : undefined;
-    if (!routeLiveId) return;
-    if (activeLive || liveRoom) return;
-    if (autoJoinAttemptedLiveIdRef.current !== routeLiveId) return;
-    if (hasHandledClosedNavigationRef.current) return;
-
-    const timeout = setTimeout(() => {
-      hasHandledClosedNavigationRef.current = true;
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.replace('/(tabs)');
-      }
-    }, 0);
-
-    return () => clearTimeout(timeout);
-  }, [params.id, activeLive, liveRoom, router]);
+  // Keep explicit /live?id routes stable. Closed-room handling is rendered in-place
+  // so reconnect/open loops don't immediately bounce back to Home.
 
   // UI State — single sheet controller replaces ~10 booleans
   const [activeSheet, setActiveSheetState] = useState<ActiveSheet>(null);
@@ -1069,7 +1054,7 @@ export default function LiveScreen() {
     } else {
       router.replace('/(tabs)');
     }
-  }, [router]);
+  }, [activeLive, liveRoom, liveState, routeLiveId, router]);
 
   const handleConfirmLeaveOrEnd = useCallback(() => {
     setActiveSheet(null);
@@ -1117,6 +1102,7 @@ export default function LiveScreen() {
 
   useEffect(() => {
     if (!hasVisitedLiveSessionRef.current) return;
+    if (routeLiveId) return;
     if (activeLive || liveRoom) return;
     if (liveState !== 'LIVE_CLOSED') return;
 
@@ -1124,7 +1110,7 @@ export default function LiveScreen() {
       handlePostLiveNavigation();
     }, 0);
     return () => clearTimeout(timeout);
-  }, [activeLive, handlePostLiveNavigation, liveRoom, liveState]);
+  }, [activeLive, handlePostLiveNavigation, liveRoom, liveState, routeLiveId]);
 
   if (!isAuthLoaded) {
     return (
@@ -1137,6 +1123,15 @@ export default function LiveScreen() {
   }
 
   if (!isSignedIn || !userId) {
+    if (hasSession) {
+      return (
+        <AppScreen noPadding edges={[]} style={styles.container}>
+          <View style={styles.emptyStateContainer}>
+            <AppText>Loading live…</AppText>
+          </View>
+        </AppScreen>
+      );
+    }
     return <Redirect href="/(auth)" />;
   }
 
