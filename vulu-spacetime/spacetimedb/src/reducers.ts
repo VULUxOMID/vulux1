@@ -1076,7 +1076,7 @@ function authorizeLiveInvitePayload(ctx: any, payload: JsonRecord): void {
   const live = assertLiveParticipationAllowed(ctx, liveId, callerUserId);
   assertLiveOwnerOrAdmin(ctx, liveId, live);
   payload.liveId = liveId;
-  payload.inviterUserId = inviterUserId ?? legacyCallerUserId ?? callerUserId;
+  payload.inviterUserId = callerUserId;
 }
 
 function authorizeLiveInviteResponsePayload(ctx: any, payload: JsonRecord): void {
@@ -1098,7 +1098,7 @@ function authorizeLiveInviteResponsePayload(ctx: any, payload: JsonRecord): void
 
   const live = assertLiveParticipationAllowed(ctx, liveId, callerUserId);
   const pendingInvites = new Set(normalizePendingCoHostInviteUserIds(live.pendingCoHostInviteUserIds));
-  const normalizedResponderUserId = responderUserId ?? legacyCallerUserId ?? callerUserId;
+  const normalizedResponderUserId = callerUserId;
   if (!pendingInvites.has(normalizedResponderUserId)) {
     unauthorized('No pending co-host invite.');
   }
@@ -1126,14 +1126,13 @@ function authorizeLiveHostRequestPayload(ctx: any, payload: JsonRecord): void {
     throw new Error('live_host_request liveId is required.');
   }
 
-  const normalizedRequesterUserId = requesterUserId ?? legacyCallerUserId ?? callerUserId;
-  const live = assertLiveParticipationAllowed(ctx, liveId, normalizedRequesterUserId);
-  if (isLiveHostUser(live, normalizedRequesterUserId)) {
+  const live = assertLiveParticipationAllowed(ctx, liveId, callerUserId);
+  if (isLiveHostUser(live, callerUserId)) {
     unauthorized('Hosts cannot request co-host access.');
   }
 
   payload.liveId = liveId;
-  payload.requesterUserId = normalizedRequesterUserId;
+  payload.requesterUserId = callerUserId;
 }
 
 function authorizeLiveHostRequestResponsePayload(ctx: any, payload: JsonRecord): void {

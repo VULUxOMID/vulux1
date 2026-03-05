@@ -56,7 +56,7 @@ import { LiveItem } from '../home/LiveSection';
 import { MiniHostsGrid } from './components/MiniHostsGrid';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { spacetimeDb, subscribeLive } from '../../lib/spacetime';
+import { spacetimeDb, subscribeLive, subscribeSpacetimeDataChanges } from '../../lib/spacetime';
 import {
   publishLiveHostRequest,
   publishLiveHostRequestResponse,
@@ -114,6 +114,21 @@ function makeFallbackLiveUser(userId: string, preferredName?: string): LiveUser 
   };
 }
 
+function formatLiveParticipantLabel(
+  user: LiveUser | null,
+  fallbackUserId: string | null,
+  fallbackPrefix: string,
+): string {
+  const normalizedName = user?.name?.trim();
+  if (normalizedName) {
+    return normalizedName;
+  }
+  if (fallbackUserId) {
+    return `${fallbackPrefix} ${fallbackUserId.slice(0, 8)}`;
+  }
+  return fallbackPrefix;
+}
+
 export default function LiveScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
@@ -123,18 +138,19 @@ export default function LiveScreen() {
   const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
   const { live: liveRepo, social: socialRepo } = useRepositories();
+  const [liveDataRefreshNonce, setLiveDataRefreshNonce] = useState(0);
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const lives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
-    [liveRepo, queriesEnabled],
+    [liveDataRefreshNonce, liveRepo, queriesEnabled],
   );
   const liveLeaderboard = useMemo<LiveLeaderboardEntry[]>(
     () => (queriesEnabled ? liveRepo.listBoostLeaderboard({ limit: 100 }) : []),
-    [liveRepo, queriesEnabled],
+    [liveDataRefreshNonce, liveRepo, queriesEnabled],
   );
   const knownLiveUsers = useMemo<LiveUser[]>(
     () => (queriesEnabled ? liveRepo.listKnownLiveUsers({ limit: 200 }) : []),
-    [liveRepo, queriesEnabled],
+    [liveDataRefreshNonce, liveRepo, queriesEnabled],
   );
   const inviteCandidates = useMemo<SocialUser[]>(
     () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : []),
@@ -198,6 +214,18 @@ export default function LiveScreen() {
       return;
     }
     return subscribeLive(subscriptionLiveId);
+  }, [queriesEnabled, subscriptionLiveId]);
+
+  useEffect(() => {
+    if (!queriesEnabled || !subscriptionLiveId) {
+      return;
+    }
+    return subscribeSpacetimeDataChanges((event) => {
+      if (!event.scopes.includes('live')) {
+        return;
+      }
+      setLiveDataRefreshNonce((current) => current + 1);
+    });
   }, [queriesEnabled, subscriptionLiveId]);
 
   // Track profile open state in ref for pan responder
@@ -419,7 +447,7 @@ export default function LiveScreen() {
       [],
     );
     return parseLiveControlEvents(rows, currentLiveId);
-  }, [currentLiveId, liveRepo]);
+  }, [currentLiveId, liveDataRefreshNonce]);
 
   const pendingHostRequestIds = useMemo(
     () => derivePendingHostRequestIds(liveControlEvents),
@@ -431,7 +459,7 @@ export default function LiveScreen() {
     [liveControlEvents],
   );
 
-  const pendingHostRequestUser = useMemo(() => {
+  const pendingHostRequestUserId = useMemo(() => {
     if (!isHost || pendingHostRequestIds.length === 0) return null;
 
     const streamerIds = new Set((liveRoom?.streamers ?? []).map((streamer) => streamer.id));
@@ -441,24 +469,52 @@ export default function LiveScreen() {
     );
     if (!candidateId) return null;
 
-    return liveUserDirectory.get(candidateId) ?? makeFallbackLiveUser(candidateId);
+    return candidateId;
   }, [
     isHost,
     liveRoom?.bannedUserIds,
     liveRoom?.streamers,
-    liveUserDirectory,
     pendingHostRequestIds,
   ]);
+
+  const pendingHostRequestUser = useMemo(() => {
+    if (!pendingHostRequestUserId) return null;
+    return (
+      liveUserDirectory.get(pendingHostRequestUserId) ??
+      makeFallbackLiveUser(pendingHostRequestUserId)
+    );
+  }, [liveUserDirectory, pendingHostRequestUserId]);
 
   const hasPendingHostInvite = useMemo(() => {
     if (isHost || !userId) return false;
     return pendingHostInviteIds.includes(userId);
   }, [isHost, pendingHostInviteIds, userId]);
 
+  const pendingInviteHostUserId = useMemo(() => {
+    if (!hasPendingHostInvite) return null;
+    return liveRoom?.hostUser?.id ?? liveRoom?.ownerUserId ?? null;
+  }, [hasPendingHostInvite, liveRoom?.hostUser?.id, liveRoom?.ownerUserId]);
+
   const pendingInviteHostUser = useMemo(() => {
     if (!hasPendingHostInvite || !liveRoom) return null;
-    return liveRoom.hostUser ?? null;
-  }, [hasPendingHostInvite, liveRoom]);
+    if (liveRoom.hostUser) return liveRoom.hostUser;
+    if (!pendingInviteHostUserId) return null;
+    return makeFallbackLiveUser(pendingInviteHostUserId);
+  }, [hasPendingHostInvite, liveRoom, pendingInviteHostUserId]);
+
+  const canRespondToHostRequest = useMemo(() => {
+    if (!pendingHostRequestUserId) return false;
+    return isHost || (Boolean(userId) && liveRoom?.ownerUserId === userId);
+  }, [isHost, liveRoom?.ownerUserId, pendingHostRequestUserId, userId]);
+
+  const pendingHostRequestDisplayName = useMemo(
+    () => formatLiveParticipantLabel(pendingHostRequestUser, pendingHostRequestUserId, 'Viewer'),
+    [pendingHostRequestUser, pendingHostRequestUserId],
+  );
+  const pendingHostInviteDisplayName = useMemo(
+    () => formatLiveParticipantLabel(pendingInviteHostUser, pendingInviteHostUserId, 'Host'),
+    [pendingInviteHostUser, pendingInviteHostUserId],
+  );
 
   // Fuel state (Premium GemPlus)
   // const [fuelMinutes, setFuelMinutes] = useState(45); // Replaced with global context
@@ -843,7 +899,7 @@ export default function LiveScreen() {
 
   const respondToHostRequest = useCallback(
     async (accepted: boolean) => {
-      if (!currentLiveId || !pendingHostRequestUser || isRespondingToHostRequest) {
+      if (!currentLiveId || !pendingHostRequestUserId || isRespondingToHostRequest) {
         return;
       }
 
@@ -851,7 +907,7 @@ export default function LiveScreen() {
       try {
         await publishLiveHostRequestResponse({
           liveId: currentLiveId,
-          targetUserId: pendingHostRequestUser.id,
+          targetUserId: pendingHostRequestUserId,
           accepted,
         });
         requestBackendRefresh({
@@ -861,8 +917,8 @@ export default function LiveScreen() {
         });
         toast.success(
           accepted
-            ? `${pendingHostRequestUser.name} is now a co-host.`
-            : `${pendingHostRequestUser.name}'s request was declined.`,
+            ? `${pendingHostRequestDisplayName} is now a co-host.`
+            : `${pendingHostRequestDisplayName}'s request was declined.`,
         );
       } catch (error) {
         if (__DEV__) {
@@ -873,7 +929,12 @@ export default function LiveScreen() {
         setIsRespondingToHostRequest(false);
       }
     },
-    [currentLiveId, isRespondingToHostRequest, pendingHostRequestUser],
+    [
+      currentLiveId,
+      isRespondingToHostRequest,
+      pendingHostRequestDisplayName,
+      pendingHostRequestUserId,
+    ],
   );
 
   const respondToHostInvite = useCallback(
@@ -1119,6 +1180,10 @@ export default function LiveScreen() {
   const keyboardDismissOverlayBottom = keyboardHeight + INPUT_BAR_HEIGHT;
   const showLiveOverBanner = isLiveEnding;
   const liveOverSecondsLabel = liveEndSecondsLeft ?? 5;
+  const showWebHostRequestPrompt =
+    Platform.OS === 'web' && Boolean(canRespondToHostRequest && pendingHostRequestUserId);
+  const showWebHostInvitePrompt =
+    Platform.OS === 'web' && Boolean(!isHost && hasPendingHostInvite);
 
   return (
     <AppScreen noPadding edges={[]} style={styles.container}>
@@ -1420,47 +1485,131 @@ export default function LiveScreen() {
           onCancel={handleCancelInvite}
         />
 
-        <ConfirmSheet
-          visible={Boolean(isHost && pendingHostRequestUser)}
-          title={
-            pendingHostRequestUser
-              ? `${pendingHostRequestUser.name} wants to co-host`
-              : 'Co-host request'
-          }
-          message="Accept to promote this viewer to co-host, or decline to keep them as a viewer."
-          confirmLabel={isRespondingToHostRequest ? 'Accepting…' : 'Accept'}
-          cancelLabel="Decline"
-          icon="hand-left-outline"
-          iconColor={colors.accentPrimary}
-          confirmColor={colors.accentSuccess}
-          onConfirm={() => {
-            void respondToHostRequest(true);
-          }}
-          onCancel={() => {
-            void respondToHostRequest(false);
-          }}
-        />
+        {Platform.OS !== 'web' ? (
+          <>
+            <ConfirmSheet
+              visible={Boolean(canRespondToHostRequest && pendingHostRequestUserId)}
+              title={
+                pendingHostRequestUserId
+                  ? `${pendingHostRequestDisplayName} wants to co-host`
+                  : 'Co-host request'
+              }
+              message="Accept to promote this viewer to co-host, or decline to keep them as a viewer."
+              confirmLabel={isRespondingToHostRequest ? 'Accepting…' : 'Accept'}
+              cancelLabel="Decline"
+              icon="hand-left-outline"
+              iconColor={colors.accentPrimary}
+              confirmColor={colors.accentSuccess}
+              onConfirm={() => {
+                void respondToHostRequest(true);
+              }}
+              onCancel={() => {
+                void respondToHostRequest(false);
+              }}
+            />
 
-        <ConfirmSheet
-          visible={Boolean(!isHost && hasPendingHostInvite && pendingInviteHostUser)}
-          title={
-            pendingInviteHostUser
-              ? `${pendingInviteHostUser.name} invited you to co-host`
-              : 'Host invite'
-          }
-          message="Accept to join as a co-host, or decline to keep watching."
-          confirmLabel={isRespondingToHostInvite ? 'Joining…' : 'Accept'}
-          cancelLabel="Decline"
-          icon="person-add-outline"
-          iconColor={colors.accentPrimary}
-          confirmColor={colors.accentSuccess}
-          onConfirm={() => {
-            void respondToHostInvite(true);
-          }}
-          onCancel={() => {
-            void respondToHostInvite(false);
-          }}
-        />
+            <ConfirmSheet
+              visible={Boolean(!isHost && hasPendingHostInvite)}
+              title={
+                pendingInviteHostUserId
+                  ? `${pendingHostInviteDisplayName} invited you to co-host`
+                  : 'Host invite'
+              }
+              message="Accept to join as a co-host, or decline to keep watching."
+              confirmLabel={isRespondingToHostInvite ? 'Joining…' : 'Accept'}
+              cancelLabel="Decline"
+              icon="person-add-outline"
+              iconColor={colors.accentPrimary}
+              confirmColor={colors.accentSuccess}
+              onConfirm={() => {
+                void respondToHostInvite(true);
+              }}
+              onCancel={() => {
+                void respondToHostInvite(false);
+              }}
+            />
+          </>
+        ) : null}
+
+        {showWebHostRequestPrompt ? (
+          <View style={styles.webLivePromptOverlay}>
+            <View style={styles.webLivePromptCard}>
+              <AppText
+                testID="live-host-request-title"
+                style={styles.webLivePromptTitle}
+              >
+                {pendingHostRequestUser
+                  ? `${pendingHostRequestDisplayName} wants to co-host`
+                  : 'Co-host request'}
+              </AppText>
+              <AppText variant="small" secondary style={styles.webLivePromptMessage}>
+                Accept to promote this viewer to co-host, or decline to keep them as a viewer.
+              </AppText>
+              <View style={styles.webLivePromptActions}>
+                <Pressable
+                  testID="live-host-request-decline"
+                  style={styles.webLivePromptDecline}
+                  onPress={() => {
+                    void respondToHostRequest(false);
+                  }}
+                >
+                  <AppText style={styles.webLivePromptDeclineText}>Decline</AppText>
+                </Pressable>
+                <Pressable
+                  testID="live-host-request-accept"
+                  style={styles.webLivePromptAccept}
+                  onPress={() => {
+                    void respondToHostRequest(true);
+                  }}
+                >
+                  <AppText style={styles.webLivePromptAcceptText}>
+                    {isRespondingToHostRequest ? 'Accepting…' : 'Accept'}
+                  </AppText>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        {showWebHostInvitePrompt ? (
+          <View style={styles.webLivePromptOverlay}>
+            <View style={styles.webLivePromptCard}>
+              <AppText
+                testID="live-host-invite-title"
+                style={styles.webLivePromptTitle}
+              >
+                {pendingInviteHostUser
+                  ? `${pendingHostInviteDisplayName} invited you to co-host`
+                  : 'Host invite'}
+              </AppText>
+              <AppText variant="small" secondary style={styles.webLivePromptMessage}>
+                Accept to join as a co-host, or decline to keep watching.
+              </AppText>
+              <View style={styles.webLivePromptActions}>
+                <Pressable
+                  testID="live-host-invite-decline"
+                  style={styles.webLivePromptDecline}
+                  onPress={() => {
+                    void respondToHostInvite(false);
+                  }}
+                >
+                  <AppText style={styles.webLivePromptDeclineText}>Decline</AppText>
+                </Pressable>
+                <Pressable
+                  testID="live-host-invite-accept"
+                  style={styles.webLivePromptAccept}
+                  onPress={() => {
+                    void respondToHostInvite(true);
+                  }}
+                >
+                  <AppText style={styles.webLivePromptAcceptText}>
+                    {isRespondingToHostInvite ? 'Joining…' : 'Accept'}
+                  </AppText>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         {/* Unified Host Options Sheet — Settings / Report / Invite as tabs */}
         <ActionSheet
@@ -2380,6 +2529,63 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
+  },
+  webLivePromptOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1600,
+    justifyContent: 'flex-end',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    backgroundColor: 'rgba(0, 0, 0, 0.28)',
+  },
+  webLivePromptCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  webLivePromptTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  webLivePromptMessage: {
+    lineHeight: 20,
+  },
+  webLivePromptActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  webLivePromptDecline: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    paddingVertical: spacing.sm,
+  },
+  webLivePromptAccept: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    backgroundColor: colors.accentSuccess,
+    paddingVertical: spacing.sm,
+  },
+  webLivePromptDeclineText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  webLivePromptAcceptText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
   },
 
   // Settings sheet

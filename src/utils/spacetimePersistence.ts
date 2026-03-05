@@ -169,32 +169,28 @@ export async function recordUploadedMediaAsset(input: UploadMetadataInput): Prom
 export async function publishLiveInvite(input: LiveInviteInput): Promise<void> {
   const liveId = normalizeString(input.liveId);
   const targetUserId = normalizeString(input.targetUserId);
-  const inviterUserId = getSpacetimeAuthSnapshot().userId;
 
-  if (!liveId || !targetUserId || !inviterUserId) {
-    throw new Error('A live id, target user, and signed-in inviter are required.');
+  if (!liveId || !targetUserId) {
+    throw new Error('A live id and target user are required.');
   }
 
   await sendGlobalEvent(makeEventId('live-invite'), liveId, {
     eventType: 'live_invite',
     liveId,
     targetUserId,
-    inviterUserId,
     createdAt: Date.now(),
   });
 }
 
 export async function publishLiveHostRequest(input: LiveHostRequestInput): Promise<void> {
   const liveId = normalizeString(input.liveId);
-  const requesterUserId = getSpacetimeAuthSnapshot().userId;
-  if (!liveId || !requesterUserId) {
-    throw new Error('A live id and signed-in requester are required.');
+  if (!liveId) {
+    throw new Error('A live id is required.');
   }
 
   await sendGlobalEvent(makeEventId('live-host-request'), liveId, {
     eventType: 'live_host_request',
     liveId,
-    requesterUserId,
     createdAt: Date.now(),
   });
 }
@@ -219,15 +215,13 @@ export async function publishLiveHostRequestResponse(
 
 export async function publishLiveInviteResponse(input: LiveInviteResponseInput): Promise<void> {
   const liveId = normalizeString(input.liveId);
-  const responderUserId = getSpacetimeAuthSnapshot().userId;
-  if (!liveId || !responderUserId) {
-    throw new Error('A live id and signed-in responder are required.');
+  if (!liveId) {
+    throw new Error('A live id is required.');
   }
 
   await sendGlobalEvent(makeEventId('live-invite-response'), liveId, {
     eventType: 'live_invite_response',
     liveId,
-    responderUserId,
     accepted: input.accepted === true,
     createdAt: Date.now(),
   });
