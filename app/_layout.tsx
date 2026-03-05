@@ -48,7 +48,7 @@ export default function RootLayout() {
                                     <Stack.Screen
                                       name="live"
                                       options={{
-                                        presentation: 'transparentModal',
+                                        presentation: 'card',
                                         animation: 'none',
                                         headerShown: false,
                                         animationDuration: 150,

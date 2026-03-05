@@ -41,7 +41,7 @@ export default function GoLiveScreen() {
   const insets = useSafeAreaInsets();
   const { userId } = useSessionAuth();
   const { startLive, activeLive, liveRoom } = useLive();
-  const { fuel, gems, cash } = useWallet();
+  const { fuel, gems, cash, walletStateAvailable } = useWallet();
 
   const [title, setTitle] = useState('');
   const [inviteOnly, setInviteOnly] = useState(false);
@@ -49,7 +49,7 @@ export default function GoLiveScreen() {
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
-  const isOutOfFuel = fuel <= 0;
+  const isOutOfFuel = walletStateAvailable && fuel <= 0;
   const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
   const canStartLive = hasValidTitle && !isOutOfFuel && !pendingStart;
   const canPressPrimaryCta = !pendingStart && (isOutOfFuel || hasValidTitle);
@@ -109,7 +109,10 @@ export default function GoLiveScreen() {
 
     setPendingStart(false);
     setStartError(null);
-    router.replace('/live');
+    router.replace({
+      pathname: '/live',
+      params: { id: activeLive.id || liveRoom.id },
+    });
   }, [activeLive, liveRoom, pendingStart, router]);
 
   const handleClose = () => {

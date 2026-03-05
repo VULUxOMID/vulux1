@@ -532,7 +532,7 @@ const defaultLiveValue: LiveContextType = {
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { userId, isLoaded: isAuthLoaded } = useSessionAuth();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
-  const { fuel } = useWallet();
+  const { fuel, walletStateAvailable } = useWallet();
   const fuelRef = useRef(fuel);
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
 
@@ -1282,7 +1282,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (liveState === 'LIVE_CLOSED') return;
 
-    if (fuelRef.current <= 0) {
+    if (walletStateAvailable && fuelRef.current <= 0) {
       toast.warning('You are out of fuel. Your live session has ended.');
       closeLiveRef.current();
       return;
@@ -1309,7 +1309,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       clearInterval(drainInterval);
       fuelDrainInFlightRef.current = false;
     };
-  }, [liveState, userId]);
+  }, [liveState, userId, walletStateAvailable]);
 
   const switchLiveRoom = useCallback(
     (live: LiveItem): boolean => {
@@ -1338,7 +1338,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         userId && (effectiveLive.ownerUserId === userId || hostUserIds.has(userId)),
       );
 
-      if (nextIsHost && fuel <= 0) {
+      if (nextIsHost && walletStateAvailable && fuel <= 0) {
         toast.warning('You are out of fuel. Refuel before joining a live as a host.');
         return false;
       }
@@ -1403,6 +1403,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       resolveLiveUser,
       syncLivePresence,
       userId,
+      walletStateAvailable,
     ],
   );
 
@@ -1466,18 +1467,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const restoreLive = useCallback(() => {
     if (activeLive) {
       setIsMinimized(false);
-      if (isHost && fuel <= 0) {
+      if (isHost && walletStateAvailable && fuel <= 0) {
         toast.warning('You are out of fuel. Refuel before joining a live.');
         return;
       }
 
       setLiveState('LIVE_FULL');
     }
-  }, [activeLive, isHost, fuel]);
+  }, [activeLive, isHost, fuel, walletStateAvailable]);
 
   const enterLiveRoom = useCallback(
     (room: LiveRoom, asHost = false) => {
-      if (asHost && fuel <= 0) {
+      if (asHost && walletStateAvailable && fuel <= 0) {
         toast.warning('You are out of fuel. Refuel before joining a live.');
         return;
       }
@@ -1533,7 +1534,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           });
       }
     },
-    [clearLiveEndTimers, currentUserWithMedia.id, fuel, postLiveMutation, syncLivePresence],
+    [clearLiveEndTimers, currentUserWithMedia.id, fuel, postLiveMutation, syncLivePresence, walletStateAvailable],
   );
 
   const exitLiveRoom = useCallback(() => {
@@ -1935,7 +1936,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         );
       }
 
-      if (fuel <= 0) {
+      if (walletStateAvailable && fuel <= 0) {
         toast.warning('You are out of fuel. Refuel before starting a live.');
         return makeLiveMutationFailure('invalid_input', 'You are out of fuel.');
       }
@@ -2030,7 +2031,17 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         liveStartInFlightRef.current = false;
       }
     },
-    [clearLiveEndTimers, currentUserWithMedia, fuel, isAuthLoaded, liveState, postLiveMutation, syncLivePresence, userId],
+    [
+      clearLiveEndTimers,
+      currentUserWithMedia,
+      fuel,
+      isAuthLoaded,
+      liveState,
+      postLiveMutation,
+      syncLivePresence,
+      userId,
+      walletStateAvailable,
+    ],
   );
 
   const toggleMic = useCallback(() => {
