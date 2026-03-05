@@ -13,7 +13,8 @@
     "test:event-runtime": "tsx --test src/features/home/widgets/eventRuntimeConfig.test.ts",
     "env:check": "bash ./scripts/env-check.sh",
     "env:check:legacy-api": "bash ./scripts/env-check.sh --legacy-api",
-    "spacetime:watch": "bash ./scripts/spacetime-watch.sh"
+    "spacetime:watch": "bash ./scripts/spacetime-watch.sh",
+    "smoke:web:auth": "node --env-file=.env.local scripts/qa/run-authenticated-web-smoke.mjs"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.19.29",
@@ -64,6 +65,7 @@
     "three": "0.166.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.53.0",
     "@types/react": "~19.1.0",
     "@types/three": "0.166.0",
     "babel-preset-expo": "^54.0.8",

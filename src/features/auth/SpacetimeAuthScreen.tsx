@@ -294,7 +294,8 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
 
     const identifier = normalizeIdentifier(loginEmail);
-    if (!identifier || !password) {
+    const qaTicket = process.env.EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET?.trim() || null;
+    if (!qaTicket && (!identifier || !password)) {
       setErrorMessage('Enter both your email and password.');
       return;
     }
@@ -304,6 +305,26 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     setInfoMessage(null);
     try {
       clearPendingSignInSecondFactor();
+
+      if (qaTicket && (!identifier || !password)) {
+        const ticketAttempt = await signIn.create({
+          strategy: 'ticket',
+          ticket: qaTicket,
+        });
+
+        if (await completeSignInIfPossible(ticketAttempt)) {
+          return;
+        }
+
+        const startedTicketSecondFactor = await beginSignInSecondFactorChallenge(ticketAttempt);
+        if (startedTicketSecondFactor) {
+          return;
+        }
+
+        setInfoMessage('Clerk ticket sign-in needs another step. Complete it and retry.');
+        return;
+      }
+
       let attempt = await signIn.create({
         strategy: 'password',
         identifier,
@@ -332,7 +353,6 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
         attempt.status === 'needs_identifier' &&
         hasSignInFactorStrategy(attempt, 'first', 'ticket')
       ) {
-        const qaTicket = process.env.EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET?.trim();
         if (qaTicket) {
           attempt = await signIn.create({
             strategy: 'ticket',
