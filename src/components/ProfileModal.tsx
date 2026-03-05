@@ -19,7 +19,9 @@ import { useRouter } from 'expo-router';
 import { AppText } from './AppText';
 import { useProfile } from '../context/ProfileContext';
 import { useNotificationsRepo } from '../data/provider';
+import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 import { useUserProfile } from '../context/UserProfileContext';
+import { trackSpacetimeProfileView } from '../lib/spacetime';
 import { colors, radius, spacing } from '../theme';
 import { hapticConfirm, hapticTap } from '../utils/haptics';
 import { UserRole } from '../features/liveroom/types';
@@ -88,6 +90,7 @@ function getRelationshipStatus(
 
 export function ProfileModal() {
   const { selectedUser, hideProfile } = useProfile();
+  const { userId: viewerUserId } = useSessionAuth();
   const { userProfile } = useUserProfile();
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
   const CARD_HEIGHT = SCREEN_HEIGHT * 0.70;
@@ -157,6 +160,24 @@ export function ProfileModal() {
       setOptimisticRequestUntil(0);
     }
   }, [friendNotifications, friendStatus, optimisticRequestUntil, selectedUser, userProfile.id]);
+
+  useEffect(() => {
+    if (!selectedUser?.id || !viewerUserId) {
+      return;
+    }
+
+    const openedAtMs = Date.now();
+    void trackSpacetimeProfileView({
+      viewerUserId,
+      profileUserId: selectedUser.id,
+      openedAtMs,
+      source: 'profile_modal_open',
+    }).catch((error) => {
+      if (__DEV__) {
+        console.warn('[profile] Failed to track profile view', error);
+      }
+    });
+  }, [selectedUser?.id, viewerUserId]);
 
   useEffect(() => {
     if (optimisticRequestUntil <= 0) return;
