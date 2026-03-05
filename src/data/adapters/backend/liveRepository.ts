@@ -300,6 +300,23 @@ function getSpacetimePresence(dbView: any = spacetimeDb.db as any) {
     .filter((entry): entry is PresenceItem => Boolean(entry));
 }
 
+function filterLivesWithFreshHostingPresence(
+  lives: ExtendedLiveItem[],
+  presence: PresenceItem[],
+): ExtendedLiveItem[] {
+  const activeHostingLiveIds = new Set(
+    presence
+      .filter((entry) => entry.activity === 'hosting')
+      .map((entry) => entry.liveId),
+  );
+
+  if (activeHostingLiveIds.size === 0) {
+    return [];
+  }
+
+  return lives.filter((live) => activeHostingLiveIds.has(live.id));
+}
+
 export function createBackendLiveRepository(
   snapshot: BackendSnapshot,
   runtime: LiveRepositoryRuntime = {},
@@ -310,6 +327,7 @@ export function createBackendLiveRepository(
   return {
     listLives(request) {
       const spacetimeLives = getSpacetimeLives(dbView);
+      const freshPresence = applyFreshPresenceFilter(getSpacetimePresence(dbView));
       const liveDiscoveryRequested = isViewRequested('public_live_discovery');
       const liveDiscoveryActive = isViewActive('public_live_discovery');
       const shouldUseSnapshotFallback =
@@ -317,7 +335,11 @@ export function createBackendLiveRepository(
       const byId = new Map<string, ExtendedLiveItem>();
 
       if (!shouldUseSnapshotFallback) {
-        for (const live of spacetimeLives) {
+        const authoritativeLives =
+          liveDiscoveryRequested || liveDiscoveryActive
+            ? filterLivesWithFreshHostingPresence(spacetimeLives, freshPresence)
+            : spacetimeLives;
+        for (const live of authoritativeLives) {
           byId.set(live.id, live);
         }
         for (const live of snapshot.lives) {

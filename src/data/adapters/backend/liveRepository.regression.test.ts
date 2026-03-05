@@ -47,6 +47,14 @@ test('discovery rows present -> Home uses discovery list', () => {
           viewerCount: 12,
         },
       ]),
+      publicLivePresenceItem: makeIterTable([
+        {
+          userId: 'host-1',
+          liveId: 'live-1',
+          activity: 'hosting',
+          updatedAt: Date.now(),
+        },
+      ]),
     },
     isViewRequested: () => true,
     isViewActive: () => true,
@@ -74,6 +82,32 @@ test('discovery requested/active + empty -> stale snapshot ghosts do not reappea
   const repo = createRepo(snapshot, {
     dbView: {
       publicLiveDiscovery: makeIterTable([]),
+      publicLivePresenceItem: makeIterTable([]),
+    },
+    isViewRequested: () => true,
+    isViewActive: () => true,
+  });
+
+  const lives = repo.listLives({ limit: 100 });
+  assert.deepEqual(lives, []);
+});
+
+test('discovery rows without fresh hosting presence are filtered as ghosts', () => {
+  const snapshot = createSnapshot([]);
+
+  const repo = createRepo(snapshot, {
+    dbView: {
+      publicLiveDiscovery: makeIterTable([
+        {
+          liveId: 'ghost-live',
+          hostUserId: 'ghost-host',
+          hostUsername: 'ghost',
+          hostAvatarUrl: 'https://example.com/ghost.png',
+          title: 'Ghost Live',
+          viewerCount: 1,
+        },
+      ]),
+      publicLivePresenceItem: makeIterTable([]),
     },
     isViewRequested: () => true,
     isViewActive: () => true,
