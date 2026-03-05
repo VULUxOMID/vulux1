@@ -262,6 +262,11 @@ function toIsoString(ms: number): string {
   }
 }
 
+function startOfUtcDayMs(valueMs: number): number {
+  const date = new Date(valueMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
 function buildDefaultDisplayName(
   email: string | null | undefined,
   subject: string | null | undefined,
@@ -365,6 +370,16 @@ const ADMIN_ROLE_NAMES = new Set([
 const BOOTSTRAP_ADMIN_USER_ID = '45d3c56c-a930-449b-9a3c-ef039f45eed7';
 const BOOTSTRAP_ADMIN_AUDIT_ACTION = 'bootstrap_admin_granted';
 const DB_OWNER_IDENTITY = 'c20098b71eb2493299cb336ffda41a6682345cb88ce35688278821d1dbaa8f51';
+const EVENT_WIDGET_CONFIG_ROW_ID = 'global';
+const EVENT_WIDGET_DEFAULT_ENTRY_AMOUNT_CASH = 0;
+const EVENT_WIDGET_DEFAULT_DRAW_DURATION_MINUTES = LIVE_EVENT_DURATION_MS / 60_000;
+const EVENT_WIDGET_DEFAULT_DRAW_INTERVAL_MINUTES = LIVE_EVENT_WINNER_INTERVAL_MS / 60_000;
+const EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN = 0;
+const EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX = 1_000_000;
+const EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN = 1;
+const EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX = 24 * 60;
+const EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN = 1;
+const EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX = 24 * 60;
 
 function unauthorized(message: string): never {
   throw new Error(`Unauthorized: ${message}`);
@@ -666,6 +681,137 @@ function appendBootstrapAdminGrantAuditLog(
     id: makeId(ctx, 'audit-bootstrap-admin'),
     actorUserId,
     item: toJsonString(item),
+    createdAt: ctx.timestamp,
+  });
+}
+
+type EventWidgetConfig = {
+  enabled: boolean;
+  entryAmountCash: number;
+  drawDurationMinutes: number;
+  drawIntervalMinutes: number;
+  autoplayEnabled: boolean;
+  updatedBy: string;
+  updatedAtMs: number;
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function readBoundedInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = readNumber(value);
+  if (parsed === null) return fallback;
+  return clampInt(parsed, min, max);
+}
+
+function readBoundedIntPatch(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  return readBoundedInt(value, fallback, min, max);
+}
+
+function readBooleanPatch(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const parsed = readBooleanLike(value);
+  return parsed === null ? fallback : parsed;
+}
+
+function readEventWidgetConfig(ctx: any): EventWidgetConfig {
+  const row = ctx.db.eventWidgetConfigItem.id.find(EVENT_WIDGET_CONFIG_ROW_ID);
+  const drawDurationMinutes = readBoundedInt(
+    row?.drawDurationMinutes,
+    EVENT_WIDGET_DEFAULT_DRAW_DURATION_MINUTES,
+    EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN,
+    EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX,
+  );
+  const drawIntervalMinutes = Math.min(
+    drawDurationMinutes,
+    readBoundedInt(
+      row?.drawIntervalMinutes,
+      EVENT_WIDGET_DEFAULT_DRAW_INTERVAL_MINUTES,
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX,
+    ),
+  );
+
+  return {
+    enabled: readBooleanLike(row?.enabled) ?? true,
+    entryAmountCash: readBoundedInt(
+      row?.entryAmountCash,
+      EVENT_WIDGET_DEFAULT_ENTRY_AMOUNT_CASH,
+      EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN,
+      EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX,
+    ),
+    drawDurationMinutes,
+    drawIntervalMinutes,
+    autoplayEnabled: readBooleanLike(row?.autoplayEnabled) ?? true,
+    updatedBy: readString(row?.updatedBy) ?? 'system',
+    updatedAtMs: timestampToMs(row?.updatedAt ?? ctx.timestamp),
+  };
+}
+
+function writeEventWidgetConfig(
+  ctx: any,
+  config: EventWidgetConfig,
+): void {
+  const existing = ctx.db.eventWidgetConfigItem.id.find(EVENT_WIDGET_CONFIG_ROW_ID);
+  if (existing) {
+    ctx.db.eventWidgetConfigItem.id.delete(EVENT_WIDGET_CONFIG_ROW_ID);
+  }
+
+  ctx.db.eventWidgetConfigItem.insert({
+    id: EVENT_WIDGET_CONFIG_ROW_ID,
+    enabled: config.enabled,
+    entryAmountCash: config.entryAmountCash,
+    drawDurationMinutes: config.drawDurationMinutes,
+    drawIntervalMinutes: config.drawIntervalMinutes,
+    autoplayEnabled: config.autoplayEnabled,
+    updatedBy: config.updatedBy,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function appendEventWidgetConfigAudit(
+  ctx: any,
+  actorUserId: string,
+  action: string,
+  previousConfig: EventWidgetConfig,
+  nextConfig: EventWidgetConfig,
+): void {
+  const changedFields: string[] = [];
+  if (previousConfig.enabled !== nextConfig.enabled) changedFields.push('enabled');
+  if (previousConfig.entryAmountCash !== nextConfig.entryAmountCash) changedFields.push('entryAmountCash');
+  if (previousConfig.drawDurationMinutes !== nextConfig.drawDurationMinutes) changedFields.push('drawDurationMinutes');
+  if (previousConfig.drawIntervalMinutes !== nextConfig.drawIntervalMinutes) changedFields.push('drawIntervalMinutes');
+  if (previousConfig.autoplayEnabled !== nextConfig.autoplayEnabled) changedFields.push('autoplayEnabled');
+
+  ctx.db.eventWidgetConfigAuditItem.insert({
+    id: makeId(ctx, 'event-widget-config-audit'),
+    action,
+    actorUserId,
+    item: toJsonString({
+      category: 'event_widget_config',
+      actionType: action,
+      actorUserId,
+      changedFields,
+      previousConfig,
+      nextConfig,
+      createdAt: nowMs(ctx),
+    }),
     createdAt: ctx.timestamp,
   });
 }
@@ -1707,6 +1853,48 @@ function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): voi
   }
 }
 
+function upsertEventParticipationItem(
+  ctx: any,
+  userId: string,
+  liveId: string,
+  activity: 'hosting' | 'watching',
+): void {
+  const live = readLiveItem(ctx, liveId);
+  if (Object.keys(live).length === 0) {
+    return;
+  }
+
+  const event = isRecord(live.event) ? live.event : {};
+  if (readBoolean(event.enabled) === false) {
+    return;
+  }
+
+  const now = nowMs(ctx);
+  const endedAt = toNonNegativeInt(event.endedAt);
+  if (endedAt > 0 && endedAt <= now) {
+    return;
+  }
+
+  const dayBucketStartIsoUtc = toIsoString(startOfUtcDayMs(now));
+  const rowId = `${liveId}::${userId}::${dayBucketStartIsoUtc}`;
+  const existing = ctx.db.eventParticipationItem.id.find(rowId);
+
+  if (existing) {
+    ctx.db.eventParticipationItem.id.delete(rowId);
+  }
+
+  ctx.db.eventParticipationItem.insert({
+    id: rowId,
+    liveId,
+    userId,
+    dayBucketStartIsoUtc,
+    activity,
+    source: 'set_live_presence',
+    firstSeenAtIsoUtc: readString(existing?.firstSeenAtIsoUtc) ?? toIsoString(now),
+    lastSeenAtIsoUtc: toIsoString(now),
+  });
+}
+
 function deleteLivePresenceItem(ctx: any, userId: string): void {
   const existing = ctx.db.livePresenceItem.userId.find(userId);
   if (existing) {
@@ -2253,11 +2441,13 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
   if (!liveId) return;
 
+  const eventWidgetConfig = readEventWidgetConfig(ctx);
   const ownerUserId =
     readString(payload.ownerUserId) ?? readString(payload.hostUserId) ?? readString(payload.fromUserId);
   const title = readString(payload.title) ?? 'Live';
   const inviteOnly = readBoolean(payload.inviteOnly) ?? false;
   const now = nowMs(ctx);
+  const eventDurationMs = eventWidgetConfig.drawDurationMinutes * 60_000;
   const hosts = normalizeHostList(payload.hosts);
   const bannedUserIds = normalizeBannedUserIds(payload.bannedUserIds);
   const invitedUserIds = normalizeInvitedUserIds(payload.invitedUserIds);
@@ -2278,11 +2468,11 @@ function applyLiveStart(ctx: any, payload: JsonRecord): void {
     createdAt: now,
     updatedAt: now,
     event: {
-      enabled: true,
-      drawIntervalMinutes: 15,
-      durationHours: 24,
+      enabled: eventWidgetConfig.enabled && eventWidgetConfig.autoplayEnabled,
+      drawIntervalMinutes: eventWidgetConfig.drawIntervalMinutes,
+      durationHours: Math.max(1, Math.ceil(eventWidgetConfig.drawDurationMinutes / 60)),
       startedAt: now,
-      endsAt: now + LIVE_EVENT_DURATION_MS,
+      endsAt: now + eventDurationMs,
       lastWinnerAt: 0,
       winners: [] as JsonArray,
     },
@@ -2406,6 +2596,13 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
     liveTitle: readString(payload.liveTitle) ?? '',
     updatedAt: nowMs(ctx),
   });
+
+  upsertEventParticipationItem(
+    ctx,
+    userId,
+    liveId,
+    activity === 'hosting' ? 'hosting' : 'watching',
+  );
 }
 
 function applyLiveInvite(ctx: any, payload: JsonRecord): void {
@@ -2536,20 +2733,29 @@ function applyLiveEventTick(ctx: any, payload: JsonRecord): void {
   const liveId = readString(payload.liveId);
   if (!liveId) return;
 
+  const eventWidgetConfig = readEventWidgetConfig(ctx);
+  if (!eventWidgetConfig.enabled) return;
+
   const live = readLiveItem(ctx, liveId);
   if (Object.keys(live).length === 0) return;
 
   const event = isRecord(live.event) ? live.event : {};
-  const enabled = readBoolean(event.enabled) ?? true;
+  const enabled = readBoolean(event.enabled) ?? eventWidgetConfig.autoplayEnabled;
   if (!enabled) return;
 
   const now = nowMs(ctx);
   const startedAt = toNonNegativeInt(event.startedAt, now);
-  const endsAt = toNonNegativeInt(event.endsAt, startedAt + LIVE_EVENT_DURATION_MS);
+  const endsAt = toNonNegativeInt(
+    event.endsAt,
+    startedAt + (eventWidgetConfig.drawDurationMinutes * 60_000),
+  );
   const lastWinnerAt = toNonNegativeInt(event.lastWinnerAt);
-  const intervalMinutes = Math.max(
-    1,
-    toNonNegativeInt(event.drawIntervalMinutes, LIVE_EVENT_WINNER_INTERVAL_MS / 60_000),
+  const intervalMinutes = Math.min(
+    eventWidgetConfig.drawDurationMinutes,
+    Math.max(
+      EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+      toNonNegativeInt(event.drawIntervalMinutes, eventWidgetConfig.drawIntervalMinutes),
+    ),
   );
   const intervalMs = intervalMinutes * 60_000;
 
@@ -3001,6 +3207,102 @@ export const setUserRole = schemaDb.reducer(
     }
 
     upsertUserRole(ctx, targetUserId, role, enabled, adminUserId);
+  },
+);
+
+export const setEventWidgetConfig = schemaDb.reducer(
+  {
+    entryAmountCash: t.option(t.u32()),
+    drawDurationMinutes: t.option(t.u32()),
+    drawIntervalMinutes: t.option(t.u32()),
+    autoplayEnabled: t.option(t.bool()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const argsRecord = args as JsonRecord;
+    const entryAmountCashArg = args.entryAmountCash ?? argsRecord.entry_amount_cash;
+    const drawDurationMinutesArg =
+      args.drawDurationMinutes ?? argsRecord.draw_duration_minutes;
+    const drawIntervalMinutesArg =
+      args.drawIntervalMinutes ?? argsRecord.draw_interval_minutes;
+    const autoplayEnabledArg = args.autoplayEnabled ?? argsRecord.autoplay_enabled;
+
+    const hasAnyUpdate =
+      entryAmountCashArg !== undefined ||
+      drawDurationMinutesArg !== undefined ||
+      drawIntervalMinutesArg !== undefined ||
+      autoplayEnabledArg !== undefined;
+    if (!hasAnyUpdate) {
+      throw new Error(
+        'At least one of entryAmountCash, drawDurationMinutes, drawIntervalMinutes, or autoplayEnabled is required.',
+      );
+    }
+
+    const previousConfig = readEventWidgetConfig(ctx);
+    const drawDurationMinutes = readBoundedIntPatch(
+      drawDurationMinutesArg,
+      previousConfig.drawDurationMinutes,
+      EVENT_WIDGET_DRAW_DURATION_MINUTES_MIN,
+      EVENT_WIDGET_DRAW_DURATION_MINUTES_MAX,
+    );
+    const drawIntervalMinutes = Math.min(
+      drawDurationMinutes,
+      readBoundedIntPatch(
+        drawIntervalMinutesArg,
+        previousConfig.drawIntervalMinutes,
+        EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MIN,
+        EVENT_WIDGET_DRAW_INTERVAL_MINUTES_MAX,
+      ),
+    );
+
+    const nextConfig: EventWidgetConfig = {
+      ...previousConfig,
+      entryAmountCash: readBoundedIntPatch(
+        entryAmountCashArg,
+        previousConfig.entryAmountCash,
+        EVENT_WIDGET_ENTRY_AMOUNT_CASH_MIN,
+        EVENT_WIDGET_ENTRY_AMOUNT_CASH_MAX,
+      ),
+      drawDurationMinutes,
+      drawIntervalMinutes,
+      autoplayEnabled: readBooleanPatch(autoplayEnabledArg, previousConfig.autoplayEnabled),
+      updatedBy: adminUserId,
+      updatedAtMs: nowMs(ctx),
+    };
+
+    writeEventWidgetConfig(ctx, nextConfig);
+    appendEventWidgetConfigAudit(
+      ctx,
+      adminUserId,
+      'event_widget_config_updated',
+      previousConfig,
+      nextConfig,
+    );
+  },
+);
+
+export const setEventWidgetEnabled = schemaDb.reducer(
+  {
+    enabled: t.bool(),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const previousConfig = readEventWidgetConfig(ctx);
+    const nextConfig: EventWidgetConfig = {
+      ...previousConfig,
+      enabled: readBooleanLike(args.enabled) === true,
+      updatedBy: adminUserId,
+      updatedAtMs: nowMs(ctx),
+    };
+
+    writeEventWidgetConfig(ctx, nextConfig);
+    appendEventWidgetConfigAudit(
+      ctx,
+      adminUserId,
+      nextConfig.enabled ? 'event_widget_enabled' : 'event_widget_disabled',
+      previousConfig,
+      nextConfig,
+    );
   },
 );
 

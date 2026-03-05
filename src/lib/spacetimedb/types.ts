@@ -48,6 +48,27 @@ export const AuditLogItem = __t.object("AuditLogItem", {
 });
 export type AuditLogItem = __Infer<typeof AuditLogItem>;
 
+export const EventWidgetConfigAuditItem = __t.object("EventWidgetConfigAuditItem", {
+  id: __t.string(),
+  action: __t.string(),
+  actorUserId: __t.string(),
+  item: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type EventWidgetConfigAuditItem = __Infer<typeof EventWidgetConfigAuditItem>;
+
+export const EventWidgetConfigItem = __t.object("EventWidgetConfigItem", {
+  id: __t.string(),
+  enabled: __t.bool(),
+  entryAmountCash: __t.u32(),
+  drawDurationMinutes: __t.u32(),
+  drawIntervalMinutes: __t.u32(),
+  autoplayEnabled: __t.bool(),
+  updatedBy: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type EventWidgetConfigItem = __Infer<typeof EventWidgetConfigItem>;
+
 export const ConversationItem = __t.object("ConversationItem", {
   id: __t.string(),
   ownerUserId: __t.string(),
@@ -391,4 +412,3 @@ export const WithdrawalRequestItem = __t.object("WithdrawalRequestItem", {
   createdAt: __t.timestamp(),
 });
 export type WithdrawalRequestItem = __Infer<typeof WithdrawalRequestItem>;
-
