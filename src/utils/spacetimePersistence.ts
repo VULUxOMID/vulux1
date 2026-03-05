@@ -37,6 +37,21 @@ type LiveInviteInput = {
   targetUserId: string;
 };
 
+type LiveHostRequestInput = {
+  liveId: string;
+};
+
+type LiveHostRequestResponseInput = {
+  liveId: string;
+  targetUserId: string;
+  accepted: boolean;
+};
+
+type LiveInviteResponseInput = {
+  liveId: string;
+  accepted: boolean;
+};
+
 function normalizeString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -160,11 +175,60 @@ export async function publishLiveInvite(input: LiveInviteInput): Promise<void> {
     throw new Error('A live id, target user, and signed-in inviter are required.');
   }
 
-  await sendGlobalEvent(makeEventId('live-invite'), `live:invite:${targetUserId}`, {
+  await sendGlobalEvent(makeEventId('live-invite'), liveId, {
     eventType: 'live_invite',
     liveId,
     targetUserId,
     inviterUserId,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveHostRequest(input: LiveHostRequestInput): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  const requesterUserId = getSpacetimeAuthSnapshot().userId;
+  if (!liveId || !requesterUserId) {
+    throw new Error('A live id and signed-in requester are required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-host-request'), liveId, {
+    eventType: 'live_host_request',
+    liveId,
+    requesterUserId,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveHostRequestResponse(
+  input: LiveHostRequestResponseInput,
+): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  const targetUserId = normalizeString(input.targetUserId);
+  if (!liveId || !targetUserId) {
+    throw new Error('A live id and target user id are required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-host-request-response'), liveId, {
+    eventType: 'live_host_request_response',
+    liveId,
+    targetUserId,
+    accepted: input.accepted === true,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveInviteResponse(input: LiveInviteResponseInput): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  const responderUserId = getSpacetimeAuthSnapshot().userId;
+  if (!liveId || !responderUserId) {
+    throw new Error('A live id and signed-in responder are required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-invite-response'), liveId, {
+    eventType: 'live_invite_response',
+    liveId,
+    responderUserId,
+    accepted: input.accepted === true,
     createdAt: Date.now(),
   });
 }

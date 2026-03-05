@@ -27,6 +27,7 @@ import { useProfile } from '../../context/ProfileContext';
 import { useWallet } from '../../context/WalletContext';
 import { useRepositories } from '../../data/provider';
 import { AppButton, AppScreen, AppText } from '../../components';
+import { ConfirmSheet } from '../../components/ConfirmSheet';
 import type { LiveLeaderboardEntry, SocialUser } from '../../data/contracts';
 import { colors, radius, spacing } from '../../theme';
 import { hapticTap, hapticImpact, hapticWarn } from '../../utils/haptics';
@@ -55,14 +56,25 @@ import { LiveItem } from '../home/LiveSection';
 import { MiniHostsGrid } from './components/MiniHostsGrid';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { subscribeLive } from '../../lib/spacetime';
-import { publishLiveInvite } from '../../utils/spacetimePersistence';
+import { spacetimeDb, subscribeLive } from '../../lib/spacetime';
+import {
+  publishLiveHostRequest,
+  publishLiveHostRequestResponse,
+  publishLiveInvite,
+  publishLiveInviteResponse,
+} from '../../utils/spacetimePersistence';
 import {
   blurActiveWebElement,
   lockPortraitOrientationSafely,
   unlockOrientationSafely,
 } from '../../utils/webRuntimeCompat';
 import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
+import {
+  type LiveControlEvent,
+  derivePendingHostInviteIds,
+  derivePendingHostRequestIds,
+  parseLiveControlEvents,
+} from './liveControlEvents';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const EDGE_THRESHOLD = SCREEN_WIDTH * 0.33;
@@ -88,6 +100,20 @@ const HOST_OPTIONS_SETTINGS_MIN_HEIGHT_RATIO = 0.72;
 
 const BOOST_DURATION = 60; // 60 seconds total boost time
 
+function makeFallbackLiveUser(userId: string, preferredName?: string): LiveUser {
+  const normalizedName = preferredName?.trim() || userId;
+  return {
+    id: userId,
+    name: normalizedName,
+    username: normalizedName,
+    age: 0,
+    country: '',
+    bio: '',
+    verified: false,
+    avatarUrl: '',
+  };
+}
+
 export default function LiveScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
@@ -96,7 +122,7 @@ export default function LiveScreen() {
   const insets = useSafeAreaInsets();
   const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
-  const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
+  const { live: liveRepo, social: socialRepo } = useRepositories();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const lives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
@@ -132,7 +158,6 @@ export default function LiveScreen() {
     leaveLive,
     endLive,
     sendMessage,
-    inviteToStream,
     kickStreamer,
     banUser,
     unbanUser,
@@ -143,6 +168,7 @@ export default function LiveScreen() {
     currentUser,
     setTitle,
   } = useLive();
+  const currentLiveId = liveRoom?.id ?? activeLive?.id;
   const subscriptionLiveId = liveRoom?.id ?? activeLive?.id ?? routeLiveId;
   const isProfileOpen = useRef(false);
   const isSheetOpen = useRef(false);
@@ -332,6 +358,8 @@ export default function LiveScreen() {
   const [userToKick, setUserToKick] = useState<LiveUser | null>(null);
   const [nextLiveId, setNextLiveId] = useState<string | null>(null);
   const [pendingInviteUser, setPendingInviteUser] = useState<LiveUser | null>(null);
+  const [isRespondingToHostRequest, setIsRespondingToHostRequest] = useState(false);
+  const [isRespondingToHostInvite, setIsRespondingToHostInvite] = useState(false);
   const filteredInviteCandidates = useMemo(() => {
     const query = inviteQuery.trim().toLowerCase();
     if (!query) return inviteCandidates;
@@ -372,6 +400,65 @@ export default function LiveScreen() {
 
     return Array.from(bannedMap.values());
   }, [knownLiveUsers, liveRoom]);
+
+  const liveUserDirectory = useMemo(() => {
+    const entries = new Map<string, LiveUser>();
+    [liveRoom?.hostUser, ...(liveRoom?.streamers ?? []), ...(liveRoom?.watchers ?? []), ...knownLiveUsers]
+      .filter((entry): entry is LiveUser => Boolean(entry))
+      .forEach((entry) => entries.set(entry.id, entry));
+    return entries;
+  }, [knownLiveUsers, liveRoom?.hostUser, liveRoom?.streamers, liveRoom?.watchers]);
+
+  const liveControlEvents = useMemo<LiveControlEvent[]>(() => {
+    if (!currentLiveId) return [];
+
+    const dbView = spacetimeDb.db as any;
+    const rows: any[] = Array.from(
+      dbView?.globalMessageItem?.iter?.() ??
+      dbView?.global_message_item?.iter?.() ??
+      [],
+    );
+    return parseLiveControlEvents(rows, currentLiveId);
+  }, [currentLiveId, liveRepo]);
+
+  const pendingHostRequestIds = useMemo(
+    () => derivePendingHostRequestIds(liveControlEvents),
+    [liveControlEvents],
+  );
+
+  const pendingHostInviteIds = useMemo(
+    () => derivePendingHostInviteIds(liveControlEvents),
+    [liveControlEvents],
+  );
+
+  const pendingHostRequestUser = useMemo(() => {
+    if (!isHost || pendingHostRequestIds.length === 0) return null;
+
+    const streamerIds = new Set((liveRoom?.streamers ?? []).map((streamer) => streamer.id));
+    const bannedIds = new Set(liveRoom?.bannedUserIds ?? []);
+    const candidateId = pendingHostRequestIds.find(
+      (userId) => !streamerIds.has(userId) && !bannedIds.has(userId),
+    );
+    if (!candidateId) return null;
+
+    return liveUserDirectory.get(candidateId) ?? makeFallbackLiveUser(candidateId);
+  }, [
+    isHost,
+    liveRoom?.bannedUserIds,
+    liveRoom?.streamers,
+    liveUserDirectory,
+    pendingHostRequestIds,
+  ]);
+
+  const hasPendingHostInvite = useMemo(() => {
+    if (isHost || !userId) return false;
+    return pendingHostInviteIds.includes(userId);
+  }, [isHost, pendingHostInviteIds, userId]);
+
+  const pendingInviteHostUser = useMemo(() => {
+    if (!hasPendingHostInvite || !liveRoom) return null;
+    return liveRoom.hostUser ?? null;
+  }, [hasPendingHostInvite, liveRoom]);
 
   // Fuel state (Premium GemPlus)
   // const [fuelMinutes, setFuelMinutes] = useState(45); // Replaced with global context
@@ -698,28 +785,19 @@ export default function LiveScreen() {
     }
 
     const currentLiveId = liveRoom?.id ?? activeLive?.id;
-    const hostUserId = liveRoom?.hostUser.id ?? activeLive?.hosts?.[0]?.id;
-    if (!currentLiveId || !hostUserId || !currentUser?.id) {
+    if (!currentLiveId || !currentUser?.id) {
       toast.error('Host is unavailable right now.');
       return;
     }
 
-    const requesterName = currentUser.name?.trim() || 'A viewer';
-    const messageId = `live-raise-hand-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
     try {
-      await messagesRepo.sendGlobalMessage({
-        clientMessageId: messageId,
-        roomId: currentLiveId,
-        message: {
-          id: messageId,
-          user: requesterName,
-          senderId: currentUser.id,
-          text: `${requesterName} requested to join as a co-host.`,
-          type: 'system',
-          createdAt: Date.now(),
-          roomId: currentLiveId,
-        },
+      await publishLiveHostRequest({
+        liveId: currentLiveId,
+      });
+      requestBackendRefresh({
+        scopes: ['live'],
+        source: 'manual',
+        reason: 'live_host_request_sent',
       });
       toast.success('Raise-hand request sent.');
     } catch (error) {
@@ -729,14 +807,10 @@ export default function LiveScreen() {
       toast.error('Could not send request. Try again.');
     }
   }, [
-    activeLive?.hosts,
     activeLive?.id,
     currentUser?.id,
-    currentUser?.name,
     isHost,
-    liveRoom?.hostUser.id,
     liveRoom?.id,
-    messagesRepo,
   ]);
 
   const handleInviteToStream = useCallback((user: LiveUser) => {
@@ -745,14 +819,96 @@ export default function LiveScreen() {
     setActiveSheet('inviteToStream');
   }, []);
 
-  const handleAcceptInvite = useCallback(() => {
-    if (pendingInviteUser) {
-      inviteToStream(pendingInviteUser);
+  const handleAcceptInvite = useCallback(async () => {
+    if (!pendingInviteUser || !currentLiveId) {
+      setActiveSheet(null);
+      setPendingInviteUser(null);
+      return;
+    }
+
+    const inviteSent = await sendLiveInvite(pendingInviteUser.id);
+    if (inviteSent) {
+      requestBackendRefresh({
+        scopes: ['live'],
+        source: 'manual',
+        reason: 'live_host_invite_sent',
+      });
       toast.success(`Invite sent to ${pendingInviteUser.name}`);
+    } else {
+      toast.error(`Could not invite ${pendingInviteUser.name}. Try again.`);
     }
     setActiveSheet(null);
     setPendingInviteUser(null);
-  }, [pendingInviteUser, inviteToStream]);
+  }, [currentLiveId, pendingInviteUser, sendLiveInvite, setActiveSheet]);
+
+  const respondToHostRequest = useCallback(
+    async (accepted: boolean) => {
+      if (!currentLiveId || !pendingHostRequestUser || isRespondingToHostRequest) {
+        return;
+      }
+
+      setIsRespondingToHostRequest(true);
+      try {
+        await publishLiveHostRequestResponse({
+          liveId: currentLiveId,
+          targetUserId: pendingHostRequestUser.id,
+          accepted,
+        });
+        requestBackendRefresh({
+          scopes: ['live'],
+          source: 'manual',
+          reason: accepted ? 'live_host_request_accepted' : 'live_host_request_declined',
+        });
+        toast.success(
+          accepted
+            ? `${pendingHostRequestUser.name} is now a co-host.`
+            : `${pendingHostRequestUser.name}'s request was declined.`,
+        );
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[live] Failed to respond to host request', error);
+        }
+        toast.error('Could not process request. Try again.');
+      } finally {
+        setIsRespondingToHostRequest(false);
+      }
+    },
+    [currentLiveId, isRespondingToHostRequest, pendingHostRequestUser],
+  );
+
+  const respondToHostInvite = useCallback(
+    async (accepted: boolean) => {
+      if (!currentLiveId || !hasPendingHostInvite || isRespondingToHostInvite) {
+        return;
+      }
+
+      setIsRespondingToHostInvite(true);
+      try {
+        await publishLiveInviteResponse({
+          liveId: currentLiveId,
+          accepted,
+        });
+        requestBackendRefresh({
+          scopes: ['live'],
+          source: 'manual',
+          reason: accepted ? 'live_host_invite_accepted' : 'live_host_invite_declined',
+        });
+        if (accepted) {
+          toast.success('You are now a co-host.');
+        } else {
+          toast.success('Invite declined.');
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[live] Failed to respond to host invite', error);
+        }
+        toast.error('Could not process invite. Try again.');
+      } finally {
+        setIsRespondingToHostInvite(false);
+      }
+    },
+    [currentLiveId, hasPendingHostInvite, isRespondingToHostInvite],
+  );
 
   const handleCancelInvite = useCallback(() => {
     setActiveSheet(null);
@@ -1262,6 +1418,48 @@ export default function LiveScreen() {
           user={pendingInviteUser}
           onInvite={handleAcceptInvite}
           onCancel={handleCancelInvite}
+        />
+
+        <ConfirmSheet
+          visible={Boolean(isHost && pendingHostRequestUser)}
+          title={
+            pendingHostRequestUser
+              ? `${pendingHostRequestUser.name} wants to co-host`
+              : 'Co-host request'
+          }
+          message="Accept to promote this viewer to co-host, or decline to keep them as a viewer."
+          confirmLabel={isRespondingToHostRequest ? 'Accepting…' : 'Accept'}
+          cancelLabel="Decline"
+          icon="hand-left-outline"
+          iconColor={colors.accentPrimary}
+          confirmColor={colors.accentSuccess}
+          onConfirm={() => {
+            void respondToHostRequest(true);
+          }}
+          onCancel={() => {
+            void respondToHostRequest(false);
+          }}
+        />
+
+        <ConfirmSheet
+          visible={Boolean(!isHost && hasPendingHostInvite && pendingInviteHostUser)}
+          title={
+            pendingInviteHostUser
+              ? `${pendingInviteHostUser.name} invited you to co-host`
+              : 'Host invite'
+          }
+          message="Accept to join as a co-host, or decline to keep watching."
+          confirmLabel={isRespondingToHostInvite ? 'Joining…' : 'Accept'}
+          cancelLabel="Decline"
+          icon="person-add-outline"
+          iconColor={colors.accentPrimary}
+          confirmColor={colors.accentSuccess}
+          onConfirm={() => {
+            void respondToHostInvite(true);
+          }}
+          onCancel={() => {
+            void respondToHostInvite(false);
+          }}
         />
 
         {/* Unified Host Options Sheet — Settings / Report / Invite as tabs */}
