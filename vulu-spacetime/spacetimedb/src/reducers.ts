@@ -1,6 +1,13 @@
 import { t } from 'spacetimedb/server';
 
 import { spacetimedb as schemaDb } from './schema';
+import {
+  PROFILE_VIEW_DEFAULT_DEDUPE_WINDOW_MS,
+  PROFILE_VIEW_METRIC_NAME,
+  PROFILE_VIEW_METRIC_VERSION_V2,
+  evaluateProfileViewDecision,
+  normalizeProfileViewDedupeWindowMs,
+} from './profileViewMetrics';
 
 type JsonRecord = Record<string, unknown>;
 type JsonArray = unknown[];
@@ -12,6 +19,7 @@ const GEMS_TO_FUEL_RATE = 4;
 const GEM_TO_CASH_RATE = 10;
 const CASH_TO_GEM_RATE = 10;
 const AD_REWARD_GEMS = 10;
+const PROFILE_VIEW_DEFAULT_MIGRATION_MODE = 'start_fresh_from_cutover';
 
 const FUEL_PACK_COSTS: Record<number, { gems: number; cash: number }> = {
   30: { gems: 12, cash: 120 },
@@ -1626,6 +1634,290 @@ function hasWalletPurchaseToken(
   }
 
   return false;
+}
+
+function buildProfileViewPairKey(viewerUserId: string, profileUserId: string): string {
+  return `${viewerUserId}::${profileUserId}`;
+}
+
+function buildProfileViewUniqueViewerKey(profileUserId: string, viewerUserId: string): string {
+  return `${profileUserId}::${viewerUserId}`;
+}
+
+type ProfileViewMetricCutoverState = {
+  activeVersion: string;
+  cutoverAtMs: number;
+  dedupeWindowMs: number;
+  migrationMode: string;
+  notes: string | null;
+};
+
+function upsertProfileViewMetricCutoverItem(
+  ctx: any,
+  params: {
+    activeVersion: string;
+    cutoverAtMs: number;
+    dedupeWindowMs: number;
+    migrationMode: string;
+    notes: string | null;
+    updatedBy: string | null;
+  },
+): void {
+  const existing = ctx.db.profileViewMetricCutoverItem.metricName.find(PROFILE_VIEW_METRIC_NAME);
+  if (existing) {
+    ctx.db.profileViewMetricCutoverItem.metricName.delete(PROFILE_VIEW_METRIC_NAME);
+  }
+
+  ctx.db.profileViewMetricCutoverItem.insert({
+    metricName: PROFILE_VIEW_METRIC_NAME,
+    activeVersion: params.activeVersion,
+    cutoverAtMs: String(Math.max(0, Math.floor(params.cutoverAtMs))),
+    dedupeWindowMs: normalizeProfileViewDedupeWindowMs(params.dedupeWindowMs),
+    migrationMode: readString(params.migrationMode) ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+    notes: params.notes ?? undefined,
+    updatedBy: params.updatedBy ?? undefined,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function ensureProfileViewMetricCutoverState(
+  ctx: any,
+  updatedBy: string | null = null,
+): ProfileViewMetricCutoverState {
+  const existing = ctx.db.profileViewMetricCutoverItem.metricName.find(PROFILE_VIEW_METRIC_NAME);
+  if (existing) {
+    return {
+      activeVersion: readString(existing.activeVersion) ?? PROFILE_VIEW_METRIC_VERSION_V2,
+      cutoverAtMs: toNonNegativeInt(existing.cutoverAtMs),
+      dedupeWindowMs: normalizeProfileViewDedupeWindowMs(existing.dedupeWindowMs),
+      migrationMode:
+        readString(existing.migrationMode) ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+      notes: readString(existing.notes),
+    };
+  }
+
+  const state: ProfileViewMetricCutoverState = {
+    activeVersion: PROFILE_VIEW_METRIC_VERSION_V2,
+    cutoverAtMs: nowMs(ctx),
+    dedupeWindowMs: PROFILE_VIEW_DEFAULT_DEDUPE_WINDOW_MS,
+    migrationMode: PROFILE_VIEW_DEFAULT_MIGRATION_MODE,
+    notes: 'v2 deduped profile-view metric started at cutover time.',
+  };
+  upsertProfileViewMetricCutoverItem(ctx, {
+    ...state,
+    updatedBy,
+  });
+  return state;
+}
+
+function appendProfileViewAttemptV2Item(
+  ctx: any,
+  params: {
+    id: string;
+    viewerUserId: string | null;
+    profileUserId: string | null;
+    metricVersion: string;
+    occurredAtMs: number;
+    dedupeWindowMs: number;
+    counted: boolean;
+    dropReason: string | null;
+    source: string | null;
+  },
+): void {
+  ctx.db.profileViewAttemptV2Item.insert({
+    id: params.id,
+    viewerUserId: params.viewerUserId ?? '',
+    profileUserId: params.profileUserId ?? '',
+    metricVersion: readString(params.metricVersion) ?? PROFILE_VIEW_METRIC_VERSION_V2,
+    occurredAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+    dedupeWindowMs: normalizeProfileViewDedupeWindowMs(params.dedupeWindowMs),
+    counted: params.counted,
+    dropReason: params.dropReason ?? undefined,
+    source: params.source ?? undefined,
+    createdAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewDedupeStateV2Item(
+  ctx: any,
+  params: {
+    viewerUserId: string;
+    profileUserId: string;
+    lastCountedAtMs: number;
+    lastEventId: string;
+  },
+): void {
+  const key = buildProfileViewPairKey(params.viewerUserId, params.profileUserId);
+  const existing = ctx.db.profileViewDedupeStateV2Item.key.find(key);
+  if (existing) {
+    ctx.db.profileViewDedupeStateV2Item.key.delete(key);
+  }
+
+  ctx.db.profileViewDedupeStateV2Item.insert({
+    key,
+    viewerUserId: params.viewerUserId,
+    profileUserId: params.profileUserId,
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.lastCountedAtMs))),
+    lastEventId: params.lastEventId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewAggregateV2Item(
+  ctx: any,
+  params: {
+    profileUserId: string;
+    countedTotal: number;
+    uniqueViewerTotal: number;
+    lastCountedAtMs: number;
+  },
+): void {
+  const existing = ctx.db.profileViewAggregateV2Item.profileUserId.find(params.profileUserId);
+  if (existing) {
+    ctx.db.profileViewAggregateV2Item.profileUserId.delete(params.profileUserId);
+  }
+
+  ctx.db.profileViewAggregateV2Item.insert({
+    profileUserId: params.profileUserId,
+    countedTotal: Math.max(0, toNonNegativeInt(params.countedTotal)),
+    uniqueViewerTotal: Math.max(0, toNonNegativeInt(params.uniqueViewerTotal)),
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.lastCountedAtMs))),
+    updatedAt: ctx.timestamp,
+  });
+}
+
+function upsertProfileViewUniqueViewerV2Item(
+  ctx: any,
+  params: {
+    profileUserId: string;
+    viewerUserId: string;
+    occurredAtMs: number;
+  },
+): { isNewUniqueViewer: boolean } {
+  const key = buildProfileViewUniqueViewerKey(params.profileUserId, params.viewerUserId);
+  const existing = ctx.db.profileViewUniqueViewerV2Item.key.find(key);
+  if (!existing) {
+    ctx.db.profileViewUniqueViewerV2Item.insert({
+      key,
+      profileUserId: params.profileUserId,
+      viewerUserId: params.viewerUserId,
+      firstCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+      lastCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+      viewCount: 1,
+      updatedAt: ctx.timestamp,
+    });
+    return { isNewUniqueViewer: true };
+  }
+
+  ctx.db.profileViewUniqueViewerV2Item.key.delete(key);
+  ctx.db.profileViewUniqueViewerV2Item.insert({
+    key,
+    profileUserId: params.profileUserId,
+    viewerUserId: params.viewerUserId,
+    firstCountedAtMs: readString(existing.firstCountedAtMs) ?? String(params.occurredAtMs),
+    lastCountedAtMs: String(Math.max(0, Math.floor(params.occurredAtMs))),
+    viewCount: Math.max(1, toNonNegativeInt(existing.viewCount, 1) + 1),
+    updatedAt: ctx.timestamp,
+  });
+  return { isNewUniqueViewer: false };
+}
+
+function applyTrackProfileViewV2(ctx: any, payload: JsonRecord): void {
+  const eventId = readString(payload.id) ?? makeId(ctx, 'profile-view-v2');
+  const viewerUserId = readString(payload.viewerUserId);
+  const profileUserId = readString(payload.profileUserId);
+  const source = readString(payload.source);
+  const metricCutover = ensureProfileViewMetricCutoverState(ctx, viewerUserId ?? null);
+  const existingAttempt = ctx.db.profileViewAttemptV2Item.id.find(eventId);
+  if (existingAttempt) {
+    return;
+  }
+
+  const pairKey =
+    viewerUserId && profileUserId
+      ? buildProfileViewPairKey(viewerUserId, profileUserId)
+      : null;
+  const dedupeState = pairKey
+    ? ctx.db.profileViewDedupeStateV2Item.key.find(pairKey)
+    : null;
+  const decision = evaluateProfileViewDecision({
+    viewerUserId,
+    profileUserId,
+    nowMs: nowMs(ctx),
+    occurredAtMs: payload.occurredAtMs ?? payload.viewedAtMs ?? payload.viewedAt ?? payload.createdAt,
+    cutoverAtMs: metricCutover.cutoverAtMs,
+    dedupeWindowMs:
+      payload.dedupeWindowMs ??
+      payload.dedupeWindow ??
+      metricCutover.dedupeWindowMs,
+    lastCountedAtMs: dedupeState?.lastCountedAtMs,
+  });
+
+  appendProfileViewAttemptV2Item(ctx, {
+    id: eventId,
+    viewerUserId,
+    profileUserId,
+    metricVersion: metricCutover.activeVersion,
+    occurredAtMs: decision.occurredAtMs,
+    dedupeWindowMs: decision.dedupeWindowMs,
+    counted: decision.counted,
+    dropReason: decision.dropReason,
+    source,
+  });
+
+  if (!decision.counted || !viewerUserId || !profileUserId) {
+    return;
+  }
+
+  upsertProfileViewDedupeStateV2Item(ctx, {
+    viewerUserId,
+    profileUserId,
+    lastCountedAtMs: decision.occurredAtMs,
+    lastEventId: eventId,
+  });
+
+  const { isNewUniqueViewer } = upsertProfileViewUniqueViewerV2Item(ctx, {
+    profileUserId,
+    viewerUserId,
+    occurredAtMs: decision.occurredAtMs,
+  });
+  const aggregate = ctx.db.profileViewAggregateV2Item.profileUserId.find(profileUserId);
+  const countedTotal = Math.max(0, toNonNegativeInt(aggregate?.countedTotal, 0) + 1);
+  const uniqueViewerTotal = Math.max(
+    0,
+    toNonNegativeInt(aggregate?.uniqueViewerTotal, 0) + (isNewUniqueViewer ? 1 : 0),
+  );
+  upsertProfileViewAggregateV2Item(ctx, {
+    profileUserId,
+    countedTotal,
+    uniqueViewerTotal,
+    lastCountedAtMs: decision.occurredAtMs,
+  });
+
+  const profileSummary = readPublicProfileSummaryItem(ctx, viewerUserId);
+  const viewerDisplayName = resolveFriendlyUserLabel(viewerUserId, [
+    readString(profileSummary?.username),
+    viewerUserId,
+  ]);
+  const viewerAvatarUrl = readString(profileSummary?.avatarUrl) ?? '';
+  const notificationId = `notif-profile-view-v2-${eventId}`;
+  upsertNotificationItem(ctx, notificationId, profileUserId, {
+    id: notificationId,
+    type: 'profile_view',
+    createdAt: decision.occurredAtMs,
+    read: false,
+    viewer: {
+      id: viewerUserId,
+      name: viewerDisplayName,
+      avatar: viewerAvatarUrl,
+      level: 0,
+    },
+    viewCount: 1,
+    lastViewed: decision.occurredAtMs,
+    metricVersion: metricCutover.activeVersion,
+    migrationMode: metricCutover.migrationMode,
+    countedEventId: eventId,
+  });
 }
 
 function upsertNotificationItem(ctx: any, id: string, userId: string, item: JsonRecord): void {
@@ -3340,6 +3632,72 @@ export const upsertAccountState = schemaDb.reducer(
       userId: args.userId,
       updates: parseJsonRecord(args.updates),
       createdAt: nowMs(ctx),
+    });
+  },
+);
+
+export const trackProfileView = schemaDb.reducer(
+  {
+    id: t.string(),
+    viewerUserId: t.string(),
+    profileUserId: t.string(),
+    occurredAtMs: t.option(t.string()),
+    source: t.option(t.string()),
+    dedupeWindowMs: t.option(t.u32()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.viewerUserId, 'viewerUserId');
+    const eventId = readString(args.id);
+    if (!eventId) {
+      throw new Error('id is required.');
+    }
+
+    applyTrackProfileViewV2(ctx, {
+      id: eventId,
+      viewerUserId: args.viewerUserId,
+      profileUserId: args.profileUserId,
+      occurredAtMs: readString(args.occurredAtMs),
+      source: readString(args.source),
+      dedupeWindowMs: args.dedupeWindowMs,
+      createdAt: nowMs(ctx),
+    });
+  },
+);
+
+export const setProfileViewMetricCutover = schemaDb.reducer(
+  {
+    activeVersion: t.option(t.string()),
+    cutoverAtMs: t.option(t.string()),
+    dedupeWindowMs: t.option(t.u32()),
+    migrationMode: t.option(t.string()),
+    notes: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const existing = ensureProfileViewMetricCutoverState(ctx, adminUserId);
+    const nextActiveVersion = readString(args.activeVersion) ?? existing.activeVersion;
+    if (
+      nextActiveVersion !== PROFILE_VIEW_METRIC_VERSION_V2 &&
+      nextActiveVersion !== 'legacy'
+    ) {
+      throw new Error('activeVersion must be "legacy" or "v2".');
+    }
+
+    const nextCutoverAtMs = toNonNegativeInt(args.cutoverAtMs, existing.cutoverAtMs);
+    const nextDedupeWindowMs = normalizeProfileViewDedupeWindowMs(
+      args.dedupeWindowMs ?? existing.dedupeWindowMs,
+    );
+    const nextMigrationMode =
+      readString(args.migrationMode) ?? existing.migrationMode ?? PROFILE_VIEW_DEFAULT_MIGRATION_MODE;
+    const nextNotes = readString(args.notes) ?? existing.notes;
+
+    upsertProfileViewMetricCutoverItem(ctx, {
+      activeVersion: nextActiveVersion,
+      cutoverAtMs: nextCutoverAtMs,
+      dedupeWindowMs: nextDedupeWindowMs,
+      migrationMode: nextMigrationMode,
+      notes: nextNotes,
+      updatedBy: adminUserId,
     });
   },
 );

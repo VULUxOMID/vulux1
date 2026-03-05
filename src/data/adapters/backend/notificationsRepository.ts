@@ -82,6 +82,16 @@ function asFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function asBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === '0') return false;
+  }
+  return null;
+}
+
 function readTimestampMs(value: unknown): number {
   const direct = asFiniteNumber(value);
   if (direct !== null) return direct;
@@ -426,11 +436,124 @@ function readNotificationRowsFromTable(
   viewerUserId: string | null,
   userDirectory: Map<string, UserDirectoryEntry>,
 ): BackendSnapshot['notifications'] {
-  void viewerUserId;
-  void userDirectory;
-  // notificationItem is private in schema. Notifications are hydrated via
-  // authenticated backend snapshot and global event derivations.
-  return [];
+  const rows: any[] = Array.from(
+    (spacetimeDb.db as any)?.myNotifications?.iter?.() ??
+      (spacetimeDb.db as any)?.my_notifications?.iter?.() ??
+      [],
+  );
+  const mapped: BackendSnapshot['notifications'] = [];
+
+  for (const row of rows) {
+    const item = parseJsonRecord(row?.item);
+    const id = asString(item.id) ?? asString(row?.id);
+    if (!id) continue;
+
+    const rowUserId = asString(row?.userId ?? row?.user_id);
+    if (viewerUserId && rowUserId && rowUserId !== viewerUserId) {
+      continue;
+    }
+
+    const type = asString(item.type);
+    if (!type) continue;
+
+    const createdAt = readTimestampMs(item.createdAt ?? row?.createdAt ?? row?.created_at);
+    const read = asBoolean(item.read) ?? false;
+
+    if (type === 'profile_view') {
+      const rawViewer = item.viewer as UnknownRecord | undefined;
+      const viewerId = asString(rawViewer?.id);
+      if (!viewerId) continue;
+
+      const resolvedViewerName = resolveUserName(
+        viewerId,
+        asString(rawViewer?.name),
+        undefined,
+        userDirectory,
+      );
+      const resolvedViewerAvatar = resolveUserAvatar(
+        viewerId,
+        asString(rawViewer?.avatar),
+        undefined,
+        userDirectory,
+      );
+      const viewCount = Math.max(1, Math.floor(asFiniteNumber(item.viewCount) ?? 1));
+      const lastViewed = readTimestampMs(item.lastViewed ?? item.createdAt ?? createdAt);
+
+      mapped.push({
+        id,
+        type: 'profile_view',
+        createdAt,
+        read,
+        viewer: {
+          id: viewerId,
+          name: resolvedViewerName,
+          avatar: resolvedViewerAvatar ?? undefined,
+          level: Math.max(0, Math.floor(asFiniteNumber(rawViewer?.level) ?? 0)),
+        },
+        viewCount,
+        lastViewed,
+      });
+      continue;
+    }
+
+    if (type === 'activity') {
+      const rawFromUser = item.fromUser as UnknownRecord | undefined;
+      const fromUserId = asString(rawFromUser?.id);
+      mapped.push({
+        id,
+        type: 'activity',
+        createdAt,
+        read,
+        activityType:
+          (asString(item.activityType) as
+            | 'mention'
+            | 'reply'
+            | 'event'
+            | 'money_received'
+            | 'live_invite'
+            | 'other') ?? 'other',
+        fromUser: fromUserId
+          ? {
+              id: fromUserId,
+              name: resolveUserName(
+                fromUserId,
+                asString(rawFromUser?.name),
+                undefined,
+                userDirectory,
+              ),
+              avatar: resolveUserAvatar(
+                fromUserId,
+                asString(rawFromUser?.avatar),
+                undefined,
+                userDirectory,
+              ),
+            }
+          : undefined,
+        message: asString(item.message) ?? '',
+        metadata:
+          item.metadata && typeof item.metadata === 'object'
+            ? (item.metadata as Record<string, unknown>)
+            : undefined,
+      });
+      continue;
+    }
+
+    if (type === 'announcement') {
+      mapped.push({
+        id,
+        type: 'announcement',
+        createdAt,
+        read,
+        title: asString(item.title) ?? 'Announcement',
+        message: asString(item.message) ?? '',
+        sourceName: asString(item.sourceName) ?? 'Vulu',
+        priority:
+          (asString(item.priority) as 'low' | 'medium' | 'high') ?? 'low',
+      });
+    }
+  }
+
+  return mapped;
 }
 
 export function createBackendNotificationsRepository(
