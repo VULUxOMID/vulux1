@@ -55,6 +55,7 @@ export default function HomeScreen() {
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { userProfile } = useUserProfile();
   const { activeLive, liveRoom, isHost, isLiveEnding, liveState } = useLive();
+  const [eventMetricsRefreshNonce, setEventMetricsRefreshNonce] = useState(0);
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
   const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
   const queriesEnabled =
@@ -177,7 +178,6 @@ export default function HomeScreen() {
   const [globalMessages, setGlobalMessages] = useState<ChatMessage[]>([]);
   const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
-  const [eventMetricsRefreshNonce, setEventMetricsRefreshNonce] = useState(0);
   const lastRemoteGlobalMessagesRef = useRef<ChatMessage[]>([]);
 
   // Friend Live Preview State
