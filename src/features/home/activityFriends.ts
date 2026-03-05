@@ -51,6 +51,7 @@ export function buildFriendActivitiesFromPresence({
   for (const presence of livePresence) {
     if (!normalizedFriendIds.has(presence.userId)) continue;
     if (!presence.liveId || !liveIds.has(presence.liveId)) continue;
+    if (presence.activity !== 'hosting' && presence.activity !== 'watching') continue;
 
     const previous = activitiesByUserId.get(presence.userId);
     if (previous && previous.updatedAt >= presence.updatedAt) continue;
