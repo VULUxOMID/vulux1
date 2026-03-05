@@ -620,6 +620,7 @@ export function subscribeSpacetimeAuth(
 }
 
 export async function setSpacetimeAuthToken(nextToken: string | null): Promise<void> {
+  const previousToken = authToken;
   const normalizedToken = normalizeAuthToken(nextToken);
   const acceptedToken = isLikelyJwtToken(normalizedToken) ? normalizedToken : null;
   setAuthState({
@@ -627,9 +628,16 @@ export async function setSpacetimeAuthToken(nextToken: string | null): Promise<v
     token: acceptedToken,
   });
   persistAuthToken(acceptedToken);
+
+  // If the connection is already active, auth token swaps require a reconnect so
+  // identity-scoped views (my_identity/my_roles) are re-evaluated with new claims.
+  if (previousToken !== acceptedToken && shouldMaintainConnection && connection) {
+    requestConnectionRecovery('auth_token_changed');
+  }
 }
 
 let connection: DbConnection | null = null;
+let currentConnectionIdentity: string | null = null;
 let activeScopedSubscription: ActiveScopedSubscription | null = null;
 let desiredScopedSubscription: ScopedSubscriptionSpec | null = null;
 const deferredScopedSubscriptionTeardowns = new WeakSet<SubscriptionHandle>();
@@ -1586,7 +1594,8 @@ const builder = DbConnection.builder()
   .withDatabaseName(SPACETIMEDB_DB_NAME)
   // Hermes (React Native) does not provide DecompressionStream.
   .withCompression('none')
-  .onConnect((nextConnection, _identity, _token) => {
+  .onConnect((nextConnection, identity, _token) => {
+    currentConnectionIdentity = parseIdentityHex(identity);
     const nextToken = isLikelyJwtToken(authToken) ? authToken : null;
     const claimedUserId = readJwtSubject(nextToken);
     setAuthState({
@@ -1608,6 +1617,7 @@ const builder = DbConnection.builder()
     applyDesiredScopedSubscription('connect');
   })
   .onConnectError((_ctx, err) => {
+    currentConnectionIdentity = null;
     connectLifecycleState = 'idle';
     const errorMessage = toErrorMessage(err);
     const isTokenError = errorMessage.toLowerCase().includes('token');
@@ -1677,6 +1687,7 @@ const builder = DbConnection.builder()
     connection = null;
   })
   .onDisconnect(() => {
+    currentConnectionIdentity = null;
     const forcedReconnectReason = pendingForcedReconnectReason;
     pendingForcedReconnectReason = null;
     connectLifecycleState = 'idle';
@@ -1710,6 +1721,30 @@ export const spacetimeDb = {
     return connection?.isActive || false;
   },
 };
+
+function exposeSpacetimeDebugGlobals(): void {
+  const host = globalThis as Record<string, unknown>;
+  host.__VULU_SPACETIME_DEBUG__ = {
+    get db() {
+      return spacetimeDb.db;
+    },
+    get reducers() {
+      return spacetimeDb.reducers;
+    },
+    get procedures() {
+      return spacetimeDb.procedures;
+    },
+    get isActive() {
+      return spacetimeDb.isActive;
+    },
+    get connectionIdentity() {
+      return currentConnectionIdentity;
+    },
+    getTelemetrySnapshot: () => getSpacetimeTelemetrySnapshot(),
+  };
+}
+
+exposeSpacetimeDebugGlobals();
 
 export const connectSpacetimeDB = () => {
   const nextSession = !shouldMaintainConnection;

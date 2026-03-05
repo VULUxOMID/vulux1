@@ -418,7 +418,8 @@ async function resolveIdentityViaProcedure(args: {
     ) {
       return { available: false, vuluUserId: null };
     }
-    throw error;
+    // Procedure calls can fail transiently on hosted environments; fallback to reducer path.
+    return { available: false, vuluUserId: null };
   }
 
   const vuluUserId = normalizeString(

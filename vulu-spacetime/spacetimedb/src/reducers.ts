@@ -669,6 +669,29 @@ function ensureDefaultUserRole(ctx: any, vuluUserId: string): void {
   upsertUserRole(ctx, vuluUserId, 'user', true, null);
 }
 
+function ensureSenderIdentityUserMap(ctx: any, vuluUserId: string): void {
+  const senderIdentity = readCallerIdentityHex(ctx);
+  if (!senderIdentity) {
+    return;
+  }
+
+  for (const row of ctx?.db?.senderIdentityUserMap?.iter?.() ?? []) {
+    const record = row as JsonRecord;
+    if (
+      readString(record.senderIdentity) === senderIdentity ||
+      readString(record.sender_identity) === senderIdentity
+    ) {
+      return;
+    }
+  }
+
+  ctx.db.senderIdentityUserMap.insert({
+    senderIdentity,
+    vuluUserId,
+    updatedAt: ctx.timestamp,
+  });
+}
+
 function appendBootstrapAdminGrantAuditLog(
   ctx: any,
   actorUserId: string,
@@ -862,6 +885,7 @@ function resolveOrCreateUserIdentityCore(
 
       ensureUserRow(ctx, existingVuluUserId, email, subject);
       ensureDefaultUserRole(ctx, existingVuluUserId);
+      ensureSenderIdentityUserMap(ctx, existingVuluUserId);
       console.info(
         `[auth] ${source} resolve_or_create_user_identity existing vulu_user_id=${existingVuluUserId}`,
       );
@@ -885,6 +909,7 @@ function resolveOrCreateUserIdentityCore(
     });
 
     ensureDefaultUserRole(ctx, vuluUserId);
+    ensureSenderIdentityUserMap(ctx, vuluUserId);
     console.info(
       `[auth] ${source} resolve_or_create_user_identity created vulu_user_id=${vuluUserId}`,
     );
