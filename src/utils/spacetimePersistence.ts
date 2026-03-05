@@ -37,6 +37,21 @@ type LiveInviteInput = {
   targetUserId: string;
 };
 
+type LiveHostRequestInput = {
+  liveId: string;
+};
+
+type LiveHostRequestResponseInput = {
+  liveId: string;
+  targetUserId: string;
+  accepted: boolean;
+};
+
+type LiveInviteResponseInput = {
+  liveId: string;
+  accepted: boolean;
+};
+
 function normalizeString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -154,17 +169,60 @@ export async function recordUploadedMediaAsset(input: UploadMetadataInput): Prom
 export async function publishLiveInvite(input: LiveInviteInput): Promise<void> {
   const liveId = normalizeString(input.liveId);
   const targetUserId = normalizeString(input.targetUserId);
-  const inviterUserId = getSpacetimeAuthSnapshot().userId;
 
-  if (!liveId || !targetUserId || !inviterUserId) {
-    throw new Error('A live id, target user, and signed-in inviter are required.');
+  if (!liveId || !targetUserId) {
+    throw new Error('A live id and target user are required.');
   }
 
-  await sendGlobalEvent(makeEventId('live-invite'), `live:invite:${targetUserId}`, {
+  await sendGlobalEvent(makeEventId('live-invite'), liveId, {
     eventType: 'live_invite',
     liveId,
     targetUserId,
-    inviterUserId,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveHostRequest(input: LiveHostRequestInput): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  if (!liveId) {
+    throw new Error('A live id is required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-host-request'), liveId, {
+    eventType: 'live_host_request',
+    liveId,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveHostRequestResponse(
+  input: LiveHostRequestResponseInput,
+): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  const targetUserId = normalizeString(input.targetUserId);
+  if (!liveId || !targetUserId) {
+    throw new Error('A live id and target user id are required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-host-request-response'), liveId, {
+    eventType: 'live_host_request_response',
+    liveId,
+    targetUserId,
+    accepted: input.accepted === true,
+    createdAt: Date.now(),
+  });
+}
+
+export async function publishLiveInviteResponse(input: LiveInviteResponseInput): Promise<void> {
+  const liveId = normalizeString(input.liveId);
+  if (!liveId) {
+    throw new Error('A live id is required.');
+  }
+
+  await sendGlobalEvent(makeEventId('live-invite-response'), liveId, {
+    eventType: 'live_invite_response',
+    liveId,
+    accepted: input.accepted === true,
     createdAt: Date.now(),
   });
 }

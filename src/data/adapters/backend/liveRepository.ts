@@ -16,6 +16,8 @@ type ExtendedLiveItem = LiveItem & {
   inviteOnly?: boolean;
   bannedUserIds?: string[];
   invitedUserIds?: string[];
+  pendingHostRequestUserIds?: string[];
+  pendingCoHostInviteUserIds?: string[];
 };
 
 type LiveRepositoryRuntime = {
@@ -131,6 +133,8 @@ function parseLiveRow(row: any): ExtendedLiveItem | null {
     inviteOnly: asBoolean(item.inviteOnly) ?? false,
     bannedUserIds: parseStringArray(item.bannedUserIds),
     invitedUserIds: parseStringArray(item.invitedUserIds),
+    pendingHostRequestUserIds: parseStringArray(item.pendingHostRequestUserIds),
+    pendingCoHostInviteUserIds: parseStringArray(item.pendingCoHostInviteUserIds),
   };
 }
 
