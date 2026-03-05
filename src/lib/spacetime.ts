@@ -15,7 +15,7 @@ import { planScopedSubscriptionTeardown } from './spacetimeSubscriptionLifecycle
 
 const SPACETIMEDB_URI =
   process.env.EXPO_PUBLIC_SPACETIMEDB_URI || 'wss://maincloud.spacetimedb.com';
-const SPACETIMEDB_DB_NAME = process.env.EXPO_PUBLIC_SPACETIMEDB_NAME || 'vulu-spacetime';
+const SPACETIMEDB_DB_NAME = process.env.EXPO_PUBLIC_SPACETIMEDB_NAME || 'vulu';
 const RECONNECT_BASE_DELAY_MS = 900;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 const ZERO_ROW_WATCHDOG_DELAY_MS = 9_000;

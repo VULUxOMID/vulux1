@@ -2,7 +2,7 @@ import { DbConnection } from './src/lib/spacetimedb';
 
 const connection = DbConnection.builder()
   .withUri('ws://localhost:3000')
-  .withDatabaseName('vulu-spacetime')
+  .withDatabaseName('vulu')
   .onConnect((conn) => {
     console.log('connected');
     const id = `cli-${Date.now()}`;

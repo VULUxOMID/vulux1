@@ -21,7 +21,7 @@ This document is the current source of truth for VuluGO runtime setup during the
 ### Required App Variables
 ```env
 EXPO_PUBLIC_SPACETIMEDB_URI=wss://maincloud.spacetimedb.com
-EXPO_PUBLIC_SPACETIMEDB_NAME=vulu-spacetime
+EXPO_PUBLIC_SPACETIMEDB_NAME=vulu
 ```
 
 ### Strongly Recommended App Variables
