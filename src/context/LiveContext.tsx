@@ -8,7 +8,7 @@ import React, {
   useRef,
   type ReactNode,
 } from 'react';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+import { useAuth as useSessionAuth, useUser as useSessionUser } from '../auth/spacetimeSession';
 
 import { type LiveItem } from '../features/home/LiveSection';
 import {
@@ -174,12 +174,12 @@ function resolveFriendlyUsername(
 function isGenericDisplayLabel(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return true;
-  return normalized === 'unknown' || normalized.startsWith('user ');
+  return normalized === 'unknown' || normalized === 'you' || normalized.startsWith('user ');
 }
 
 function shouldPreferMappedValue(currentValue: string | undefined, mappedValue: string | undefined): boolean {
   const normalizedMapped = mappedValue?.trim();
-  if (!normalizedMapped || isLikelyOpaqueUserId(normalizedMapped)) {
+  if (!normalizedMapped || isLikelyOpaqueUserId(normalizedMapped) || isGenericDisplayLabel(normalizedMapped)) {
     return false;
   }
 
@@ -236,6 +236,27 @@ function toLiveUserFromSocial(user: SocialUser): LiveUser {
     country: '',
     bio: user.statusText || '',
     avatarUrl: user.avatarUrl || '',
+  };
+}
+
+type SessionIdentityUser = {
+  fullName?: string | null;
+  username?: string | null;
+  imageUrl?: string | null;
+};
+
+function toLiveUserFromSession(userId: string, sessionUser: SessionIdentityUser | null | undefined): LiveUser {
+  const preferredName = sessionUser?.fullName?.trim() || sessionUser?.username?.trim() || undefined;
+  const friendlyName = resolveFriendlyDisplayName(preferredName, userId);
+  return {
+    id: userId,
+    name: friendlyName,
+    username: resolveFriendlyUsername(sessionUser?.username?.trim(), friendlyName, userId),
+    age: 0,
+    verified: false,
+    country: '',
+    bio: '',
+    avatarUrl: sessionUser?.imageUrl?.trim() || '',
   };
 }
 
@@ -531,6 +552,7 @@ const defaultLiveValue: LiveContextType = {
 
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { userId, isLoaded: isAuthLoaded } = useSessionAuth();
+  const { user: sessionUser } = useSessionUser();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
   const { fuel, walletStateAvailable } = useWallet();
   const fuelRef = useRef(fuel);
@@ -584,34 +606,84 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     [socialUsers, userId],
   );
 
+  const sessionIdentity = useMemo(() => {
+    const explicitDisplayName = sessionUser?.fullName?.trim();
+    const explicitUsername = sessionUser?.username?.trim();
+    const explicitAvatarUrl = sessionUser?.imageUrl?.trim();
+
+    return {
+      explicitDisplayName:
+        explicitDisplayName && !isLikelyOpaqueUserId(explicitDisplayName)
+          ? explicitDisplayName
+          : undefined,
+      explicitUsername:
+        explicitUsername && !isLikelyOpaqueUserId(explicitUsername)
+          ? normalizeUsername(explicitUsername, 'user')
+          : undefined,
+      explicitAvatarUrl: explicitAvatarUrl && explicitAvatarUrl.length > 0 ? explicitAvatarUrl : undefined,
+    };
+  }, [sessionUser?.fullName, sessionUser?.imageUrl, sessionUser?.username]);
+
+  const currentSessionUser = useMemo<LiveUser | undefined>(
+    () => (userId ? toLiveUserFromSession(userId, sessionUser) : undefined),
+    [sessionUser, userId],
+  );
+
   const baseCurrentUser = useMemo<LiveUser>(() => {
     if (!userId) {
       return liveSessionUser;
     }
 
     const knownUser = knownLiveUsers.find((item) => item.id === userId);
-    if (knownUser) {
-      return {
+    const currentSocialLiveUser = currentSocialUser ? toLiveUserFromSocial(currentSocialUser) : undefined;
+
+    let resolvedUser: LiveUser = knownUser
+      ? {
         ...knownUser,
         id: userId,
+      }
+      : {
+        id: userId,
+        name: 'You',
+        username: normalizeUsername(userId, 'you'),
+        age: 0,
+        verified: false,
+        country: '',
+        bio: '',
+        avatarUrl: '',
+      };
+
+    if (currentSocialLiveUser) {
+      resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSocialLiveUser);
+    }
+
+    if (currentSessionUser) {
+      resolvedUser = mergeMappedUserIdentity(resolvedUser, currentSessionUser);
+    }
+
+    if (sessionIdentity.explicitDisplayName) {
+      resolvedUser = {
+        ...resolvedUser,
+        name: sessionIdentity.explicitDisplayName,
       };
     }
 
-    if (currentSocialUser) {
-      return toLiveUserFromSocial(currentSocialUser);
+    if (sessionIdentity.explicitUsername) {
+      resolvedUser = {
+        ...resolvedUser,
+        username: sessionIdentity.explicitUsername,
+      };
     }
 
-    return {
-      id: userId,
-      name: 'You',
-      username: normalizeUsername(userId, 'you'),
-      age: 0,
-      verified: false,
-      country: '',
-      bio: '',
-      avatarUrl: '',
-    };
-  }, [currentSocialUser, knownLiveUsers, userId]);
+    if (sessionIdentity.explicitAvatarUrl) {
+      resolvedUser = {
+        ...resolvedUser,
+        avatarUrl: sessionIdentity.explicitAvatarUrl,
+      };
+    }
+
+    return withFriendlyLiveUser(resolvedUser);
+  }, [currentSessionUser, currentSocialUser, knownLiveUsers, sessionIdentity, userId]);
 
   const currentUserWithMedia = useMemo(
     () => ({
@@ -1343,7 +1415,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const resolvedHosts = (live.hosts || []).map((host) => {
+      const resolvedHosts = (effectiveLive.hosts || []).map((host) => {
         const normalizedHostId =
           typeof host.id === 'string' && host.id.trim().length > 0 ? host.id.trim() : undefined;
         const mappedUser = normalizedHostId
@@ -1364,7 +1436,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       });
 
       const liveWithResolvedHosts: LiveItem = {
-        ...live,
+        ...effectiveLive,
         hosts: resolvedHosts,
       };
 
@@ -1386,7 +1458,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setLiveState('LIVE_FULL');
       setLiveRoom(nextRoom);
       setIsHost(nextIsHost);
-      void syncLivePresence(nextIsHost ? 'hosting' : 'watching', live.id, live.title);
+      void syncLivePresence(nextIsHost ? 'hosting' : 'watching', liveWithResolvedHosts.id, liveWithResolvedHosts.title);
       requestBackendRefresh({
         scopes: ['live', 'global_messages'],
         source: 'manual',
