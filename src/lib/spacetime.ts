@@ -283,6 +283,8 @@ const PUBLIC_SUBSCRIPTION_VIEWS = [
   'public_leaderboard',
   'public_live_discovery',
   'public_live_presence_item',
+  'event_metrics_overview',
+  'event_widget_config_item',
   'global_message_item',
 ] as const;
 
@@ -301,6 +303,8 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   public_profile_summary: ['social', 'search'],
   public_leaderboard: ['leaderboard'],
   public_live_discovery: ['live', 'search'],
+  event_metrics_overview: ['events', 'live'],
+  event_widget_config_item: ['events'],
   public_live_presence_item: ['live'],
   global_message_item: ['global_messages', 'messages'],
   track: ['music'],
@@ -321,6 +325,8 @@ const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
   public_profile_summary: ['publicProfileSummary'],
   public_leaderboard: ['publicLeaderboard'],
   public_live_discovery: ['publicLiveDiscovery'],
+  event_metrics_overview: ['eventMetricsOverview', 'event_metrics_overview'],
+  event_widget_config_item: ['eventWidgetConfigItem', 'event_widget_config_item'],
   public_live_presence_item: ['publicLivePresenceItem', 'public_live_presence_item'],
   global_message_item: ['globalMessageItem', 'global_message_item'],
   track: ['track'],

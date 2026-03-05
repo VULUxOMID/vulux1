@@ -42,6 +42,33 @@ test('resolveEventWidgetRuntimeConfig supports compatibility aliases', () => {
   assert.equal(runtime.autoplayFrequencySeconds, 120);
 });
 
+test('resolveEventWidgetRuntimeConfig prefers backend config row and respects autoplayEnabled=false', () => {
+  const runtime = resolveEventWidgetRuntimeConfig(
+    {
+      eventWidgetRuntime: {
+        enabled: true,
+        entryAmount: 999,
+        drawDurationMinutes: 99,
+        drawIntervalMinutes: 99,
+        autoplayFrequencySeconds: 99,
+      },
+    },
+    {
+      enabled: true,
+      entryAmountCash: 13,
+      drawDurationMinutes: 10,
+      drawIntervalMinutes: 3,
+      autoplayEnabled: false,
+    },
+  );
+
+  assert.equal(runtime.enabled, true);
+  assert.equal(runtime.entryAmount, 13);
+  assert.equal(runtime.drawDurationMinutes, 10);
+  assert.equal(runtime.drawIntervalMinutes, 3);
+  assert.equal(runtime.autoplayFrequencySeconds, 0);
+});
+
 test('countDistinctActivePlayersNow counts distinct fresh hosting/watching users', () => {
   const nowMs = 1_700_000_000_000;
   const count = countDistinctActivePlayersNow(

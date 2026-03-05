@@ -15,9 +15,10 @@ import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
 } from '../../../data/adapters/backend/accountState';
-import { subscribeSpacetimeDataChanges } from '../../../lib/spacetime';
+import { spacetimeDb, subscribeSpacetimeDataChanges } from '../../../lib/spacetime';
 import {
   EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG,
+  readEventWidgetConfigSourceFromDb,
   resolveEventWidgetRuntimeConfig,
 } from './eventRuntimeConfig';
 
@@ -80,7 +81,11 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
   useEffect(() => {
     if (!isAuthLoaded || !isSignedIn || !userId) return;
     return subscribeSpacetimeDataChanges((event) => {
-      if (!event.scopes.includes('wallet') && !event.scopes.includes('profile')) {
+      if (
+        !event.scopes.includes('wallet') &&
+        !event.scopes.includes('profile') &&
+        !event.scopes.includes('events')
+      ) {
         return;
       }
       setRuntimeConfigRefreshNonce((current) => current + 1);
@@ -131,7 +136,8 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     const hydrateEventState = async () => {
       const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
-      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState));
+      const backendConfig = readEventWidgetConfigSourceFromDb((spacetimeDb as any).db);
+      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState, backendConfig));
 
       const eventState =
         accountState?.eventWidget && typeof accountState.eventWidget === 'object'
@@ -181,7 +187,8 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     const hydrateRuntimeConfig = async () => {
       const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
-      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState));
+      const backendConfig = readEventWidgetConfigSourceFromDb((spacetimeDb as any).db);
+      setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState, backendConfig));
     };
 
     void hydrateRuntimeConfig();

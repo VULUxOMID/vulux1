@@ -28,10 +28,18 @@ import {
 } from './activityFriends';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
-import { subscribeBootstrap, subscribeGlobalChat } from '../../lib/spacetime';
+import {
+  spacetimeDb,
+  subscribeBootstrap,
+  subscribeGlobalChat,
+  subscribeSpacetimeDataChanges,
+} from '../../lib/spacetime';
 import { useLive } from '../../context/LiveContext';
 import { deriveHostActiveLiveFallback, mergeHomeLiveNowList } from './liveNowList';
-import { countDistinctActivePlayersNow } from './widgets/eventRuntimeConfig';
+import {
+  countDistinctActivePlayersNow,
+  readActivePlayersNowFromEventOverview,
+} from './widgets/eventRuntimeConfig';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -127,12 +135,16 @@ export default function HomeScreen() {
   );
   const activePlayersNow = useMemo(() => {
     if (!queriesEnabled) return 0;
+    const overviewActivePlayers = readActivePlayersNowFromEventOverview((spacetimeDb as any).db);
+    if (overviewActivePlayers !== null) {
+      return overviewActivePlayers;
+    }
     const allPresence = liveRepo.listPresence({
       limit: 2_000,
       activities: ['hosting', 'watching'],
     });
     return countDistinctActivePlayersNow(allPresence);
-  }, [liveRepo, queriesEnabled]);
+  }, [eventMetricsRefreshNonce, liveRepo, queriesEnabled]);
   const friendActivities = useMemo<FriendLiveActivity[]>(
     () => {
       if (!queriesEnabled) return [];
@@ -165,6 +177,7 @@ export default function HomeScreen() {
   const [globalMessages, setGlobalMessages] = useState<ChatMessage[]>([]);
   const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
+  const [eventMetricsRefreshNonce, setEventMetricsRefreshNonce] = useState(0);
   const lastRemoteGlobalMessagesRef = useRef<ChatMessage[]>([]);
 
   // Friend Live Preview State
@@ -230,6 +243,16 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!queriesEnabled) return;
     requestBackendRefresh();
+  }, [queriesEnabled]);
+
+  useEffect(() => {
+    if (!queriesEnabled) return;
+    return subscribeSpacetimeDataChanges((event) => {
+      if (!event.scopes.includes('events') && !event.scopes.includes('live')) {
+        return;
+      }
+      setEventMetricsRefreshNonce((current) => current + 1);
+    });
   }, [queriesEnabled]);
 
   useEffect(() => {

@@ -26,6 +26,24 @@ function parseEnvBoolean(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function readFirstRowFromTable(dbState: unknown, tableKeys: readonly string[]): UnknownRecord | null {
+  const dbRecord = asRecord(dbState);
+  if (!dbRecord) return null;
+
+  for (const tableKey of tableKeys) {
+    const table = asRecord(dbRecord[tableKey]);
+    const iter = table ? (table as { iter?: () => Iterable<unknown> }).iter : undefined;
+    if (typeof iter !== 'function') continue;
+    for (const row of iter()) {
+      const record = asRecord(row);
+      if (record) return record;
+      break;
+    }
+  }
+
+  return null;
+}
+
 function readNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'bigint') {
@@ -98,7 +116,28 @@ export const EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG: EventWidgetRuntimeConfig = {
   autoplayFrequencySeconds: parseEnvNumber('EXPO_PUBLIC_EVENT_AUTOPLAY_FREQUENCY_SECONDS', 0, 3_600, 0),
 };
 
-function pickRuntimeSource(accountState: UnknownRecord | null | undefined): UnknownRecord | null {
+export function readEventWidgetConfigSourceFromDb(dbState: unknown): UnknownRecord | null {
+  return readFirstRowFromTable(dbState, ['eventWidgetConfigItem', 'event_widget_config_item']);
+}
+
+export function readActivePlayersNowFromEventOverview(dbState: unknown): number | null {
+  const row = readFirstRowFromTable(dbState, ['eventMetricsOverview', 'event_metrics_overview']);
+  if (!row) return null;
+
+  const value = readNumber(row.activePlayersNow ?? row.active_players_now);
+  if (value === null) return null;
+  return Math.max(0, Math.floor(value));
+}
+
+function pickRuntimeSource(
+  accountState: UnknownRecord | null | undefined,
+  backendConfigRow: UnknownRecord | null | undefined,
+): UnknownRecord | null {
+  const backendConfig = asRecord(backendConfigRow);
+  if (backendConfig) {
+    return backendConfig;
+  }
+
   const state = asRecord(accountState);
   if (!state) return null;
 
@@ -123,8 +162,9 @@ function pickRuntimeSource(accountState: UnknownRecord | null | undefined): Unkn
 
 export function resolveEventWidgetRuntimeConfig(
   accountState: UnknownRecord | null | undefined,
+  backendConfigRow?: UnknownRecord | null,
 ): EventWidgetRuntimeConfig {
-  const source = pickRuntimeSource(accountState);
+  const source = pickRuntimeSource(accountState, backendConfigRow ?? null);
 
   const enabled =
     readBooleanByKeys(source, ['enabled', 'isEnabled']) ??
@@ -133,7 +173,7 @@ export function resolveEventWidgetRuntimeConfig(
   const entryAmount =
     readNumberByKeys(
       source,
-      ['entryAmount', 'entryCost', 'ticketCost', 'entryFee', 'amount'],
+      ['entryAmountCash', 'entry_amount_cash', 'entryAmount', 'entryCost', 'ticketCost', 'entryFee', 'amount'],
       0,
       1_000_000,
     ) ?? EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG.entryAmount;
@@ -141,7 +181,7 @@ export function resolveEventWidgetRuntimeConfig(
   const drawDurationMinutes =
     readNumberByKeys(
       source,
-      ['drawDurationMinutes', 'drawDuration', 'drawMinutes', 'timerMinutes'],
+      ['drawDurationMinutes', 'draw_duration_minutes', 'drawDuration', 'drawMinutes', 'timerMinutes'],
       1,
       1_440,
     ) ?? EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG.drawDurationMinutes;
@@ -149,14 +189,14 @@ export function resolveEventWidgetRuntimeConfig(
   const drawIntervalMinutes =
     readNumberByKeys(
       source,
-      ['drawIntervalMinutes', 'drawInterval', 'intervalMinutes', 'resultIntervalMinutes'],
+      ['drawIntervalMinutes', 'draw_interval_minutes', 'drawInterval', 'intervalMinutes', 'resultIntervalMinutes'],
       1,
       1_440,
     ) ??
     drawDurationMinutes ??
     EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG.drawIntervalMinutes;
 
-  const autoplayFrequencySeconds =
+  const autoplayFrequencySecondsCandidate =
     readNumberByKeys(
       source,
       ['autoplayFrequencySeconds', 'autoplaySeconds', 'autoplayIntervalSeconds'],
@@ -171,6 +211,12 @@ export function resolveEventWidgetRuntimeConfig(
       return millis !== null ? Math.floor(millis / 1000) : null;
     })() ??
     EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG.autoplayFrequencySeconds;
+
+  const autoplayEnabled =
+    readBooleanByKeys(source, ['autoplayEnabled', 'autoplay_enabled']) ?? true;
+  const autoplayFrequencySeconds = autoplayEnabled
+    ? autoplayFrequencySecondsCandidate
+    : 0;
 
   return {
     enabled,

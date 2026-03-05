@@ -4,6 +4,7 @@ export {
   publicProfileSummary,
   publicLeaderboard,
   publicLiveDiscovery,
+  eventMetricsOverview,
   myAccountState,
   myWalletBalance,
   myWalletTransactions,

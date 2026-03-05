@@ -262,6 +262,11 @@ function toIsoString(ms: number): string {
   }
 }
 
+function startOfUtcDayMs(valueMs: number): number {
+  const date = new Date(valueMs);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
 function buildDefaultDisplayName(
   email: string | null | undefined,
   subject: string | null | undefined,
@@ -1848,6 +1853,48 @@ function upsertLivePresenceItem(ctx: any, userId: string, item: JsonRecord): voi
   }
 }
 
+function upsertEventParticipationItem(
+  ctx: any,
+  userId: string,
+  liveId: string,
+  activity: 'hosting' | 'watching',
+): void {
+  const live = readLiveItem(ctx, liveId);
+  if (Object.keys(live).length === 0) {
+    return;
+  }
+
+  const event = isRecord(live.event) ? live.event : {};
+  if (readBoolean(event.enabled) === false) {
+    return;
+  }
+
+  const now = nowMs(ctx);
+  const endedAt = toNonNegativeInt(event.endedAt);
+  if (endedAt > 0 && endedAt <= now) {
+    return;
+  }
+
+  const dayBucketStartIsoUtc = toIsoString(startOfUtcDayMs(now));
+  const rowId = `${liveId}::${userId}::${dayBucketStartIsoUtc}`;
+  const existing = ctx.db.eventParticipationItem.id.find(rowId);
+
+  if (existing) {
+    ctx.db.eventParticipationItem.id.delete(rowId);
+  }
+
+  ctx.db.eventParticipationItem.insert({
+    id: rowId,
+    liveId,
+    userId,
+    dayBucketStartIsoUtc,
+    activity,
+    source: 'set_live_presence',
+    firstSeenAtIsoUtc: readString(existing?.firstSeenAtIsoUtc) ?? toIsoString(now),
+    lastSeenAtIsoUtc: toIsoString(now),
+  });
+}
+
 function deleteLivePresenceItem(ctx: any, userId: string): void {
   const existing = ctx.db.livePresenceItem.userId.find(userId);
   if (existing) {
@@ -2549,6 +2596,13 @@ function applyLivePresence(ctx: any, payload: JsonRecord): void {
     liveTitle: readString(payload.liveTitle) ?? '',
     updatedAt: nowMs(ctx),
   });
+
+  upsertEventParticipationItem(
+    ctx,
+    userId,
+    liveId,
+    activity === 'hosting' ? 'hosting' : 'watching',
+  );
 }
 
 function applyLiveInvite(ctx: any, payload: JsonRecord): void {
