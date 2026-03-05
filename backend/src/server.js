@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet } from "jose";
 
 import {
   DEFAULT_PRESIGNED_URL_TTL_SECONDS,
@@ -9,6 +9,7 @@ import {
   getPublicUrlForObjectKey,
   isR2Configured,
 } from "./r2.js";
+import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
 
 const port = Number.parseInt(process.env.PORT ?? "3000", 10) || 3000;
 const authJwksUrl = (process.env.AUTH_JWKS_URL ?? "").trim();
@@ -19,18 +20,13 @@ const authJwtAudienceList = (process.env.AUTH_JWT_AUDIENCE ?? "")
   .filter(Boolean);
 
 const jwks = authJwksUrl ? createRemoteJWKSet(new URL(authJwksUrl)) : null;
-const jwtVerifyOptions = {
-  ...(authJwtIssuer ? { issuer: authJwtIssuer } : {}),
-  ...(authJwtAudienceList.length === 1
-    ? { audience: authJwtAudienceList[0] }
-    : authJwtAudienceList.length > 1
-      ? { audience: authJwtAudienceList }
-      : {}),
-};
-const jwtVerifyOptionsWithoutAudience = {
-  ...(authJwtIssuer ? { issuer: authJwtIssuer } : {}),
-};
-let warnedAboutMissingAudFallback = false;
+const jwtVerifyOptions =
+  authJwtAudienceList.length > 0
+    ? createJwtVerifyOptions({
+        issuer: authJwtIssuer,
+        audienceList: authJwtAudienceList,
+      })
+    : null;
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 12;
@@ -122,6 +118,9 @@ async function requireViewerUserId(req) {
   if (!jwks) {
     throw Object.assign(new Error("Auth JWT verification is not configured."), { statusCode: 503 });
   }
+  if (!jwtVerifyOptions) {
+    throw Object.assign(new Error("Auth JWT audience is not configured."), { statusCode: 503 });
+  }
 
   const token = getBearerToken(req);
   if (!token) {
@@ -129,37 +128,7 @@ async function requireViewerUserId(req) {
   }
 
   try {
-    let verifiedPayload;
-    try {
-      const primaryVerification = await jwtVerify(token, jwks, jwtVerifyOptions);
-      verifiedPayload = primaryVerification.payload;
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "Token verification failed.";
-      const missingAudClaim = message.includes('missing required "aud" claim');
-      if (!missingAudClaim || authJwtAudienceList.length === 0) {
-        throw error;
-      }
-
-      if (!warnedAboutMissingAudFallback) {
-        warnedAboutMissingAudFallback = true;
-        console.warn(
-          "[upload-signer] Received a token without aud claim; falling back to issuer-only verification.",
-        );
-      }
-
-      const fallbackVerification = await jwtVerify(token, jwks, jwtVerifyOptionsWithoutAudience);
-      verifiedPayload = fallbackVerification.payload;
-    }
-
-    const payload = verifiedPayload;
-    const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
-    if (!subject) {
-      throw new Error("JWT subject is missing.");
-    }
-    return subject;
+    return await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
   } catch (error) {
     const message =
       error instanceof Error && error.message
