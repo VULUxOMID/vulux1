@@ -31,6 +31,7 @@ import { useUserProfile } from '../../context/UserProfileContext';
 import { subscribeBootstrap, subscribeGlobalChat } from '../../lib/spacetime';
 import { useLive } from '../../context/LiveContext';
 import { deriveHostActiveLiveFallback, mergeHomeLiveNowList } from './liveNowList';
+import { countDistinctActivePlayersNow } from './widgets/eventRuntimeConfig';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -124,6 +125,14 @@ export default function HomeScreen() {
         : [],
     [friendIds, liveRepo, queriesEnabled],
   );
+  const activePlayersNow = useMemo(() => {
+    if (!queriesEnabled) return 0;
+    const allPresence = liveRepo.listPresence({
+      limit: 2_000,
+      activities: ['hosting', 'watching'],
+    });
+    return countDistinctActivePlayersNow(allPresence);
+  }, [liveRepo, queriesEnabled]);
   const friendActivities = useMemo<FriendLiveActivity[]>(
     () => {
       if (!queriesEnabled) return [];
@@ -468,6 +477,7 @@ export default function HomeScreen() {
           onOpenChat={() => setShowChat(true)}
           onAnnounceWinner={handleWinnerAnnouncement}
           friends={friends}
+          activePlayersNow={activePlayersNow}
           messageCount={globalChatNotificationCount}
           isChatOpen={showChat}
         />
