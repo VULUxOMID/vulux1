@@ -53,11 +53,11 @@ export function LeaderboardScreen() {
   }, [queriesEnabled]);
 
   useEffect(() => {
-    if (!isFocused) {
+    if (!queriesEnabled) {
       return;
     }
     return subscribeBootstrap();
-  }, [isFocused]);
+  }, [queriesEnabled]);
 
   const acceptedFriendIds = useMemo(
     () => new Set(queriesEnabled ? friendshipsRepo.listAcceptedFriendIds() : []),

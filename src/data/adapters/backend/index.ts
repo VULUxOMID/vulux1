@@ -39,7 +39,7 @@ export function createBackendRepositories(
     friendships: createBackendFriendshipsRepository(snapshot, viewerUserId),
     messages: createBackendMessagesRepository(snapshot, client, viewerUserId),
     notifications: createBackendNotificationsRepository(snapshot, client, viewerUserId),
-    leaderboard: createBackendLeaderboardRepository(snapshot),
+    leaderboard: createBackendLeaderboardRepository(snapshot, viewerUserId),
     video: createBackendVideoRepository(snapshot),
     musicCatalog: createBackendMusicCatalogRepository(snapshot),
     search: createBackendSearchRepository(snapshot, viewerUserId),
