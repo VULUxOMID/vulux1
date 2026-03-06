@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useMemo } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { AppText, CashIcon } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
@@ -25,11 +26,14 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
 
   const formattedCash = useMemo(() => formatCash(item.cashAmount), [item.cashAmount]);
   const avatarUri = normalizeImageUri(item.avatarUrl);
+  const showFriendBadge = Boolean(item.isFriend) && !item.isCurrentUser;
 
   return (
     <Pressable
       style={[styles.container, item.isCurrentUser && styles.currentUser]}
       onPress={handlePress}
+      accessibilityRole="button"
+      accessibilityLabel={`Open leaderboard profile for ${item.displayName}`}
     >
       <View style={[styles.rankBadge, { backgroundColor: rankColors.background }]}>
         <AppText variant="smallBold" style={{ color: rankColors.text }}>
@@ -50,6 +54,22 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
         <AppText variant="small" secondary numberOfLines={1}>
           @{item.username}
         </AppText>
+        <View style={styles.metaRow}>
+          {item.isCurrentUser ? (
+            <View style={[styles.metaBadge, styles.selfBadge]}>
+              <AppText variant="micro" style={styles.selfBadgeText}>
+                YOU
+              </AppText>
+            </View>
+          ) : null}
+          {showFriendBadge ? (
+            <View style={[styles.metaBadge, styles.friendBadge]}>
+              <AppText variant="micro" style={styles.friendBadgeText}>
+                FRIEND
+              </AppText>
+            </View>
+          ) : null}
+        </View>
       </View>
 
       <View style={styles.statsContainer}>
@@ -59,6 +79,12 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
             {formattedCash}
           </AppText>
         </View>
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={colors.textMuted}
+          style={styles.chevron}
+        />
       </View>
     </Pressable>
   );
@@ -75,15 +101,16 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
     marginHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
   currentUser: {
-    borderWidth: 1,
     borderColor: colors.accentPrimary,
     backgroundColor: colors.accentPrimarySubtle,
   },
   rankBadge: {
-    width: 28,
-    height: 28,
+    width: 32,
+    height: 32,
     borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -107,6 +134,31 @@ const styles = StyleSheet.create({
   displayName: {
     marginBottom: spacing.xxs,
   },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  metaBadge: {
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
+  },
+  selfBadge: {
+    backgroundColor: colors.accentPrimary,
+  },
+  selfBadgeText: {
+    color: colors.textOnLight,
+  },
+  friendBadge: {
+    backgroundColor: colors.overlayRankGoldSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderRankGoldSubtle,
+  },
+  friendBadgeText: {
+    color: colors.accentRankGold,
+  },
   statsContainer: {
     alignItems: 'flex-end',
   },
@@ -121,5 +173,8 @@ const styles = StyleSheet.create({
   },
   cashCount: {
     color: colors.accentCash,
+  },
+  chevron: {
+    marginTop: spacing.sm,
   },
 });
