@@ -41,6 +41,12 @@ export default function FriendsScreen() {
     showProfile(profileUser);
   };
 
+  const openChat = (friendId: string) => {
+    const normalizedFriendId = friendId.trim();
+    if (!normalizedFriendId) return;
+    router.push(`/chat/${encodeURIComponent(normalizedFriendId)}`);
+  };
+
   return (
     <AppScreen noPadding style={styles.container}>
       <View style={styles.header}>
@@ -90,6 +96,16 @@ export default function FriendsScreen() {
                 @{item.username ?? item.id}
               </AppText>
             </View>
+            <Pressable
+              style={({ pressed }) => [styles.messageButton, pressed && styles.rowPressed]}
+              onPress={(event) => {
+                event.stopPropagation();
+                openChat(item.id);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.textPrimary} />
+            </Pressable>
             <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
           </Pressable>
         )}
@@ -159,6 +175,16 @@ const styles = StyleSheet.create({
   rowMeta: {
     flex: 1,
     gap: 2,
+  },
+  messageButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
   name: {
     color: colors.textPrimary,

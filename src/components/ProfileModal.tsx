@@ -459,9 +459,19 @@ export function ProfileModal() {
 
   // Handle navigating to DMs
   const handleOpenDM = () => {
+    const targetUserId =
+      (typeof selectedUser?.id === 'string' && selectedUser.id.trim().length > 0
+        ? selectedUser.id.trim()
+        : typeof selectedUser?.username === 'string' && selectedUser.username.trim().length > 0
+          ? selectedUser.username.trim()
+          : null);
+    if (!targetUserId) {
+      showToast('Unable to open direct message.');
+      return;
+    }
     hapticTap();
     hideProfile();
-    router.push(`/chat/${selectedUser?.id || selectedUser?.username}`);
+    router.push(`/chat/${encodeURIComponent(targetUserId)}`);
   };
 
   // Handle profile preview
