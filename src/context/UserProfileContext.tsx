@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { UserRole } from '../features/liveroom/types';
 import { useUser as useSessionUser } from '../auth/spacetimeSession';
+import { clearPendingSignUpIdentity, readPendingSignUpIdentity } from '../features/auth/pendingSignUpIdentity';
 import { spacetimeDb, subscribeSpacetimeDataChanges } from '../lib/spacetime';
 import { useAuth as useAppAuth } from './AuthContext';
 
@@ -139,6 +140,16 @@ function hasMeaningfulProfileData(profile: UserProfile): boolean {
     profile.username.trim() ||
     profile.avatarUrl.trim() ||
     profile.photos.length > 0 ||
+    (profile.statusMessage?.trim() ?? '').length > 0,
+  );
+}
+
+function hasMeaningfulProfilePatchData(profile: Partial<UserProfile>): boolean {
+  return Boolean(
+    profile.name?.trim() ||
+    profile.username?.trim() ||
+    profile.avatarUrl?.trim() ||
+    (profile.photos?.length ?? 0) > 0 ||
     (profile.statusMessage?.trim() ?? '').length > 0,
   );
 }
@@ -667,6 +678,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (!hasMeaningfulProfilePatchData(cached.profile)) {
+        void AsyncStorage.removeItem(buildProfileLocalCacheKey(resolvedUserId)).catch(() => {});
+        return;
+      }
+
       latestProfileVersionMsRef.current = Math.max(
         latestProfileVersionMsRef.current,
         cached.updatedAtMs,
@@ -701,6 +717,49 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       id: resolvedUserId,
     });
   }, [queueProfilePersist, resolvedUserId]);
+
+  useEffect(() => {
+    if (!resolvedUserId || resolvedUserId === defaultProfile.id) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const pendingIdentity = await readPendingSignUpIdentity();
+      if (!pendingIdentity || cancelled) {
+        return;
+      }
+
+      const currentEmail = user?.email?.trim().toLowerCase() ?? '';
+      if (currentEmail && pendingIdentity.email !== currentEmail) {
+        return;
+      }
+
+      setUserProfile((prev) => {
+        const updates: Partial<UserProfile> = { id: resolvedUserId };
+        if (!prev.name.trim()) {
+          updates.name = pendingIdentity.displayName;
+        }
+        if (!prev.username.trim()) {
+          updates.username = pendingIdentity.username;
+        }
+        if (Object.keys(updates).length === 1) {
+          return prev;
+        }
+
+        localMutationVersionRef.current += 1;
+        const next = mergeUserProfile(prev, updates);
+        userProfileRef.current = next;
+        persistProfileSnapshot(resolvedUserId, next);
+        void clearPendingSignUpIdentity();
+        return next;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [persistProfileSnapshot, resolvedUserId, user?.email]);
 
   useEffect(() => {
     if (!resolvedUserId || resolvedUserId === defaultProfile.id) {

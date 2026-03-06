@@ -12,6 +12,7 @@ import {
 } from '../../components';
 import { colors, radius, spacing } from '../../theme';
 import { buildSignUpProfileParts } from './signUpProfile';
+import { savePendingSignUpIdentity } from './pendingSignUpIdentity';
 
 type SpacetimeAuthScreenProps = {
   mode: 'welcome' | 'login' | 'register' | 'verify' | 'forgot-password';
@@ -666,6 +667,11 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
           username: profileParts.username,
           displayName: profileParts.displayName,
         },
+      });
+      await savePendingSignUpIdentity({
+        email: emailAddress,
+        username: profileParts.username,
+        displayName: profileParts.displayName,
       });
       await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
       setInfoMessage(`We sent a verification code to ${emailAddress}.`);
