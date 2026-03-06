@@ -101,6 +101,41 @@ test('my_conversations rows are authoritative for thread list with unread + prev
   assert.equal(conversations[0]?.lastMessage.text, 'hey there');
 });
 
+test('conversation fallback remains visible while my_conversations is active but not yet hydrated', () => {
+  const viewerUserId = 'viewer-hydration-1';
+  const snapshot = {
+    ...EMPTY_BACKEND_SNAPSHOT,
+    conversations: [
+      {
+        id: 'viewer-hydration-1::friend-hydration-1',
+        otherUserId: 'friend-hydration-1',
+        unreadCount: 1,
+        lastMessage: {
+          id: 'fallback-1',
+          senderId: 'friend-hydration-1',
+          text: 'fallback message',
+          createdAt: new Date(1_700_000_100_000).toISOString(),
+          deliveredAt: 1_700_000_100_000,
+        },
+      },
+    ],
+  };
+  const repo = createBackendMessagesRepository(snapshot, null, viewerUserId, {
+    isViewRequested: (viewName) => viewName === 'my_conversations',
+    isViewActive: (viewName) => viewName === 'my_conversations',
+  });
+  const dbView = {
+    myConversations: makeIterTable([]),
+    globalMessageItem: makeIterTable([]),
+    publicProfileSummary: makeIterTable([]),
+  };
+
+  const conversations = withMockSpacetime(dbView, {}, () => repo.listConversations());
+  assert.equal(conversations.length, 1);
+  assert.equal(conversations[0]?.otherUserId, 'friend-hydration-1');
+  assert.equal(conversations[0]?.lastMessage.text, 'fallback message');
+});
+
 test('my_conversation_messages are room-scoped, de-duped, and identity-hydrated', () => {
   const viewerUserId = 'viewer-2';
   const threadRows = [
@@ -175,6 +210,39 @@ test('my_conversation_messages are room-scoped, de-duped, and identity-hydrated'
   assert.equal(messages[0]?.readAt, 150);
   assert.equal(messages[1]?.senderId, 'me');
   assert.equal(messages.find((message) => message.id === 'leak-1'), undefined);
+});
+
+test('thread fallback remains visible while my_conversation_messages is active but not yet hydrated', () => {
+  const viewerUserId = 'viewer-hydration-2';
+  const snapshot = {
+    ...EMPTY_BACKEND_SNAPSHOT,
+    threadSeedMessagesByUserId: {
+      'friend-hydration-2': [
+        {
+          id: 'fallback-thread-1',
+          senderId: 'friend-hydration-2',
+          user: 'Friend Hydration',
+          text: 'fallback thread message',
+          createdAt: 1_700_000_200_000,
+          deliveredAt: 1_700_000_200_000,
+        },
+      ],
+    },
+  };
+  const repo = createBackendMessagesRepository(snapshot, null, viewerUserId, {
+    isViewRequested: (viewName) => viewName === 'my_conversation_messages',
+    isViewActive: (viewName) => viewName === 'my_conversation_messages',
+  });
+  const dbView = {
+    myConversationMessages: makeIterTable([]),
+    globalMessageItem: makeIterTable([]),
+    publicProfileSummary: makeIterTable([]),
+  };
+
+  const messages = withMockSpacetime(dbView, {}, () => repo.listThreadSeedMessages('friend-hydration-2'));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]?.id, 'fallback-thread-1');
+  assert.equal(messages[0]?.text, 'fallback thread message');
 });
 
 test('authoritative empty thread row clears stale cache instead of replaying old messages', () => {

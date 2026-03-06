@@ -796,69 +796,70 @@ function parsePositiveLimit(value: unknown): number | null {
   return Math.floor(value);
 }
 
+type ViewHydrationStateReader = {
+  isViewRequested?: (viewName: string) => boolean;
+  isViewActive?: (viewName: string) => boolean;
+};
+
 export function createBackendMessagesRepository(
   snapshot: BackendSnapshot,
   _client: BackendHttpClient | null,
   viewerUserId: string | null = null,
+  viewStateReader: ViewHydrationStateReader = {},
 ): MessagesRepository {
   const normalizeSenderId = (senderId: string) =>
     viewerUserId && senderId === viewerUserId ? 'me' : senderId;
+  const isViewRequested = viewStateReader.isViewRequested ?? isSpacetimeViewRequested;
+  const isViewActive = viewStateReader.isViewActive ?? isSpacetimeViewActive;
 
   return {
     listConversations(request) {
       const viewerKey = viewerUserId ?? '__anon__';
       const globalRows = getGlobalRowsSortedAsc();
       const { rows: conversationRows, available: conversationRowsAvailable } = getMyConversationRows();
-      const conversationViewRequested = isSpacetimeViewRequested('my_conversations');
-      const conversationViewActive = isSpacetimeViewActive('my_conversations');
+      const conversationViewRequested = isViewRequested('my_conversations');
+      const conversationViewActive = isViewActive('my_conversations');
       const shouldUseAuthoritativeConversationRows =
         Boolean(viewerUserId) &&
         conversationRowsAvailable &&
         (conversationViewRequested || conversationViewActive || conversationRows.length > 0);
+      const spacetimeConversations =
+        viewerUserId ? buildConversationFromEvents(globalRows, viewerUserId) : [];
+      const byOtherUser = new Map<string, Conversation>();
+      for (const conversation of snapshot.conversations) {
+        byOtherUser.set(conversation.otherUserId, {
+          ...conversation,
+          lastMessage: {
+            ...conversation.lastMessage,
+            senderId: normalizeSenderId(conversation.lastMessage.senderId),
+          },
+        });
+      }
+      for (const conversation of spacetimeConversations) {
+        byOtherUser.set(conversation.otherUserId, conversation);
+      }
 
-      let sourceConversations: Conversation[] = [];
+      const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
+        const aTs = Date.parse(a.lastMessage.createdAt);
+        const bTs = Date.parse(b.lastMessage.createdAt);
+        return bTs - aTs;
+      });
 
+      if (mergedConversations.length > 0) {
+        conversationsCacheByViewer.set(viewerKey, mergedConversations);
+      }
+      const fallbackConversations =
+        mergedConversations.length > 0
+          ? mergedConversations
+          : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
+
+      let sourceConversations = fallbackConversations;
       if (shouldUseAuthoritativeConversationRows && viewerUserId) {
         const authoritativeConversations = buildConversationsFromRows(conversationRows, viewerUserId);
         if (authoritativeConversations.length > 0) {
           conversationsCacheByViewer.set(viewerKey, authoritativeConversations);
           sourceConversations = authoritativeConversations;
-        } else if (!conversationViewActive) {
-          sourceConversations = conversationsCacheByViewer.get(viewerKey) ?? [];
-        } else {
-          conversationsCacheByViewer.delete(viewerKey);
-          sourceConversations = [];
         }
-      } else {
-        const spacetimeConversations =
-          viewerUserId ? buildConversationFromEvents(globalRows, viewerUserId) : [];
-        const byOtherUser = new Map<string, Conversation>();
-        for (const conversation of snapshot.conversations) {
-          byOtherUser.set(conversation.otherUserId, {
-            ...conversation,
-            lastMessage: {
-              ...conversation.lastMessage,
-              senderId: normalizeSenderId(conversation.lastMessage.senderId),
-            },
-          });
-        }
-        for (const conversation of spacetimeConversations) {
-          byOtherUser.set(conversation.otherUserId, conversation);
-        }
-
-        const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
-          const aTs = Date.parse(a.lastMessage.createdAt);
-          const bTs = Date.parse(b.lastMessage.createdAt);
-          return bTs - aTs;
-        });
-
-        if (mergedConversations.length > 0) {
-          conversationsCacheByViewer.set(viewerKey, mergedConversations);
-        }
-        sourceConversations =
-          mergedConversations.length > 0
-            ? mergedConversations
-            : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
       }
 
       const searched = filterByQuery(sourceConversations, request?.query, [
@@ -921,8 +922,8 @@ export function createBackendMessagesRepository(
       const globalRows = getGlobalRowsSortedAsc();
       const userDirectory = buildKnownUserDirectory(globalRows);
       const { rows: threadRows, available: threadRowsAvailable } = getMyConversationMessageRows();
-      const threadViewRequested = isSpacetimeViewRequested('my_conversation_messages');
-      const threadViewActive = isSpacetimeViewActive('my_conversation_messages');
+      const threadViewRequested = isViewRequested('my_conversation_messages');
+      const threadViewActive = isViewActive('my_conversation_messages');
       const shouldUseAuthoritativeThreadRows =
         Boolean(viewerUserId) &&
         threadRowsAvailable &&
@@ -951,15 +952,10 @@ export function createBackendMessagesRepository(
           return [];
         }
 
-        if (!threadViewActive) {
-          const cached = threadMessagesCacheByConversation.get(cacheKey);
-          if (cached && cached.length > 0) {
-            return cached;
-          }
+        if (threadRows.length > 0) {
+          threadMessagesCacheByConversation.delete(cacheKey);
+          return [];
         }
-
-        threadMessagesCacheByConversation.delete(cacheKey);
-        return [];
       }
 
       const spacetimeMessages =
