@@ -11,6 +11,7 @@ import {
   AppTextInput,
 } from '../../components';
 import { colors, radius, spacing } from '../../theme';
+import { buildSignUpProfileParts } from './signUpProfile';
 
 type SpacetimeAuthScreenProps = {
   mode: 'welcome' | 'login' | 'register' | 'verify' | 'forgot-password';
@@ -194,6 +195,8 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     syncError,
   } = useSessionAuth();
   const [loginEmail, setLoginEmail] = useState('');
+  const [registerDisplayName, setRegisterDisplayName] = useState('');
+  const [registerUsername, setRegisterUsername] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -624,8 +627,16 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
 
     const emailAddress = normalizeEmail(registerEmail);
+    const profileParts = buildSignUpProfileParts({
+      username: registerUsername,
+      displayName: registerDisplayName,
+    });
     if (!password) {
       setErrorMessage('Enter a password to create your account.');
+      return;
+    }
+    if ('error' in profileParts) {
+      setErrorMessage(profileParts.error);
       return;
     }
     if (!emailAddress) {
@@ -648,6 +659,12 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       await signUp.create({
         emailAddress,
         password,
+        username: profileParts.username,
+        firstName: profileParts.firstName,
+        lastName: profileParts.lastName,
+        unsafeMetadata: {
+          displayName: profileParts.displayName,
+        },
       });
       await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
       setInfoMessage(`We sent a verification code to ${emailAddress}.`);
@@ -661,7 +678,9 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     canUseSignUp,
     confirmPassword,
     password,
+    registerDisplayName,
     registerEmail,
+    registerUsername,
     router,
     signUp,
   ]);
@@ -748,7 +767,7 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
 
   const subtitle = useMemo(() => {
     if (mode === 'register') {
-      return 'Use your email and password. Clerk verifies your email, then SpacetimeDB creates the canonical vulu_user_id.';
+      return 'Pick your username, display name, email, and password. Clerk verifies your email, then Vulu creates your canonical profile.';
     }
     if (mode === 'login') {
       return 'Use your email or username and password. Vulu restores the same vulu_user_id after sign-in.';
@@ -883,6 +902,22 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
 
         {mode === 'register' ? (
           <View style={styles.form}>
+            <AppTextInput
+              autoCapitalize="words"
+              autoComplete="name"
+              onChangeText={setRegisterDisplayName}
+              placeholder="Display name"
+              style={styles.input}
+              value={registerDisplayName}
+            />
+            <AppTextInput
+              autoCapitalize="none"
+              autoComplete="username-new"
+              onChangeText={setRegisterUsername}
+              placeholder="Username"
+              style={styles.input}
+              value={registerUsername}
+            />
             <AppTextInput
               autoCapitalize="none"
               autoComplete="email"
