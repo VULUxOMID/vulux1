@@ -9,6 +9,7 @@ export {
   myWalletBalance,
   myWalletTransactions,
   myProfile,
+  mySubmittedReports,
   myNotifications,
   myFriendships,
   myConversations,
