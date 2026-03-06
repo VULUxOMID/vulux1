@@ -7,6 +7,7 @@ import { AppScreen, AppText } from '../src/components';
 import { EditValueModal } from '../src/components/EditValueModal';
 import { SettingsRow } from '../src/components/SettingsRow';
 import { toast } from '../src/components/Toast';
+import { useUser as useSessionUser } from '../src/auth/spacetimeSession';
 import { useAuth } from '../src/context';
 import { useUserProfile } from '../src/context/UserProfileContext';
 import { colors, spacing } from '../src/theme';
@@ -30,12 +31,15 @@ type FieldValidator = (value: string) => string | null;
 export default function AccountScreen() {
   const router = useRouter();
   const { user, updateUserEmail, updateUserPassword, deleteUserAccount } = useAuth();
+  const { user: sessionUser } = useSessionUser();
   const { userProfile, updateUserProfile } = useUserProfile();
 
   const [editingField, setEditingField] = useState<FieldType>(null);
   
   const displayPhone = user?.phoneNumber || 'Not set';
-  const avatarUri = normalizeImageUri(userProfile.avatarUrl);
+  const resolvedDisplayName = userProfile.name.trim() || sessionUser?.fullName?.trim() || '';
+  const resolvedUsername = userProfile.username.trim() || sessionUser?.username?.trim() || '';
+  const avatarUri = normalizeImageUri(userProfile.avatarUrl || sessionUser?.imageUrl || '');
 
   const validateUsername: FieldValidator = (value) => {
     const normalized = value.trim();
@@ -150,14 +154,14 @@ export default function AccountScreen() {
       case 'username':
         return {
           title: 'Edit Username',
-          initialValue: userProfile.username,
+          initialValue: resolvedUsername,
           placeholder: 'Enter username',
           validate: validateUsername,
         };
       case 'name':
         return {
           title: 'Edit Display Name',
-          initialValue: userProfile.name,
+          initialValue: resolvedDisplayName,
           placeholder: 'Enter display name',
           validate: validateDisplayName,
         };
@@ -201,8 +205,8 @@ export default function AccountScreen() {
             <View style={[styles.avatar, styles.avatarFallback]} />
           )}
           <View style={styles.avatarInfo}>
-            <AppText style={styles.avatarName}>{userProfile.name}</AppText>
-            <AppText style={styles.avatarUsername}>@{userProfile.username}</AppText>
+            <AppText style={styles.avatarName}>{resolvedDisplayName}</AppText>
+            <AppText style={styles.avatarUsername}>@{resolvedUsername}</AppText>
           </View>
         </View>
 
@@ -214,13 +218,13 @@ export default function AccountScreen() {
             <SettingsRow
               label="Username"
               icon="at-outline"
-              value={userProfile.username}
+              value={resolvedUsername}
               onPress={() => setEditingField('username')} 
             />
             <SettingsRow
               label="Display Name"
               icon="person-outline"
-              value={userProfile.name}
+              value={resolvedDisplayName}
               onPress={() => setEditingField('name')}
             />
             <SettingsRow

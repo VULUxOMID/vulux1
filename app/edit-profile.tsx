@@ -14,6 +14,7 @@ import {
 
 import { AppScreen, AppText } from '../src/components';
 import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useUser as useSessionUser } from '../src/auth/spacetimeSession';
 import { colors, radius, spacing } from '../src/theme';
 import { useProfile } from '../src/context/ProfileContext';
 import { useUserProfile, UserProfilePhoto } from '../src/context/UserProfileContext';
@@ -28,9 +29,13 @@ export default function EditProfileScreen() {
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
   const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
+  const { user: sessionUser } = useSessionUser();
   const { showProfile } = useProfile();
   const { userProfile, updateUserProfile, updateAvatar } = useUserProfile();
-  const [displayName, setDisplayName] = useState(userProfile.name);
+  const resolvedDisplayName = userProfile.name.trim() || sessionUser?.fullName?.trim() || '';
+  const resolvedUsername = userProfile.username.trim() || sessionUser?.username?.trim() || '';
+  const resolvedAvatarUrl = userProfile.avatarUrl || sessionUser?.imageUrl || '';
+  const [displayName, setDisplayName] = useState(resolvedDisplayName);
   const [bio, setBio] = useState(userProfile.bio);
 
   const BIO_MAX_LENGTH = 150;
@@ -45,8 +50,8 @@ export default function EditProfileScreen() {
   }, [shouldSubscribe]);
 
   useEffect(() => {
-    setDisplayName(userProfile.name);
-  }, [userProfile.name]);
+    setDisplayName(resolvedDisplayName);
+  }, [resolvedDisplayName]);
 
   useEffect(() => {
     setBio(userProfile.bio);
@@ -82,12 +87,12 @@ export default function EditProfileScreen() {
   const previewUser: LiveUser = {
     id: userProfile.id,
     name: displayName,
-    username: userProfile.username,
+    username: resolvedUsername,
     age: userProfile.age,
     verified: false,
     country: userProfile.country,
     bio: bio,
-    avatarUrl: userProfile.avatarUrl || photos[0]?.uri || '',
+    avatarUrl: resolvedAvatarUrl || photos[0]?.uri || '',
     roles: userProfile.roles,
     photos: photos.map((photo) => photo.uri),
     isListening: false,
@@ -175,6 +180,13 @@ export default function EditProfileScreen() {
             placeholderTextColor={colors.textMuted}
             maxLength={30}
           />
+        </View>
+
+        <View style={styles.section}>
+          <AppText variant="body" style={styles.sectionTitle}>Username</AppText>
+          <View style={styles.readOnlyValue}>
+            <AppText style={styles.readOnlyValueText}>@{resolvedUsername}</AppText>
+          </View>
         </View>
 
         {/* Bio Section */}
@@ -341,6 +353,17 @@ const styles = StyleSheet.create({
   bioInput: {
     height: 100,
     paddingTop: spacing.md,
+  },
+  readOnlyValue: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    marginTop: spacing.sm,
+  },
+  readOnlyValueText: {
+    fontSize: 16,
+    color: colors.textPrimary,
   },
   charCount: {
     fontSize: 12,
