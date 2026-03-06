@@ -350,6 +350,25 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
         return;
       }
 
+      // Clerk may return `needs_client_trust` when bot-detection is active.
+      // The status is not in the SDK type definitions yet, so we compare via
+      // a string cast.  Retrying with `attemptFirstFactor` using the password
+      // strategy often resolves the trust gate without requiring a CAPTCHA.
+      if ((attempt.status as string) === 'needs_client_trust') {
+        try {
+          attempt = await signIn.attemptFirstFactor({
+            strategy: 'password',
+            password,
+          });
+
+          if (await completeSignInIfPossible(attempt)) {
+            return;
+          }
+        } catch {
+          // If the retry also fails, fall through to the normal flow below.
+        }
+      }
+
       if (
         attempt.status === 'needs_first_factor' &&
         hasSignInFactorStrategy(attempt, 'first', 'password')
@@ -388,6 +407,13 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       if (attempt.status === 'needs_identifier') {
         setInfoMessage(
           'Clerk requires a pending sign-in step. For QA smoke, set EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET and retry.',
+        );
+        return;
+      }
+
+      if ((attempt.status as string) === 'needs_client_trust') {
+        setInfoMessage(
+          'Clerk bot-detection could not be resolved automatically. Try signing in with your username instead of email.',
         );
         return;
       }
