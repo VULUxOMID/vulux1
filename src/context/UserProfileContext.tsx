@@ -10,6 +10,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { UserRole } from '../features/liveroom/types';
+import { useUser as useSessionUser } from '../auth/spacetimeSession';
 import { spacetimeDb, subscribeSpacetimeDataChanges } from '../lib/spacetime';
 import { useAuth as useAppAuth } from './AuthContext';
 
@@ -471,6 +472,7 @@ function mergeUserProfile(prev: UserProfile, updates: Partial<UserProfile>): Use
 
 export function UserProfileProvider({ children }: { children: ReactNode }) {
   const { user } = useAppAuth();
+  const { user: sessionUser } = useSessionUser();
   const resolvedUserId = user?.uid ?? defaultProfile.id;
   const localMutationVersionRef = useRef(0);
   const latestProfileVersionMsRef = useRef(0);
@@ -699,6 +701,50 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       id: resolvedUserId,
     });
   }, [queueProfilePersist, resolvedUserId]);
+
+  useEffect(() => {
+    if (!resolvedUserId || resolvedUserId === defaultProfile.id) {
+      return;
+    }
+
+    const sessionName = sessionUser?.fullName?.trim() ?? '';
+    const sessionUsername = sessionUser?.username?.trim() ?? '';
+    const sessionAvatarUrl = sessionUser?.imageUrl?.trim() ?? '';
+
+    if (!sessionName && !sessionUsername && !sessionAvatarUrl) {
+      return;
+    }
+
+    setUserProfile((prev) => {
+      const updates: Partial<UserProfile> = { id: resolvedUserId };
+
+      if (!prev.name.trim() && sessionName) {
+        updates.name = sessionName;
+      }
+      if (!prev.username.trim() && sessionUsername) {
+        updates.username = sessionUsername;
+      }
+      if (!prev.avatarUrl.trim() && sessionAvatarUrl) {
+        updates.avatarUrl = sessionAvatarUrl;
+      }
+
+      if (Object.keys(updates).length === 1) {
+        return prev;
+      }
+
+      localMutationVersionRef.current += 1;
+      const next = mergeUserProfile(prev, updates);
+      userProfileRef.current = next;
+      persistProfileSnapshot(resolvedUserId, next);
+      return next;
+    });
+  }, [
+    persistProfileSnapshot,
+    resolvedUserId,
+    sessionUser?.fullName,
+    sessionUser?.imageUrl,
+    sessionUser?.username,
+  ]);
 
   useEffect(() => {
     const syncFromSpacetime = () => {

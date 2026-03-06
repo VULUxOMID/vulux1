@@ -72,6 +72,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       sessionPrimaryEmail,
       sessionPrimaryPhone,
       emailVerified,
+      sessionUser?.username?.trim() ?? '',
+      sessionUser?.fullName?.trim() ?? '',
+      sessionUser?.imageUrl?.trim() ?? '',
     ]);
 
     if (lastSyncedAccountFingerprintRef.current === fingerprint) {
@@ -90,6 +93,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
           email: sessionPrimaryEmail || undefined,
           phoneNumber: sessionPrimaryPhone || undefined,
           emailVerified,
+          profile: {
+            username: sessionUser?.username?.trim() || undefined,
+            displayName: sessionUser?.fullName?.trim() || undefined,
+            name: sessionUser?.fullName?.trim() || undefined,
+            avatarUrl: sessionUser?.imageUrl?.trim() || undefined,
+            updatedAt: Date.now(),
+          },
           updatedAt: Date.now(),
         },
         userId,
@@ -124,7 +134,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     isUserLoaded,
     sessionPrimaryEmail,
     sessionPrimaryPhone,
+    sessionUser?.fullName,
     sessionUser?.id,
+    sessionUser?.imageUrl,
+    sessionUser?.username,
     userId,
   ]);
 
