@@ -22,7 +22,11 @@ export function hasAuthoritativeWallet(
   walletHydrated: boolean,
   walletStateAvailable: boolean,
 ): boolean {
-  return walletHydrated && walletStateAvailable;
+  // Once hydration is complete, treat the wallet as authoritative even when
+  // the backend did not return wallet state.  This prevents the UI from
+  // showing a permanent loading placeholder ("--") after all retries are
+  // exhausted.  The values will default to 0 when the backend has no data.
+  return walletHydrated;
 }
 
 export function hasRelevantWalletScope(
