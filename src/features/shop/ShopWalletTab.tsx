@@ -16,6 +16,7 @@ type ShopWalletTabProps = {
   onExchangeCashToGems: (amount: number) => void;
   onOpenWithdrawal: () => void;
   onViewHistory: () => void;
+  isActionPending?: boolean;
 };
 
 type ExchangeDirection = 'gems' | 'cash';
@@ -87,6 +88,7 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
   onExchangeCashToGems,
   onOpenWithdrawal,
   onViewHistory,
+  isActionPending = false,
 }: ShopWalletTabProps) {
   const exchangeRows = useMemo(() => EXCHANGE_OPTIONS, []);
   const recentHistory = useMemo(() => withdrawalHistory.slice(0, 3), [withdrawalHistory]);
@@ -120,7 +122,7 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
             <ExchangeRow
               key={row.id}
               row={row}
-              canAfford={canAfford}
+              canAfford={canAfford && !isActionPending}
               onExchange={handleExchange}
             />
           );
@@ -152,6 +154,7 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
             variant="primary"
             onPress={onOpenWithdrawal}
             style={styles.fullWidthButton}
+            disabled={isActionPending}
           />
         </LinearGradient>
 

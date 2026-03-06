@@ -1,9 +1,11 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 
-import { AppScreen, PillTabs } from '../../src/components';
+import { AppScreen, AppText, PillTabs, SectionCard } from '../../src/components';
 import type { PillTabItem } from '../../src/components';
 import { toast } from '../../src/components/Toast';
 import { ConfirmSheet } from '../../src/components/ConfirmSheet';
@@ -17,6 +19,9 @@ import { ShopWalletTab } from '../../src/features/shop/ShopWalletTab';
 import { WithdrawalModal } from '../../src/features/shop/WithdrawalModal';
 import { ShopTab } from '../../src/features/shop/types';
 import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
+import { useAppIsActive } from '../../src/hooks/useAppIsActive';
+import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBus';
+import { subscribeBootstrap } from '../../src/lib/spacetime';
 import {
   claimAdReward,
   convertCashToGems,
@@ -24,10 +29,33 @@ import {
   creditGemsPurchase,
   purchaseFuelPack,
 } from '../../src/data/adapters/backend/walletMutations';
+import {
+  fetchMyWalletBalance,
+  waitForWalletTransaction,
+} from '../../src/data/adapters/backend/walletQueries';
+import {
+  buildFailureReceipt,
+  buildPendingReceipt,
+  buildSuccessReceipt,
+  matchesWalletTransaction,
+  type ShopOperationKind,
+  type ShopReceiptState,
+  type WalletTransactionMatchSpec,
+} from '../../src/features/shop/shopReceipts';
+
+const IDLE_RECEIPT: ShopReceiptState = {
+  status: 'idle',
+  kind: null,
+  title: '',
+  message: '',
+};
 
 export default function ShopScreen() {
   const router = useRouter();
-  const { userId } = useSessionAuth();
+  const isFocused = useIsFocused();
+  const isAppActive = useAppIsActive();
+  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useSessionAuth();
+  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const { 
     gems, 
     cash, 
@@ -41,6 +69,7 @@ export default function ShopScreen() {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [autoRenew, setAutoRenew] = useState(true);
   const [isLoadingAd, setIsLoadingAd] = useState(false);
+  const [receipt, setReceipt] = useState<ShopReceiptState>(IDLE_RECEIPT);
 
   // Withdrawal Form State
   const [isWithdrawModalVisible, setIsWithdrawModalVisible] = useState(false);
@@ -63,6 +92,24 @@ export default function ShopScreen() {
 
   const hideConfirm = useCallback(() => {
     setConfirmSheet(prev => ({ ...prev, visible: false }));
+  }, []);
+
+  useEffect(() => {
+    if (!queriesEnabled) {
+      return;
+    }
+    requestBackendRefresh();
+  }, [queriesEnabled]);
+
+  useEffect(() => {
+    if (!queriesEnabled) {
+      return;
+    }
+    return subscribeBootstrap();
+  }, [queriesEnabled]);
+
+  const dismissReceipt = useCallback(() => {
+    setReceipt(IDLE_RECEIPT);
   }, []);
 
   const tabItems = useMemo<PillTabItem[]>(
@@ -95,8 +142,76 @@ export default function ShopScreen() {
   }, []);
 
   const MIN_WITHDRAWAL_GEMS = 500; // $5.00
+  const isActionPending = receipt.status === 'pending';
+
+  const runWalletAction = useCallback(
+    async (params: {
+      kind: ShopOperationKind;
+      pendingTitle: string;
+      pendingMessage: string;
+      failureMessage: string;
+      successToast: string;
+      match: WalletTransactionMatchSpec;
+      mutate: () => Promise<{
+        ok: boolean;
+        message?: string;
+      }>;
+    }) => {
+      if (isActionPending) {
+        return;
+      }
+
+      const actionStartedAtMs = Date.now();
+
+      setReceipt(
+        buildPendingReceipt(params.kind, params.pendingTitle, params.pendingMessage),
+      );
+
+      const result = await params.mutate();
+      if (!result.ok) {
+        const failureMessage = result.message ?? params.failureMessage;
+        setReceipt(buildFailureReceipt(params.kind, failureMessage));
+        toast.error(failureMessage);
+        return;
+      }
+
+      const transaction = await waitForWalletTransaction((row) =>
+        matchesWalletTransaction(row, {
+          ...params.match,
+          createdAfterMs: actionStartedAtMs,
+        }),
+      );
+
+      if (transaction) {
+        const nextReceipt = buildSuccessReceipt(params.kind, transaction);
+        setReceipt(nextReceipt);
+        toast.success(params.successToast);
+        return;
+      }
+
+      const balance = fetchMyWalletBalance();
+      setReceipt({
+        status: 'success',
+        kind: params.kind,
+        title: 'Wallet updated',
+        message: 'The server accepted your request and refreshed your wallet.',
+        balanceAfter: balance
+          ? {
+              gems: balance.gems,
+              cash: balance.cash,
+              fuel: balance.fuel,
+            }
+          : undefined,
+      });
+      toast.success(params.successToast);
+    },
+    [isActionPending],
+  );
 
   const handleWatchAd = useCallback(async () => {
+    if (isActionPending) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setIsLoadingAd(true);
     
@@ -108,14 +223,21 @@ export default function ShopScreen() {
         return;
       }
 
-      const result = await claimAdReward(userId, 'shop_watch_ad');
-      if (result.ok) {
-        toast.success('You earned 10 gems!');
-      } else {
-        toast.error(result.message ?? 'Could not claim ad reward right now.');
-      }
+      await runWalletAction({
+        kind: 'claim_reward',
+        pendingTitle: 'Claiming reward',
+        pendingMessage: 'Waiting for the server to record your reward.',
+        failureMessage: 'Could not claim ad reward right now.',
+        successToast: 'You earned 10 gems!',
+        match: {
+          eventType: 'claim_ad_reward',
+          source: 'shop_watch_ad',
+          deltaGems: 10,
+        },
+        mutate: () => claimAdReward(userId, 'shop_watch_ad'),
+      });
     }, 1500);
-  }, [userId]);
+  }, [isActionPending, runWalletAction, userId]);
 
   const handleBuyGems = (amount: number, price: string) => {
     showConfirm({
@@ -133,18 +255,25 @@ export default function ShopScreen() {
         }
 
         const purchaseToken = `shop-${userId}-${Date.now()}-${amount}`;
-        const result = await creditGemsPurchase(
-          userId,
-          amount,
-          purchaseToken,
-          price,
-          'shop_buy_gems',
-        );
-        if (result.ok) {
-          toast.success(`You received ${amount} Gems!`);
-        } else {
-          toast.error(result.message ?? 'Purchase could not be completed.');
-        }
+        await runWalletAction({
+          kind: 'purchase_gems',
+          pendingTitle: 'Processing purchase',
+          pendingMessage: `Waiting for the server to record your ${amount} Gems purchase.`,
+          failureMessage: 'Purchase could not be completed.',
+          successToast: `You received ${amount} Gems!`,
+          match: {
+            eventType: 'credit_gems_purchase',
+            purchaseToken,
+          },
+          mutate: () =>
+            creditGemsPurchase(
+              userId,
+              amount,
+              purchaseToken,
+              price,
+              'shop_buy_gems',
+            ),
+        });
       },
     });
   };
@@ -172,6 +301,9 @@ export default function ShopScreen() {
   );
 
   const handleRefuel = (amount: FuelFillAmount) => {
+    if (isActionPending) {
+      return;
+    }
     if (fuel >= MAX_FUEL_MINUTES) {
       toast.info('Your fuel tank is already full!');
       return;
@@ -200,19 +332,27 @@ export default function ShopScreen() {
           toast.error('Sign in required to refuel.');
           return;
         }
-        const result = await purchaseFuelPack(
-          userId,
-          amount,
-          fuelPaymentType,
-          'shop_refuel',
-        );
-        if (result.ok) {
-          toast.success('Fuel tank replenished!');
-        } else if (result.code === 'insufficient_balance') {
-          toast.warning(`You need ${price} ${currencyName} to buy this fuel pack.`);
-        } else {
-          toast.error(result.message ?? 'Refuel failed. Please try again.');
-        }
+        await runWalletAction({
+          kind: 'purchase_fuel',
+          pendingTitle: 'Processing refuel',
+          pendingMessage: `Waiting for the server to credit ${formatTime(amount)} fuel.`,
+          failureMessage: 'Refuel failed. Please try again.',
+          successToast: 'Fuel tank replenished!',
+          match: {
+            eventType: 'purchase_fuel_pack',
+            source: 'shop_refuel',
+            deltaFuel: amount,
+            deltaGems: fuelPaymentType === 'gems' ? -cost.gems : 0,
+            deltaCash: fuelPaymentType === 'cash' ? -cost.cash : 0,
+          },
+          mutate: () =>
+            purchaseFuelPack(
+              userId,
+              amount,
+              fuelPaymentType,
+              'shop_refuel',
+            ),
+        });
       },
     });
   };
@@ -231,14 +371,20 @@ export default function ShopScreen() {
           toast.error('Sign in required to exchange currencies.');
           return;
         }
-        const result = await convertGemsToCash(userId, gemAmount);
-        if (result.ok) {
-          toast.success('Conversion complete!');
-        } else if (result.code === 'insufficient_balance') {
-          toast.error('Not enough gems!');
-        } else {
-          toast.error(result.message ?? 'Conversion failed.');
-        }
+        await runWalletAction({
+          kind: 'exchange_currency',
+          pendingTitle: 'Processing exchange',
+          pendingMessage: 'Waiting for the server to settle your Gems to Cash exchange.',
+          failureMessage: 'Conversion failed.',
+          successToast: 'Conversion complete!',
+          match: {
+            eventType: 'convert_gems_to_cash',
+            source: 'wallet_convert_gems_to_cash',
+            deltaGems: -gemAmount,
+            deltaCash: gemAmount * 10,
+          },
+          mutate: () => convertGemsToCash(userId, gemAmount),
+        });
       },
     });
   };
@@ -258,14 +404,20 @@ export default function ShopScreen() {
           toast.error('Sign in required to exchange currencies.');
           return;
         }
-        const result = await convertCashToGems(userId, cashAmount);
-        if (result.ok) {
-          toast.success('Conversion complete!');
-        } else if (result.code === 'insufficient_balance') {
-          toast.error('Not enough cash!');
-        } else {
-          toast.error(result.message ?? 'Conversion failed.');
-        }
+        await runWalletAction({
+          kind: 'exchange_currency',
+          pendingTitle: 'Processing exchange',
+          pendingMessage: 'Waiting for the server to settle your Cash to Gems exchange.',
+          failureMessage: 'Conversion failed.',
+          successToast: 'Conversion complete!',
+          match: {
+            eventType: 'convert_cash_to_gems',
+            source: 'wallet_convert_cash_to_gems',
+            deltaCash: -cashAmount,
+            deltaGems: gemAmount,
+          },
+          mutate: () => convertCashToGems(userId, cashAmount),
+        });
       },
     });
   };
@@ -320,6 +472,10 @@ export default function ShopScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {receipt.status !== 'idle' ? (
+          <ShopReceiptCard receipt={receipt} onDismiss={dismissReceipt} />
+        ) : null}
+
         {activeTab === 'buy' && (
           <ShopBuyTab
             isSubscribed={isSubscribed}
@@ -336,6 +492,7 @@ export default function ShopScreen() {
             gems={gems}
             cash={cash}
             onRefuel={handleRefuel}
+            isActionPending={isActionPending}
           />
         )}
 
@@ -350,6 +507,7 @@ export default function ShopScreen() {
             onExchangeCashToGems={handleCashToGems}
             onOpenWithdrawal={handleOpenWithdrawal}
             onViewHistory={handleViewHistory}
+            isActionPending={isActionPending}
           />
         )}
       </ScrollView>
@@ -376,6 +534,77 @@ export default function ShopScreen() {
     </AppScreen>
   );
 }
+
+function formatReceiptBalances(balanceAfter?: ShopReceiptState['balanceAfter']): string | null {
+  if (!balanceAfter) {
+    return null;
+  }
+
+  return `Balance now: ${balanceAfter.gems} Gems, ${balanceAfter.cash} Cash, ${balanceAfter.fuel} Fuel`;
+}
+
+function ShopReceiptCard({
+  receipt,
+  onDismiss,
+}: {
+  receipt: ShopReceiptState;
+  onDismiss: () => void;
+}) {
+  const isPending = receipt.status === 'pending';
+  const isFailure = receipt.status === 'failure';
+  const iconName = isPending
+    ? 'time-outline'
+    : isFailure
+      ? 'alert-circle-outline'
+      : 'checkmark-circle-outline';
+  const accentColor = isPending
+    ? colors.accentWarning
+    : isFailure
+      ? colors.accentDanger
+      : colors.accentSuccess;
+  const balanceLine = formatReceiptBalances(receipt.balanceAfter);
+
+  return (
+    <SectionCard
+      title={receipt.title}
+      style={[
+        styles.receiptCard,
+        { borderColor: `${accentColor}4D` },
+      ]}
+      action={
+        !isPending ? (
+          <Pressable onPress={onDismiss} style={styles.receiptDismissButton} hitSlop={8}>
+            <Ionicons name="close" size={18} color={colors.textMuted} />
+          </Pressable>
+        ) : null
+      }
+    >
+      <View style={styles.receiptContent}>
+        <View style={[styles.receiptIconWrap, { backgroundColor: `${accentColor}1A` }]}>
+          {isPending ? (
+            <ActivityIndicator size="small" color={accentColor} />
+          ) : (
+            <Ionicons name={iconName} size={20} color={accentColor} />
+          )}
+        </View>
+        <View style={styles.receiptTextWrap}>
+          <AppText variant="small">{receipt.message}</AppText>
+          {balanceLine ? (
+            <AppText variant="tiny" secondary>
+              {balanceLine}
+            </AppText>
+          ) : null}
+          {receipt.transactionId ? (
+            <AppText variant="tiny" secondary>
+              Receipt: {receipt.transactionId}
+            </AppText>
+          ) : null}
+        </View>
+      </View>
+    </SectionCard>
+  );
+}
+
 const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: colors.background,
@@ -395,5 +624,31 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: 120,
     paddingHorizontal: spacing.lg,
+    gap: spacing.lg,
+  },
+  receiptCard: {
+    backgroundColor: colors.surfaceAlt,
+  },
+  receiptContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  receiptIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  receiptTextWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  receiptDismissButton: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

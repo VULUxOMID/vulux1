@@ -48,6 +48,56 @@ export const AuditLogItem = __t.object("AuditLogItem", {
 });
 export type AuditLogItem = __Infer<typeof AuditLogItem>;
 
+export const ConnectionSessionItem = __t.object("ConnectionSessionItem", {
+  connectionId: __t.string(),
+  senderIdentity: __t.string(),
+  vuluUserId: __t.string(),
+  connectedAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ConnectionSessionItem = __Infer<typeof ConnectionSessionItem>;
+
+export const ConversationItem = __t.object("ConversationItem", {
+  id: __t.string(),
+  ownerUserId: __t.string(),
+  otherUserId: __t.string(),
+  item: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationItem = __Infer<typeof ConversationItem>;
+
+export const EventMetricsOverview = __t.object("EventMetricsOverview", {});
+export type EventMetricsOverview = __Infer<typeof EventMetricsOverview>;
+
+export const EventMetricsOverviewRow = __t.object("EventMetricsOverviewRow", {
+  bucketTimezone: __t.string(),
+  asOfIsoUtc: __t.string(),
+  todayStartIsoUtc: __t.string(),
+  weekStartIsoUtc: __t.string(),
+  monthStartIsoUtc: __t.string(),
+  activeWindowMs: __t.u32(),
+  activePlayersNow: __t.u32(),
+  totalPlayersToday: __t.u32(),
+  totalPlayersWeek: __t.u32(),
+  totalPlayersMonth: __t.u32(),
+  totalEntriesToday: __t.u32(),
+  totalEntriesWeek: __t.u32(),
+  totalEntriesMonth: __t.u32(),
+});
+export type EventMetricsOverviewRow = __Infer<typeof EventMetricsOverviewRow>;
+
+export const EventParticipationItem = __t.object("EventParticipationItem", {
+  id: __t.string(),
+  liveId: __t.string(),
+  userId: __t.string(),
+  dayBucketStartIsoUtc: __t.string(),
+  activity: __t.string(),
+  source: __t.string(),
+  firstSeenAtIsoUtc: __t.string(),
+  lastSeenAtIsoUtc: __t.string(),
+});
+export type EventParticipationItem = __Infer<typeof EventParticipationItem>;
+
 export const EventWidgetConfigAuditItem = __t.object("EventWidgetConfigAuditItem", {
   id: __t.string(),
   action: __t.string(),
@@ -68,15 +118,6 @@ export const EventWidgetConfigItem = __t.object("EventWidgetConfigItem", {
   updatedAt: __t.timestamp(),
 });
 export type EventWidgetConfigItem = __Infer<typeof EventWidgetConfigItem>;
-
-export const ConversationItem = __t.object("ConversationItem", {
-  id: __t.string(),
-  ownerUserId: __t.string(),
-  otherUserId: __t.string(),
-  item: __t.string(),
-  updatedAt: __t.timestamp(),
-});
-export type ConversationItem = __Infer<typeof ConversationItem>;
 
 export const Friendship = __t.object("Friendship", {
   pairKey: __t.string(),
@@ -243,6 +284,38 @@ export type MyRoleRow = __Infer<typeof MyRoleRow>;
 export const MyRoles = __t.object("MyRoles", {});
 export type MyRoles = __Infer<typeof MyRoles>;
 
+export const MySubmittedReports = __t.object("MySubmittedReports", {});
+export type MySubmittedReports = __Infer<typeof MySubmittedReports>;
+
+export const MyWalletBalance = __t.object("MyWalletBalance", {});
+export type MyWalletBalance = __Infer<typeof MyWalletBalance>;
+
+export const MyWalletBalanceRow = __t.object("MyWalletBalanceRow", {
+  userId: __t.string(),
+  gems: __t.u32(),
+  cash: __t.u32(),
+  fuel: __t.u32(),
+  updatedAt: __t.timestamp(),
+});
+export type MyWalletBalanceRow = __Infer<typeof MyWalletBalanceRow>;
+
+export const MyWalletTransactionRow = __t.object("MyWalletTransactionRow", {
+  id: __t.string(),
+  userId: __t.string(),
+  eventType: __t.string(),
+  deltaGems: __t.i32(),
+  deltaCash: __t.i32(),
+  deltaFuel: __t.i32(),
+  balanceBefore: __t.string(),
+  balanceAfter: __t.string(),
+  metadata: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type MyWalletTransactionRow = __Infer<typeof MyWalletTransactionRow>;
+
+export const MyWalletTransactions = __t.object("MyWalletTransactions", {});
+export type MyWalletTransactions = __Infer<typeof MyWalletTransactions>;
+
 export const NotificationItem = __t.object("NotificationItem", {
   id: __t.string(),
   userId: __t.string(),
@@ -267,6 +340,62 @@ export const PlaylistTrack = __t.object("PlaylistTrack", {
   position: __t.u32(),
 });
 export type PlaylistTrack = __Infer<typeof PlaylistTrack>;
+
+export const ProfileViewAggregateV2Item = __t.object("ProfileViewAggregateV2Item", {
+  profileUserId: __t.string(),
+  countedTotal: __t.u32(),
+  uniqueViewerTotal: __t.u32(),
+  lastCountedAtMs: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type ProfileViewAggregateV2Item = __Infer<typeof ProfileViewAggregateV2Item>;
+
+export const ProfileViewAttemptV2Item = __t.object("ProfileViewAttemptV2Item", {
+  id: __t.string(),
+  viewerUserId: __t.string(),
+  profileUserId: __t.string(),
+  metricVersion: __t.string(),
+  occurredAtMs: __t.string(),
+  dedupeWindowMs: __t.u32(),
+  counted: __t.bool(),
+  dropReason: __t.option(__t.string()),
+  source: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+});
+export type ProfileViewAttemptV2Item = __Infer<typeof ProfileViewAttemptV2Item>;
+
+export const ProfileViewDedupeStateV2Item = __t.object("ProfileViewDedupeStateV2Item", {
+  key: __t.string(),
+  viewerUserId: __t.string(),
+  profileUserId: __t.string(),
+  lastCountedAtMs: __t.string(),
+  lastEventId: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type ProfileViewDedupeStateV2Item = __Infer<typeof ProfileViewDedupeStateV2Item>;
+
+export const ProfileViewMetricCutoverItem = __t.object("ProfileViewMetricCutoverItem", {
+  metricName: __t.string(),
+  activeVersion: __t.string(),
+  cutoverAtMs: __t.string(),
+  dedupeWindowMs: __t.u32(),
+  migrationMode: __t.string(),
+  notes: __t.option(__t.string()),
+  updatedBy: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+});
+export type ProfileViewMetricCutoverItem = __Infer<typeof ProfileViewMetricCutoverItem>;
+
+export const ProfileViewUniqueViewerV2Item = __t.object("ProfileViewUniqueViewerV2Item", {
+  key: __t.string(),
+  profileUserId: __t.string(),
+  viewerUserId: __t.string(),
+  firstCountedAtMs: __t.string(),
+  lastCountedAtMs: __t.string(),
+  viewCount: __t.u32(),
+  updatedAt: __t.timestamp(),
+});
+export type ProfileViewUniqueViewerV2Item = __Infer<typeof ProfileViewUniqueViewerV2Item>;
 
 export const PublicLeaderboard = __t.object("PublicLeaderboard", {});
 export type PublicLeaderboard = __Infer<typeof PublicLeaderboard>;
@@ -310,6 +439,14 @@ export const PublicLiveDiscoveryRow = __t.object("PublicLiveDiscoveryRow", {
 });
 export type PublicLiveDiscoveryRow = __Infer<typeof PublicLiveDiscoveryRow>;
 
+export const PublicLivePresenceItem = __t.object("PublicLivePresenceItem", {
+  userId: __t.string(),
+  liveId: __t.string(),
+  activity: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type PublicLivePresenceItem = __Infer<typeof PublicLivePresenceItem>;
+
 export const PublicProfileSummary = __t.object("PublicProfileSummary", {});
 export type PublicProfileSummary = __Infer<typeof PublicProfileSummary>;
 
@@ -330,6 +467,51 @@ export const PublicProfileSummaryRow = __t.object("PublicProfileSummaryRow", {
   spotlightStatus: __t.option(__t.string()),
 });
 export type PublicProfileSummaryRow = __Infer<typeof PublicProfileSummaryRow>;
+
+export const ReportItem = __t.object("ReportItem", {
+  id: __t.string(),
+  reporterUserId: __t.string(),
+  targetType: __t.string(),
+  targetId: __t.string(),
+  reportedUserId: __t.option(__t.string()),
+  surface: __t.string(),
+  reason: __t.string(),
+  details: __t.option(__t.string()),
+  contextJson: __t.string(),
+  status: __t.string(),
+  reviewedBy: __t.option(__t.string()),
+  reviewNotes: __t.option(__t.string()),
+  reviewedAtIsoUtc: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ReportItem = __Infer<typeof ReportItem>;
+
+export const ReportViewRow = __t.object("ReportViewRow", {
+  id: __t.string(),
+  reporterUserId: __t.string(),
+  targetType: __t.string(),
+  targetId: __t.string(),
+  reportedUserId: __t.option(__t.string()),
+  surface: __t.string(),
+  reason: __t.string(),
+  details: __t.option(__t.string()),
+  contextJson: __t.string(),
+  status: __t.string(),
+  reviewedBy: __t.option(__t.string()),
+  reviewNotes: __t.option(__t.string()),
+  reviewedAtIsoUtc: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ReportViewRow = __Infer<typeof ReportViewRow>;
+
+export const SenderIdentityUserMap = __t.object("SenderIdentityUserMap", {
+  senderIdentity: __t.string(),
+  vuluUserId: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type SenderIdentityUserMap = __Infer<typeof SenderIdentityUserMap>;
 
 export const SocialUserItem = __t.object("SocialUserItem", {
   userId: __t.string(),
@@ -405,6 +587,20 @@ export const VideoItem = __t.object("VideoItem", {
 });
 export type VideoItem = __Infer<typeof VideoItem>;
 
+export const WalletTransactionItem = __t.object("WalletTransactionItem", {
+  id: __t.string(),
+  userId: __t.string(),
+  eventType: __t.string(),
+  deltaGems: __t.i32(),
+  deltaCash: __t.i32(),
+  deltaFuel: __t.i32(),
+  balanceBefore: __t.string(),
+  balanceAfter: __t.string(),
+  metadata: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type WalletTransactionItem = __Infer<typeof WalletTransactionItem>;
+
 export const WithdrawalRequestItem = __t.object("WithdrawalRequestItem", {
   id: __t.string(),
   userId: __t.string(),
@@ -412,3 +608,4 @@ export const WithdrawalRequestItem = __t.object("WithdrawalRequestItem", {
   createdAt: __t.timestamp(),
 });
 export type WithdrawalRequestItem = __Infer<typeof WithdrawalRequestItem>;
+
