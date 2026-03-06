@@ -71,9 +71,39 @@ function getPairUsers(pairKey: string): [string, string] | null {
 }
 
 function getDbFriendshipStates(): Map<string, FriendshipState> {
-  // friendship table is private in the schema. Use global friendship events
-  // to derive relationship state on the client.
-  return new Map<string, FriendshipState>();
+  const states = new Map<string, FriendshipState>();
+  const dbView = spacetimeDb.db as any;
+  const rows: any[] = Array.from(
+    dbView?.myFriendships?.iter?.() ??
+      dbView?.my_friendships?.iter?.() ??
+      [],
+  );
+
+  for (const row of rows) {
+    const pairKey = asString(row?.pairKey ?? row?.pair_key);
+    const userLowId = asString(row?.userLowId ?? row?.user_low_id);
+    const userHighId = asString(row?.userHighId ?? row?.user_high_id);
+    const statusRaw = asString(row?.status)?.toLowerCase();
+    if (!pairKey || !userLowId || !userHighId) continue;
+    if (
+      statusRaw !== 'pending' &&
+      statusRaw !== 'accepted' &&
+      statusRaw !== 'declined' &&
+      statusRaw !== 'blocked'
+    ) {
+      continue;
+    }
+
+    states.set(pairKey, {
+      pairKey,
+      userLowId,
+      userHighId,
+      status: statusRaw,
+      updatedAt: readTimestampMs(row?.updatedAt ?? row?.updated_at),
+    });
+  }
+
+  return states;
 }
 
 function applyEventFriendshipStates(states: Map<string, FriendshipState>): boolean {

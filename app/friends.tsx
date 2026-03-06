@@ -48,7 +48,18 @@ export default function FriendsScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </Pressable>
         <AppText variant="h2">Friends</AppText>
-        <View style={styles.headerSpacer} />
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: '/search',
+              params: { mode: 'add_friends' },
+            })
+          }
+          style={({ pressed }) => [styles.addButton, pressed && styles.rowPressed]}
+          hitSlop={10}
+        >
+          <Ionicons name="person-add-outline" size={18} color={colors.textPrimary} />
+        </Pressable>
       </View>
 
       <FlatList
@@ -108,9 +119,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.surfaceAlt,
   },
-  headerSpacer: {
+  addButton: {
     width: 36,
     height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
   },
   listContent: {
     paddingHorizontal: spacing.lg,

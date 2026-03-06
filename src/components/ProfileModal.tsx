@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { AppText } from './AppText';
 import { useProfile } from '../context/ProfileContext';
-import { useNotificationsRepo } from '../data/provider';
+import { useFriendshipsRepo, useNotificationsRepo } from '../data/provider';
 import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 import { useUserProfile } from '../context/UserProfileContext';
 import { trackSpacetimeProfileView } from '../lib/spacetime';
@@ -57,12 +57,17 @@ function normalizeStorySegments(value: unknown): string[] {
 function getRelationshipStatus(
   selectedUser: { id: string; isSelfPreview?: boolean } | null,
   userProfileId: string,
+  acceptedFriendIds: Set<string>,
   friendNotifications: FriendRequestNotification[],
 ): 'none' | 'requested' | 'friends' {
   if (!selectedUser) return 'none';
 
   const selfPreview = !!selectedUser.isSelfPreview || selectedUser.id === userProfileId;
   if (selfPreview) return 'none';
+
+  if (acceptedFriendIds.has(selectedUser.id)) {
+    return 'friends';
+  }
 
   if (
     friendNotifications.some(
@@ -93,11 +98,16 @@ export function ProfileModal() {
   const { selectedUser, hideProfile } = useProfile();
   const { userId: viewerUserId } = useSessionAuth();
   const { userProfile } = useUserProfile();
+  const friendshipsRepo = useFriendshipsRepo();
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
   const CARD_HEIGHT = SCREEN_HEIGHT * 0.70;
   const SNAP_MINI = SCREEN_HEIGHT * 0.25;
   const CLOSE_THRESHOLD = SCREEN_HEIGHT * CLOSE_THRESHOLD_RATIO;
   const notificationsRepo = useNotificationsRepo();
+  const acceptedFriendIds = useMemo(
+    () => new Set(friendshipsRepo.listAcceptedFriendIds()),
+    [friendshipsRepo],
+  );
   const friendNotifications = useMemo(
     () => notificationsRepo.listNotifications({ limit: 240, types: ['friend_request'] }) as FriendRequestNotification[],
     [notificationsRepo],
@@ -147,7 +157,12 @@ export function ProfileModal() {
   // Keep friend status current without re-running full modal open animation.
   useEffect(() => {
     if (!selectedUser) return;
-    const relationshipStatus = getRelationshipStatus(selectedUser, userProfile.id, friendNotifications);
+    const relationshipStatus = getRelationshipStatus(
+      selectedUser,
+      userProfile.id,
+      acceptedFriendIds,
+      friendNotifications,
+    );
     const hasOptimisticRequestLock =
       relationshipStatus === 'none' &&
       friendStatus === 'requested' &&
@@ -160,7 +175,14 @@ export function ProfileModal() {
     if (relationshipStatus === 'requested' || relationshipStatus === 'friends') {
       setOptimisticRequestUntil(0);
     }
-  }, [friendNotifications, friendStatus, optimisticRequestUntil, selectedUser, userProfile.id]);
+  }, [
+    acceptedFriendIds,
+    friendNotifications,
+    friendStatus,
+    optimisticRequestUntil,
+    selectedUser,
+    userProfile.id,
+  ]);
 
   useEffect(() => {
     if (!selectedUser?.id || !viewerUserId) {
