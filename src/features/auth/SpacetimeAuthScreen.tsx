@@ -214,7 +214,7 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
   const canUseSignUp = isSignUpLoaded && Boolean(signUp) && Boolean(setActiveSignUp);
 
   const navigateToHome = useCallback(() => {
-    router.replace('/');
+    router.replace('/(tabs)');
   }, [router]);
 
   const clearPendingSignInSecondFactor = useCallback(() => {
