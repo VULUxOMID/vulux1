@@ -342,12 +342,14 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       // The status is not in the SDK type definitions yet, so we compare via
       // a string cast.  Retrying with `attemptFirstFactor` using the password
       // strategy often resolves the trust gate without requiring a CAPTCHA.
+      let didAttemptFirstFactor = false;
       if ((attempt.status as string) === 'needs_client_trust') {
         try {
           attempt = await signIn.attemptFirstFactor({
             strategy: 'password',
             password,
           });
+          didAttemptFirstFactor = true;
 
           if (await completeSignInIfPossible(attempt)) {
             return;
@@ -358,6 +360,7 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       }
 
       if (
+        !didAttemptFirstFactor &&
         attempt.status === 'needs_first_factor' &&
         hasSignInFactorStrategy(attempt, 'first', 'password')
       ) {
