@@ -2,6 +2,13 @@ import { t } from 'spacetimedb/server';
 
 import { spacetimedb as schemaDb } from './schema';
 import {
+  EARN_AD_WALL_REWARD_GEMS,
+  claimEarnAdWallRewardState,
+  claimEarnStreakRewardState,
+  readEarnStateFromAccountState,
+  writeEarnStateToAccountState,
+} from './earnRewards';
+import {
   PROFILE_VIEW_DEFAULT_DEDUPE_WINDOW_MS,
   PROFILE_VIEW_METRIC_NAME,
   PROFILE_VIEW_METRIC_VERSION_V2,
@@ -4933,6 +4940,93 @@ export const claimAdReward = schemaDb.reducer(
       metadata: {
         source: readString(args.source) ?? 'wallet_claim_ad_reward',
         rewardGems: AD_REWARD_GEMS,
+      },
+    });
+  },
+);
+
+export const claimEarnAdWallReward = schemaDb.reducer(
+  {
+    userId: t.string(),
+    source: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+
+    const actionNowMs = nowMs(ctx);
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const currentEarnState = readEarnStateFromAccountState(accountState, actionNowMs);
+    const nextEarnState = claimEarnAdWallRewardState(currentEarnState, actionNowMs);
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems + EARN_AD_WALL_REWARD_GEMS,
+    };
+
+    let nextAccountState = writeWalletToAccountState(accountState, nextWallet);
+    nextAccountState = writeEarnStateToAccountState(nextAccountState, nextEarnState);
+    writeAccountStateItem(ctx, args.userId, nextAccountState);
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'claim_earn_ad_reward',
+      delta: {
+        gems: EARN_AD_WALL_REWARD_GEMS,
+        cash: 0,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: readString(args.source) ?? 'earn_ad_wall',
+        rewardGems: EARN_AD_WALL_REWARD_GEMS,
+        nextClaimAtMs: nextEarnState.adWall.nextClaimAtMs,
+        claimCount: nextEarnState.adWall.claimCount,
+      },
+    });
+  },
+);
+
+export const claimEarnStreakReward = schemaDb.reducer(
+  {
+    userId: t.string(),
+    rewardIndex: t.u32(),
+    source: t.option(t.string()),
+  },
+  (ctx, args) => {
+    assertSelf(ctx, args.userId, 'userId');
+
+    const actionNowMs = nowMs(ctx);
+    const rewardIndex = Math.max(0, Math.floor(Number(args.rewardIndex)));
+    const accountState = readAccountStateItem(ctx, args.userId);
+    const currentWallet = readWalletFromAccountState(accountState);
+    const currentEarnState = readEarnStateFromAccountState(accountState, actionNowMs);
+    const result = claimEarnStreakRewardState(currentEarnState, rewardIndex, actionNowMs);
+    const nextWallet = {
+      ...currentWallet,
+      gems: currentWallet.gems + result.rewardGems,
+    };
+
+    let nextAccountState = writeWalletToAccountState(accountState, nextWallet);
+    nextAccountState = writeEarnStateToAccountState(nextAccountState, result.nextEarnState);
+    writeAccountStateItem(ctx, args.userId, nextAccountState);
+
+    appendWalletTransaction(ctx, {
+      userId: args.userId,
+      eventType: 'claim_earn_streak_reward',
+      delta: {
+        gems: result.rewardGems,
+        cash: 0,
+        fuel: 0,
+      },
+      balanceBefore: currentWallet,
+      balanceAfter: nextWallet,
+      metadata: {
+        source: readString(args.source) ?? 'earn_streak',
+        rewardIndex,
+        rewardGems: result.rewardGems,
+        streakClaimedCount: result.nextEarnState.streak.claimedCount,
+        streakCycleExpiresAtMs: result.nextEarnState.streak.cycleExpiresAtMs,
       },
     });
   },

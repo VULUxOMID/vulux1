@@ -1,357 +1,216 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Dimensions,
-  StyleSheet,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React from 'react';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
 
-import { AppText, CashIcon } from '../../../components';
-import { toast } from '../../../components/Toast';
+import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
-import {
-  REWARDS,
-  STREAK_FIRST_OPEN_KEY,
-  STREAK_STORAGE_KEY,
-  VIDEO_AD_DURATION,
-} from '../constants';
-
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const BOX_MARGIN = spacing.xs;
-const BOX_SIZE = (SCREEN_WIDTH - spacing.lg * 4 - BOX_MARGIN * 6) / 3;
+import { formatEarnDuration, type EarnSnapshot } from '../earnState';
 
 type RewardStreakCardProps = {
-  onReward: (amount: number) => void;
+  rewards: EarnSnapshot['streak']['rewards'];
+  claimedCount: number;
+  nextRewardAmount: number | null;
+  cycleExpiresAtMs: number | null;
+  remainingMs: number;
+  loadingIndex: number | null;
+  disabled?: boolean;
+  onClaim: (rewardIndex: number) => void;
 };
 
 export const RewardStreakCard = React.memo(function RewardStreakCard({
-  onReward,
+  rewards,
+  claimedCount,
+  nextRewardAmount,
+  cycleExpiresAtMs,
+  remainingMs,
+  loadingIndex,
+  disabled = false,
+  onClaim,
 }: RewardStreakCardProps) {
-  const [openedBoxes, setOpenedBoxes] = useState<number[]>([]);
-  const [loadingIndex, setLoadingIndex] = useState<number | null>(null);
-
-  const checkDailyReset = useCallback(async () => {
-    const now = Date.now();
-    const firstBoxTime = await AsyncStorage.getItem(STREAK_FIRST_OPEN_KEY);
-
-    if (firstBoxTime) {
-      const firstTime = parseInt(firstBoxTime, 10);
-      const resetTime = firstTime + 24 * 60 * 60 * 1000;
-
-      if (now >= resetTime) {
-        return true;
-      }
-    }
-
-    return false;
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const loadStreak = async () => {
-      try {
-        const saved = await AsyncStorage.getItem(STREAK_STORAGE_KEY);
-        const shouldReset = await checkDailyReset();
-
-        if (shouldReset) {
-          await AsyncStorage.removeItem(STREAK_STORAGE_KEY);
-          await AsyncStorage.removeItem(STREAK_FIRST_OPEN_KEY);
-          if (mounted) setOpenedBoxes([]);
-          return;
-        }
-
-        if (saved && mounted) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            setOpenedBoxes(parsed);
-          }
-        }
-      } catch (e) {
-        console.error('[Streak] Load Error:', e);
-      }
-    };
-
-    loadStreak();
-    return () => {
-      mounted = false;
-    };
-  }, [checkDailyReset]);
-
-  const handleBoxClick = useCallback(
-    (index: number) => {
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-      } catch (e) {}
-
-      if (loadingIndex !== null || openedBoxes.includes(index)) return;
-
-      const nextExpected = openedBoxes.length;
-      if (index !== nextExpected) {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        } catch (e) {}
-        toast.warning('Please watch the videos in order!');
-        return;
-      }
-
-      if (openedBoxes.length === 0) {
-        AsyncStorage.setItem(STREAK_FIRST_OPEN_KEY, Date.now().toString());
-      }
-
-      setLoadingIndex(index);
-
-      setTimeout(async () => {
-        try {
-          const reward = REWARDS[index].amount;
-          const nextOpened = [...openedBoxes, index];
-          setOpenedBoxes(nextOpened);
-          await AsyncStorage.setItem(STREAK_STORAGE_KEY, JSON.stringify(nextOpened));
-
-          onReward(reward);
-
-          try {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          } catch (e) {}
-          toast.success(`You received ${reward} Cash!`);
-        } catch (err) {
-          console.error('[Streak] Process Error:', err);
-          toast.error('Something went wrong while claiming your reward.');
-        } finally {
-          setLoadingIndex(null);
-        }
-      }, VIDEO_AD_DURATION);
-    },
-    [loadingIndex, onReward, openedBoxes],
-  );
-
-  const isComplete = openedBoxes.length === REWARDS.length;
+  const isComplete = claimedCount >= rewards.length;
+  const footerLabel = isComplete
+    ? cycleExpiresAtMs
+      ? `Cycle resets in ${formatEarnDuration(remainingMs)}`
+      : 'Cycle complete'
+    : nextRewardAmount
+      ? `Next reward: ${nextRewardAmount} Gems`
+      : 'Claim the next unlocked reward';
 
   return (
     <View style={styles.container}>
-      <View style={styles.boxesGrid}>
-        {REWARDS.map((reward, index) => {
-          const isOpened = openedBoxes.includes(index);
-          const isLoading = loadingIndex === index;
-          const isNext = index === openedBoxes.length;
-          const isLocked = index > openedBoxes.length;
+      <View style={styles.grid}>
+        {rewards.map((reward) => {
+          const isClaimed = reward.status === 'claimed';
+          const isReady = reward.status === 'ready' && !disabled;
+          const isLoading = loadingIndex === reward.index;
 
           return (
             <TouchableOpacity
-              key={reward.label}
-              activeOpacity={0.7}
-              onPress={() => handleBoxClick(index)}
-              delayPressIn={0}
+              key={`${reward.label}-${reward.index}`}
+              activeOpacity={0.85}
+              onPress={() => onClaim(reward.index)}
+              disabled={!isReady || isLoading}
               style={[
-                styles.calendarBox,
-                isOpened && styles.boxOpened,
-                isLoading && styles.boxLoading,
-                isNext && styles.boxNext,
-                isLocked && styles.boxLocked,
+                styles.rewardBox,
+                isClaimed && styles.rewardBoxClaimed,
+                reward.status === 'ready' && styles.rewardBoxReady,
+                reward.status === 'locked' && styles.rewardBoxLocked,
               ]}
             >
-              <View style={[styles.boxContent, styles.pointerEventsNone]}>
-                {isLoading ? (
-                  <ActivityIndicator color={colors.accentPremium} size="small" />
-                ) : isOpened ? (
-                  <View style={styles.boxContentCenter}>
+              {isLoading ? (
+                <ActivityIndicator size="small" color={colors.accentPremium} />
+              ) : isClaimed ? (
+                <>
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={24}
+                    color={colors.accentSuccess}
+                  />
+                  <AppText variant="tinyBold" style={styles.claimedValue}>
+                    +{reward.amount}
+                  </AppText>
+                </>
+              ) : (
+                <>
+                  <View style={styles.rewardIconWrap}>
                     <Ionicons
-                      name="checkmark-circle"
-                      size={24}
-                      color={colors.accentSuccess}
+                      name={reward.status === 'ready' ? 'gift-outline' : 'lock-closed-outline'}
+                      size={18}
+                      color={
+                        reward.status === 'ready'
+                          ? colors.accentPremium
+                          : colors.textMuted
+                      }
                     />
-                    <AppText variant="tinyBold" style={styles.boxRewardText}>
-                      +{reward.amount}
-                    </AppText>
                   </View>
-                ) : (
-                  <View style={styles.boxContentCenter}>
-                    <View style={styles.iconCircle}>
-                      <CashIcon
-                        size={20}
-                        color={isLocked ? colors.textMuted : colors.accentCash}
-                      />
-                    </View>
-                    <AppText
-                      variant="bodyBold"
-                      style={[styles.rewardValueText, isLocked && styles.rewardValueTextLocked]}
-                    >
-                      {reward.amount}
-                    </AppText>
-                    <AppText
-                      variant="micro"
-                      style={[
-                        styles.boxLabelText,
-                        isLocked && styles.boxLabelTextLocked,
-                        isNext && styles.boxLabelTextNext,
-                      ]}
-                    >
-                      {reward.label}
-                    </AppText>
-                  </View>
-                )}
-              </View>
-
-              {isLocked && !isLoading ? (
-                <View style={[styles.lockOverlay, styles.pointerEventsNone]}>
-                  <Ionicons name="lock-closed" size={14} color={colors.textMuted} />
-                </View>
-              ) : null}
+                  <AppText
+                    variant="bodyBold"
+                    style={reward.status === 'locked' ? styles.lockedValue : undefined}
+                  >
+                    {reward.amount}
+                  </AppText>
+                  <AppText
+                    variant="micro"
+                    style={[
+                      styles.rewardLabel,
+                      reward.status === 'ready' && styles.readyLabel,
+                      reward.status === 'locked' && styles.lockedLabel,
+                    ]}
+                  >
+                    {reward.label}
+                  </AppText>
+                </>
+              )}
             </TouchableOpacity>
           );
         })}
       </View>
 
-      <View style={styles.streakFooter}>
-        {isComplete ? (
-          <View style={styles.footerContent}>
-            <AppText variant="smallBold" style={styles.completionText}>
-              Streak Complete! 🎉
-            </AppText>
-            <AppText variant="small" secondary style={styles.footerSubtext}>
-              Resets automatically in 24 hours
-            </AppText>
-          </View>
-        ) : (
-          <View style={styles.footerContent}>
-            {openedBoxes.length > 0 ? (
-              <AppText variant="small" secondary style={styles.footerNextText}>
-                Next:{' '}
-                <AppText variant="small" style={styles.nextRewardText}>
-                  {REWARDS[openedBoxes.length]?.amount} Cash
-                </AppText>
-              </AppText>
-            ) : null}
-            <AppText variant="tiny" secondary style={styles.footerSubtext}>
-              Resets automatically 24 hours after start
+      <View style={styles.footer}>
+        <View style={styles.footerCopy}>
+          <AppText variant="smallBold">
+            {isComplete ? 'Streak complete' : `${claimedCount}/${rewards.length} claimed`}
+          </AppText>
+          <AppText variant="tiny" secondary>
+            {footerLabel}
+          </AppText>
+        </View>
+        {cycleExpiresAtMs ? (
+          <View style={styles.timerBadge}>
+            <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
+            <AppText variant="tiny" secondary>
+              {formatEarnDuration(remainingMs)}
             </AppText>
           </View>
-        )}
+        ) : null}
       </View>
     </View>
   );
 });
 
 const styles = StyleSheet.create({
-  pointerEventsNone: {
-    pointerEvents: 'none',
-  },
   container: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
-  boxesGrid: {
+  grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-    marginHorizontal: -BOX_MARGIN,
+    gap: spacing.sm,
   },
-  calendarBox: {
-    width: BOX_SIZE,
+  rewardBox: {
+    width: '30.5%',
+    minWidth: 92,
     aspectRatio: 1,
-    backgroundColor: colors.surfaceAlt,
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
     alignItems: 'center',
     justifyContent: 'center',
-    margin: BOX_MARGIN,
+    gap: spacing.xs,
+    padding: spacing.sm,
   },
-  boxOpened: {
-    backgroundColor: `${colors.accentSuccess}10`,
+  rewardBoxClaimed: {
     borderColor: colors.accentSuccess,
-    borderStyle: 'solid',
+    backgroundColor: `${colors.accentSuccess}12`,
   },
-  boxLoading: {
+  rewardBoxReady: {
     borderColor: colors.accentPremium,
     backgroundColor: `${colors.accentPremium}10`,
   },
-  boxNext: {
-    borderColor: colors.accentPremium,
-    backgroundColor: colors.surfaceAlt,
-    borderWidth: 2,
-  },
-  boxLocked: {
-    opacity: 0.7,
-    backgroundColor: colors.background,
+  rewardBoxLocked: {
+    opacity: 0.72,
     borderStyle: 'dashed',
   },
-  boxContent: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  boxContentCenter: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconCircle: {
+  rewardIconWrap: {
     width: spacing.xxl,
     height: spacing.xxl,
     borderRadius: radius.full,
-    backgroundColor: `${colors.textPrimary}0D`,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xxs,
+    backgroundColor: `${colors.textPrimary}0D`,
   },
-  rewardValueText: {
-    color: colors.textPrimary,
-  },
-  rewardValueTextLocked: {
-    color: colors.textMuted,
-  },
-  boxRewardText: {
-    color: colors.accentSuccess,
-    marginTop: spacing.xxs,
-  },
-  boxLabelText: {
+  rewardLabel: {
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     color: colors.textMuted,
   },
-  boxLabelTextLocked: {
-    color: colors.textMuted,
-  },
-  boxLabelTextNext: {
+  readyLabel: {
     color: colors.accentPremium,
-    fontWeight: '700',
   },
-  lockOverlay: {
-    position: 'absolute',
-    top: spacing.smMinus,
-    right: spacing.smMinus,
+  lockedLabel: {
+    color: colors.textMuted,
   },
-  streakFooter: {
-    marginTop: spacing.md,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-    alignItems: 'center',
+  lockedValue: {
+    color: colors.textMuted,
   },
-  footerContent: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  completionText: {
+  claimedValue: {
     color: colors.accentSuccess,
-    marginBottom: spacing.sm,
-    textAlign: 'center',
   },
-  footerSubtext: {
-    textAlign: 'center',
-    marginTop: spacing.xs,
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
   },
-  footerNextText: {
-    marginBottom: spacing.sm,
+  footerCopy: {
+    flex: 1,
+    gap: spacing.xxs,
   },
-  nextRewardText: {
-    color: colors.accentPremium,
-    fontWeight: '700',
+  timerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
   },
 });

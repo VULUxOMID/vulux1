@@ -41,6 +41,8 @@ import AppendModerationActionReducer from "./append_moderation_action_reducer";
 import BanLiveUserReducer from "./ban_live_user_reducer";
 import BoostLiveReducer from "./boost_live_reducer";
 import ClaimAdRewardReducer from "./claim_ad_reward_reducer";
+import ClaimEarnAdWallRewardReducer from "./claim_earn_ad_wall_reward_reducer";
+import ClaimEarnStreakRewardReducer from "./claim_earn_streak_reward_reducer";
 import ConvertCashToGemsReducer from "./convert_cash_to_gems_reducer";
 import ConvertGemsToCashReducer from "./convert_gems_to_cash_reducer";
 import ConvertGemsToFuelReducer from "./convert_gems_to_fuel_reducer";
@@ -857,6 +859,8 @@ const reducersSchema = __reducers(
   __reducerSchema("ban_live_user", BanLiveUserReducer),
   __reducerSchema("boost_live", BoostLiveReducer),
   __reducerSchema("claim_ad_reward", ClaimAdRewardReducer),
+  __reducerSchema("claim_earn_ad_wall_reward", ClaimEarnAdWallRewardReducer),
+  __reducerSchema("claim_earn_streak_reward", ClaimEarnStreakRewardReducer),
   __reducerSchema("convert_cash_to_gems", ConvertCashToGemsReducer),
   __reducerSchema("convert_gems_to_cash", ConvertGemsToCashReducer),
   __reducerSchema("convert_gems_to_fuel", ConvertGemsToFuelReducer),
@@ -948,4 +952,3 @@ export class DbConnection extends __DbConnectionImpl<typeof REMOTE_MODULE> {
     return new SubscriptionBuilder(this);
   };
 }
-

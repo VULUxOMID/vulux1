@@ -7,14 +7,14 @@ import { AppText, CurrencyPill } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 
 type EarnHeaderProps = {
-  gems: number;
-  cash: number;
+  gemsLabel: string;
+  cashLabel: string;
   onBack: () => void;
 };
 
 export const EarnHeader = React.memo(function EarnHeader({
-  gems,
-  cash,
+  gemsLabel,
+  cashLabel,
   onBack,
 }: EarnHeaderProps) {
   const insets = useSafeAreaInsets();
@@ -30,13 +30,13 @@ export const EarnHeader = React.memo(function EarnHeader({
       <View style={styles.balanceContainer}>
         <CurrencyPill
           icon="prism"
-          label={gems.toString()}
+          label={gemsLabel}
           color={colors.accentPremium}
           style={styles.balancePill}
         />
         <CurrencyPill
           icon="cash"
-          label={cash.toString()}
+          label={cashLabel}
           color={colors.accentCash}
           style={styles.balancePill}
         />
