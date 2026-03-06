@@ -1445,6 +1445,47 @@ function buildPairKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join('::');
 }
 
+type FriendshipStatus = 'pending' | 'accepted' | 'declined' | 'blocked';
+
+function normalizeFriendshipStatus(value: unknown): FriendshipStatus | null {
+  const normalized = readString(value)?.toLowerCase();
+  if (
+    normalized === 'pending' ||
+    normalized === 'accepted' ||
+    normalized === 'declined' ||
+    normalized === 'blocked'
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function readFriendshipRow(ctx: any, pairKey: string): {
+  pairKey: string;
+  userLowId: string;
+  userHighId: string;
+  status: FriendshipStatus;
+  requestedBy: string | null;
+} | null {
+  const row = ctx.db.friendship.pairKey.find(pairKey);
+  if (!row) {
+    return null;
+  }
+
+  const status = normalizeFriendshipStatus(row.status);
+  if (!status) {
+    return null;
+  }
+
+  return {
+    pairKey: row.pairKey,
+    userLowId: row.userLowId,
+    userHighId: row.userHighId,
+    status,
+    requestedBy: readString(row.requestedBy),
+  };
+}
+
 function buildConversationKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join('::');
 }
@@ -4146,7 +4187,17 @@ export const sendFriendRequest = schemaDb.reducer(
   },
   (ctx, args) => {
     assertSelf(ctx, args.fromUserId, 'fromUserId');
+    if (args.fromUserId === args.toUserId) {
+      return;
+    }
     const pairKey = buildPairKey(args.fromUserId, args.toUserId);
+    const existing = readFriendshipRow(ctx, pairKey);
+    if (existing?.status === 'accepted') {
+      return;
+    }
+    if (existing?.status === 'pending') {
+      return;
+    }
     const payload: JsonRecord = {
       eventType: 'friend_request',
       requestId: args.id,
@@ -4176,7 +4227,25 @@ export const respondToFriendRequest = schemaDb.reducer(
   },
   (ctx, args) => {
     assertSelf(ctx, args.fromUserId, 'fromUserId');
+    if (args.fromUserId === args.toUserId) {
+      return;
+    }
     assertPairMatchesParticipants(args.pairKey, args.fromUserId, args.toUserId);
+    const status =
+      args.status === 'accepted' || args.status === 'declined' ? args.status : null;
+    if (!status) {
+      return;
+    }
+    const existing = readFriendshipRow(ctx, args.pairKey);
+    if (!existing || existing.status !== 'pending') {
+      return;
+    }
+    if (!existing.requestedBy || existing.requestedBy !== args.toUserId) {
+      return;
+    }
+    if (existing.requestedBy === args.fromUserId) {
+      return;
+    }
 
     const payload: JsonRecord = {
       eventType: 'friend_response',
@@ -4184,7 +4253,7 @@ export const respondToFriendRequest = schemaDb.reducer(
       pairKey: args.pairKey,
       fromUserId: args.fromUserId,
       toUserId: args.toUserId,
-      status: args.status,
+      status,
       fromUserName: readString(args.fromUserName) ?? args.fromUserId,
       fromUserAvatar: readString(args.fromUserAvatar) ?? '',
       createdAt: nowMs(ctx),
@@ -4206,7 +4275,17 @@ export const removeFriendRelationship = schemaDb.reducer(
   },
   (ctx, args) => {
     assertSelf(ctx, args.fromUserId, 'fromUserId');
+    if (args.fromUserId === args.toUserId) {
+      return;
+    }
     assertPairMatchesParticipants(args.pairKey, args.fromUserId, args.toUserId);
+    const existing = readFriendshipRow(ctx, args.pairKey);
+    if (!existing) {
+      return;
+    }
+    if (existing.status !== 'pending' && existing.status !== 'accepted') {
+      return;
+    }
 
     const payload: JsonRecord = {
       eventType: 'friend_removed',
