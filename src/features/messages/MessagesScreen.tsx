@@ -24,7 +24,7 @@ import { MessagesList } from './MessagesList';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import type { LiveUser } from '../liveroom/types';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { subscribeFriends } from '../../lib/spacetime';
+import { isSpacetimeViewActive, subscribeFriends } from '../../lib/spacetime';
 import { ReportComposerModal } from '../reports/ReportComposerModal';
 import { submitReport } from '../reports/reportingClient';
 import { toast } from '../../components/Toast';
@@ -95,7 +95,7 @@ export default function MessagesScreen() {
     () => (queriesEnabled ? messagesRepo.listConversations(conversationsQueryArgs) : []),
     [conversationsQueryArgs, messagesRepo, queriesEnabled],
   );
-  const conversationsLoading = false;
+  const conversationsLoading = queriesEnabled && !isSpacetimeViewActive('my_conversations');
 
   useEffect(() => {
     setConversationLimit(50);
@@ -255,6 +255,12 @@ export default function MessagesScreen() {
         conversations={listData}
         socialUsersById={socialUsersById}
         loading={conversationsLoading}
+        emptyTitle={queriesEnabled ? 'No DMs yet' : 'Sign in to view DMs'}
+        emptySubtitle={
+          queriesEnabled
+            ? 'Open a profile or a friend to start your first conversation.'
+            : 'Authentication is required to load your messages.'
+        }
         onPressConversation={handleConversationPress}
         onMarkAsRead={handleMarkConversationRead}
         onViewProfile={handleViewProfile}

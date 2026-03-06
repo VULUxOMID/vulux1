@@ -8,7 +8,11 @@ import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
 import { requestBackendRefresh } from './refreshBus';
-import { spacetimeDb } from '../../../lib/spacetime';
+import {
+  isSpacetimeViewActive,
+  isSpacetimeViewRequested,
+  spacetimeDb,
+} from '../../../lib/spacetime';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -96,6 +100,35 @@ function parseJsonRecord(itemRaw: unknown): UnknownRecord {
   }
 }
 
+function parseJsonArray(itemRaw: unknown): unknown[] {
+  if (typeof itemRaw !== 'string') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(itemRaw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function readTimestampOrIsoMs(value: unknown): number | null {
+  const directNumber = toFiniteNumber(value);
+  if (directNumber !== null) {
+    return directNumber;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function buildConversationKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join('::');
 }
@@ -133,7 +166,9 @@ function buildKnownUserDirectory(globalRows?: any[]): Map<string, UserDirectoryE
   const users = new Map<string, UserDirectoryEntry>();
   const dbView = spacetimeDb.db as any;
 
-  const publicRows: any[] = Array.from(dbView?.publicProfileSummary?.iter?.() ?? []);
+  const publicRows: any[] = Array.from(
+    dbView?.publicProfileSummary?.iter?.() ?? dbView?.public_profile_summary?.iter?.() ?? [],
+  );
   for (const row of publicRows) {
     const userId = asString(row?.userId ?? row?.user_id);
     if (!userId) continue;
@@ -143,7 +178,10 @@ function buildKnownUserDirectory(globalRows?: any[]): Map<string, UserDirectoryE
       userId,
       {
         username: asString(row?.username) ?? undefined,
-        displayName: asString(row?.username) ?? undefined,
+        displayName:
+          asString(row?.displayName ?? row?.display_name) ??
+          asString(row?.username) ??
+          undefined,
         avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url) ?? undefined,
       },
       updatedAt,
@@ -286,13 +324,45 @@ function parseGlobalMessageRow(
 
 function getGlobalRowsSortedAsc(): any[] {
   const dbView = spacetimeDb.db as any;
-  const rows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
+  const rows: any[] = Array.from(
+    dbView?.globalMessageItem?.iter?.() ?? dbView?.global_message_item?.iter?.() ?? [],
+  );
   rows.sort(
     (a, b) =>
       readSpacetimeTimestampMs(a?.createdAt ?? a?.created_at) -
       readSpacetimeTimestampMs(b?.createdAt ?? b?.created_at),
   );
   return rows;
+}
+
+function getMyConversationRows(): { rows: any[]; available: boolean } {
+  const dbView = spacetimeDb.db as any;
+  const fromCamel = dbView?.myConversations?.iter?.();
+  if (fromCamel) {
+    return { rows: Array.from(fromCamel), available: true };
+  }
+
+  const fromSnake = dbView?.my_conversations?.iter?.();
+  if (fromSnake) {
+    return { rows: Array.from(fromSnake), available: true };
+  }
+
+  return { rows: [], available: false };
+}
+
+function getMyConversationMessageRows(): { rows: any[]; available: boolean } {
+  const dbView = spacetimeDb.db as any;
+  const fromCamel = dbView?.myConversationMessages?.iter?.();
+  if (fromCamel) {
+    return { rows: Array.from(fromCamel), available: true };
+  }
+
+  const fromSnake = dbView?.my_conversation_messages?.iter?.();
+  if (fromSnake) {
+    return { rows: Array.from(fromSnake), available: true };
+  }
+
+  return { rows: [], available: false };
 }
 
 function parseThreadMessageEvent(item: UnknownRecord): ThreadMessageEvent | null {
@@ -379,6 +449,202 @@ function normalizeSenderForViewer(senderId: string, viewerUserId: string | null)
     return 'me';
   }
   return senderId;
+}
+
+function toNonNegativeInt(value: unknown, fallback = 0): number {
+  const parsed = toFiniteNumber(value);
+  if (parsed === null) return fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function normalizeThreadMessageType(
+  value: unknown,
+): ThreadSeedMessage['type'] {
+  return value === 'system' || value === 'cash' || value === 'voice' ? value : 'user';
+}
+
+function normalizeThreadMessageFromRecord(
+  raw: UnknownRecord,
+  viewerUserId: string,
+  fallbackSenderId: string,
+  fallbackUserLabel: string,
+  userDirectory: Map<string, UserDirectoryEntry>,
+): ThreadSeedMessage {
+  const messageId = asString(raw.id) ?? `thread-${Date.now()}`;
+  const rawSenderId = asString(raw.senderId) ?? fallbackSenderId;
+  const normalizedSenderId = normalizeSenderForViewer(rawSenderId, viewerUserId);
+  const createdAt = toNonNegativeInt(readTimestampOrIsoMs(raw.createdAt), Date.now());
+  const explicitUser = asString(raw.user);
+  const userLabel =
+    normalizedSenderId === 'me'
+      ? 'You'
+      : resolveUserDisplayName(rawSenderId, explicitUser ?? fallbackUserLabel, userDirectory);
+  const replyToRaw =
+    raw.replyTo && typeof raw.replyTo === 'object' ? (raw.replyTo as UnknownRecord) : null;
+
+  return {
+    id: messageId,
+    user: userLabel,
+    senderId: normalizedSenderId,
+    text: asString(raw.text) ?? '',
+    createdAt,
+    deliveredAt: toFiniteNumber(raw.deliveredAt) ?? createdAt,
+    readAt: toFiniteNumber(raw.readAt) ?? undefined,
+    edited: raw.edited === true,
+    type: normalizeThreadMessageType(raw.type),
+    amount: toFiniteNumber(raw.amount) ?? undefined,
+    audioUrl: asString(raw.audioUrl) ?? undefined,
+    duration: toFiniteNumber(raw.duration) ?? undefined,
+    media:
+      raw.media && typeof raw.media === 'object'
+        ? (raw.media as ThreadSeedMessage['media'])
+        : undefined,
+    replyTo:
+      replyToRaw && asString(replyToRaw.id) && asString(replyToRaw.text)
+        ? {
+            id: asString(replyToRaw.id)!,
+            user: asString(replyToRaw.user) ?? 'User',
+            text: asString(replyToRaw.text)!,
+            senderId: asString(replyToRaw.senderId) ?? undefined,
+          }
+        : undefined,
+    reactions: Array.isArray(raw.reactions)
+      ? (raw.reactions as ThreadSeedMessage['reactions'])
+      : undefined,
+  };
+}
+
+function mergeThreadMessage(
+  current: ThreadSeedMessage | undefined,
+  incoming: ThreadSeedMessage,
+): ThreadSeedMessage {
+  if (!current) {
+    return incoming;
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    createdAt:
+      Math.min(
+        toNonNegativeInt(current.createdAt, incoming.createdAt),
+        toNonNegativeInt(incoming.createdAt, current.createdAt),
+      ) || incoming.createdAt,
+    deliveredAt:
+      Math.max(
+        toFiniteNumber(current.deliveredAt) ?? 0,
+        toFiniteNumber(incoming.deliveredAt) ?? 0,
+      ) || undefined,
+    readAt:
+      Math.max(toFiniteNumber(current.readAt) ?? 0, toFiniteNumber(incoming.readAt) ?? 0) ||
+      undefined,
+    user: incoming.user || current.user,
+    text: incoming.text || current.text,
+    senderId: incoming.senderId || current.senderId,
+  };
+}
+
+function dedupeAndSortThreadMessages(messages: ThreadSeedMessage[]): ThreadSeedMessage[] {
+  const uniqueById = new Map<string, ThreadSeedMessage>();
+  for (const message of messages) {
+    uniqueById.set(message.id, mergeThreadMessage(uniqueById.get(message.id), message));
+  }
+
+  return Array.from(uniqueById.values()).sort((a, b) => {
+    const byCreatedAt = toNonNegativeInt(a.createdAt) - toNonNegativeInt(b.createdAt);
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function parseConversationFromRow(row: any, viewerUserId: string): Conversation | null {
+  const ownerUserId = asString(row?.ownerUserId ?? row?.owner_user_id);
+  const otherUserId = asString(row?.otherUserId ?? row?.other_user_id);
+  if (!ownerUserId || !otherUserId || ownerUserId !== viewerUserId) {
+    return null;
+  }
+
+  const item = parseJsonRecord(row?.item);
+  const lastMessageRaw =
+    item.lastMessage && typeof item.lastMessage === 'object'
+      ? (item.lastMessage as UnknownRecord)
+      : {};
+  const createdAtRaw =
+    readTimestampOrIsoMs(lastMessageRaw.createdAt) ??
+    readSpacetimeTimestampMs(row?.updatedAt ?? row?.updated_at);
+  const createdAtIso = new Date(createdAtRaw).toISOString();
+  const lastMessageSenderId =
+    normalizeSenderForViewer(asString(lastMessageRaw.senderId) ?? otherUserId, viewerUserId);
+
+  return {
+    id: asString(item.id) ?? buildConversationKey(ownerUserId, otherUserId),
+    otherUserId,
+    unreadCount: Math.max(0, toNonNegativeInt(item.unreadCount)),
+    lastMessage: {
+      id: asString(lastMessageRaw.id) ?? `${createdAtRaw}`,
+      senderId: lastMessageSenderId,
+      text: asString(lastMessageRaw.text) ?? '',
+      createdAt: createdAtIso,
+      deliveredAt: toFiniteNumber(lastMessageRaw.deliveredAt) ?? createdAtRaw,
+      readAt: toFiniteNumber(lastMessageRaw.readAt) ?? undefined,
+    },
+  };
+}
+
+function buildConversationsFromRows(rows: any[], viewerUserId: string): Conversation[] {
+  const byOtherUserId = new Map<string, Conversation>();
+  for (const row of rows) {
+    const parsed = parseConversationFromRow(row, viewerUserId);
+    if (!parsed) continue;
+    const existing = byOtherUserId.get(parsed.otherUserId);
+    if (!existing) {
+      byOtherUserId.set(parsed.otherUserId, parsed);
+      continue;
+    }
+    const existingTs = Date.parse(existing.lastMessage.createdAt);
+    const nextTs = Date.parse(parsed.lastMessage.createdAt);
+    if (Number.isFinite(nextTs) && (!Number.isFinite(existingTs) || nextTs >= existingTs)) {
+      byOtherUserId.set(parsed.otherUserId, parsed);
+    }
+  }
+
+  return Array.from(byOtherUserId.values()).sort((a, b) => {
+    const aTs = Date.parse(a.lastMessage.createdAt);
+    const bTs = Date.parse(b.lastMessage.createdAt);
+    return bTs - aTs;
+  });
+}
+
+function buildThreadMessagesFromRows(
+  rows: any[],
+  viewerUserId: string,
+  otherUserId: string,
+  userDirectory: Map<string, UserDirectoryEntry>,
+): ThreadSeedMessage[] {
+  const normalizedOtherUserId = otherUserId.trim();
+  const messages: ThreadSeedMessage[] = [];
+  for (const row of rows) {
+    const ownerUserId = asString(row?.ownerUserId ?? row?.owner_user_id);
+    const rowOtherUserId = asString(row?.otherUserId ?? row?.other_user_id);
+    if (!ownerUserId || !rowOtherUserId) continue;
+    if (ownerUserId !== viewerUserId || rowOtherUserId !== normalizedOtherUserId) continue;
+
+    const messageItems = parseJsonArray(row?.messages);
+    for (const entry of messageItems) {
+      if (!entry || typeof entry !== 'object') continue;
+      messages.push(
+        normalizeThreadMessageFromRecord(
+          entry as UnknownRecord,
+          viewerUserId,
+          rowOtherUserId,
+          rowOtherUserId,
+          userDirectory,
+        ),
+      );
+    }
+  }
+
+  return dedupeAndSortThreadMessages(messages);
 }
 
 function buildConversationFromEvents(
@@ -472,6 +738,7 @@ function buildThreadMessagesFromEvents(
   rows: any[],
   viewerUserId: string,
   otherUserId: string,
+  userDirectory: Map<string, UserDirectoryEntry>,
 ): ThreadSeedMessage[] {
   const conversationKey = buildConversationKey(viewerUserId, otherUserId);
   const messageEvents: ThreadMessageEvent[] = [];
@@ -502,13 +769,14 @@ function buildThreadMessagesFromEvents(
       const message = { ...event.message };
       const isMine = event.fromUserId === viewerUserId;
       const createdAt = message.createdAt ?? Date.now();
+      const normalizedSenderId = normalizeSenderForViewer(event.fromUserId, viewerUserId);
       return {
         ...message,
-        senderId: normalizeSenderForViewer(event.fromUserId, viewerUserId),
+        senderId: normalizedSenderId,
         user:
-          normalizeSenderForViewer(event.fromUserId, viewerUserId) === 'me'
+          normalizedSenderId === 'me'
             ? 'You'
-            : message.user,
+            : resolveUserDisplayName(event.fromUserId, message.user, userDirectory),
         deliveredAt: message.deliveredAt ?? createdAt,
         readAt:
           isMine && latestReadByOther >= createdAt
@@ -518,11 +786,7 @@ function buildThreadMessagesFromEvents(
     })
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 
-  const uniqueById = new Map<string, ThreadSeedMessage>();
-  for (const message of messages) {
-    uniqueById.set(message.id, message);
-  }
-  return Array.from(uniqueById.values());
+  return dedupeAndSortThreadMessages(messages);
 }
 
 function parsePositiveLimit(value: unknown): number | null {
@@ -542,37 +806,60 @@ export function createBackendMessagesRepository(
 
   return {
     listConversations(request) {
-      const rows = getGlobalRowsSortedAsc();
-      const spacetimeConversations =
-        viewerUserId ? buildConversationFromEvents(rows, viewerUserId) : [];
-
-      const byOtherUser = new Map<string, Conversation>();
-      for (const conversation of snapshot.conversations) {
-        byOtherUser.set(conversation.otherUserId, {
-          ...conversation,
-          lastMessage: {
-            ...conversation.lastMessage,
-            senderId: normalizeSenderId(conversation.lastMessage.senderId),
-          },
-        });
-      }
-      for (const conversation of spacetimeConversations) {
-        byOtherUser.set(conversation.otherUserId, conversation);
-      }
-
-      const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
-        const aTs = Date.parse(a.lastMessage.createdAt);
-        const bTs = Date.parse(b.lastMessage.createdAt);
-        return bTs - aTs;
-      });
       const viewerKey = viewerUserId ?? '__anon__';
-      if (mergedConversations.length > 0) {
-        conversationsCacheByViewer.set(viewerKey, mergedConversations);
+      const globalRows = getGlobalRowsSortedAsc();
+      const { rows: conversationRows, available: conversationRowsAvailable } = getMyConversationRows();
+      const conversationViewRequested = isSpacetimeViewRequested('my_conversations');
+      const conversationViewActive = isSpacetimeViewActive('my_conversations');
+      const shouldUseAuthoritativeConversationRows =
+        Boolean(viewerUserId) &&
+        conversationRowsAvailable &&
+        (conversationViewRequested || conversationViewActive || conversationRows.length > 0);
+
+      let sourceConversations: Conversation[] = [];
+
+      if (shouldUseAuthoritativeConversationRows && viewerUserId) {
+        const authoritativeConversations = buildConversationsFromRows(conversationRows, viewerUserId);
+        if (authoritativeConversations.length > 0) {
+          conversationsCacheByViewer.set(viewerKey, authoritativeConversations);
+          sourceConversations = authoritativeConversations;
+        } else if (!conversationViewActive) {
+          sourceConversations = conversationsCacheByViewer.get(viewerKey) ?? [];
+        } else {
+          conversationsCacheByViewer.delete(viewerKey);
+          sourceConversations = [];
+        }
+      } else {
+        const spacetimeConversations =
+          viewerUserId ? buildConversationFromEvents(globalRows, viewerUserId) : [];
+        const byOtherUser = new Map<string, Conversation>();
+        for (const conversation of snapshot.conversations) {
+          byOtherUser.set(conversation.otherUserId, {
+            ...conversation,
+            lastMessage: {
+              ...conversation.lastMessage,
+              senderId: normalizeSenderId(conversation.lastMessage.senderId),
+            },
+          });
+        }
+        for (const conversation of spacetimeConversations) {
+          byOtherUser.set(conversation.otherUserId, conversation);
+        }
+
+        const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
+          const aTs = Date.parse(a.lastMessage.createdAt);
+          const bTs = Date.parse(b.lastMessage.createdAt);
+          return bTs - aTs;
+        });
+
+        if (mergedConversations.length > 0) {
+          conversationsCacheByViewer.set(viewerKey, mergedConversations);
+        }
+        sourceConversations =
+          mergedConversations.length > 0
+            ? mergedConversations
+            : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
       }
-      const sourceConversations =
-        mergedConversations.length > 0
-          ? mergedConversations
-          : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
 
       const searched = filterByQuery(sourceConversations, request?.query, [
         (conversation) => conversation.otherUserId,
@@ -630,41 +917,80 @@ export function createBackendMessagesRepository(
       return applyCursorPage(searched, request);
     },
     listThreadSeedMessages(userId) {
-      const rows = getGlobalRowsSortedAsc();
+      const cacheKey = viewerUserId ? `${viewerUserId}::${userId}` : `__anon__::${userId}`;
+      const globalRows = getGlobalRowsSortedAsc();
+      const userDirectory = buildKnownUserDirectory(globalRows);
+      const { rows: threadRows, available: threadRowsAvailable } = getMyConversationMessageRows();
+      const threadViewRequested = isSpacetimeViewRequested('my_conversation_messages');
+      const threadViewActive = isSpacetimeViewActive('my_conversation_messages');
+      const shouldUseAuthoritativeThreadRows =
+        Boolean(viewerUserId) &&
+        threadRowsAvailable &&
+        (threadViewRequested || threadViewActive || threadRows.length > 0);
+
+      if (shouldUseAuthoritativeThreadRows && viewerUserId) {
+        const hasTargetRow = threadRows.some((row) => {
+          const ownerUserId = asString(row?.ownerUserId ?? row?.owner_user_id);
+          const rowOtherUserId = asString(row?.otherUserId ?? row?.other_user_id);
+          return ownerUserId === viewerUserId && rowOtherUserId === userId;
+        });
+        const rowMessages = buildThreadMessagesFromRows(
+          threadRows,
+          viewerUserId,
+          userId,
+          userDirectory,
+        );
+
+        if (rowMessages.length > 0) {
+          threadMessagesCacheByConversation.set(cacheKey, rowMessages);
+          return rowMessages;
+        }
+
+        if (hasTargetRow) {
+          threadMessagesCacheByConversation.delete(cacheKey);
+          return [];
+        }
+
+        if (!threadViewActive) {
+          const cached = threadMessagesCacheByConversation.get(cacheKey);
+          if (cached && cached.length > 0) {
+            return cached;
+          }
+        }
+
+        threadMessagesCacheByConversation.delete(cacheKey);
+        return [];
+      }
+
       const spacetimeMessages =
         viewerUserId && userId
-          ? buildThreadMessagesFromEvents(rows, viewerUserId, userId)
+          ? buildThreadMessagesFromEvents(globalRows, viewerUserId, userId, userDirectory)
           : [];
 
       if (spacetimeMessages.length > 0) {
-        const cacheKey = viewerUserId ? `${viewerUserId}::${userId}` : `__anon__::${userId}`;
         threadMessagesCacheByConversation.set(cacheKey, spacetimeMessages);
         return spacetimeMessages;
       }
 
-      const cacheKey = viewerUserId ? `${viewerUserId}::${userId}` : `__anon__::${userId}`;
       const cached = threadMessagesCacheByConversation.get(cacheKey);
       if (cached && cached.length > 0) {
         return cached;
       }
 
       const rawMessages = snapshot.threadSeedMessagesByUserId[userId] ?? [];
-      return rawMessages.map((message) => {
-        const normalizedSenderId = normalizeSenderId(message.senderId);
-        return {
-          ...message,
-          senderId: normalizedSenderId,
-          user: normalizedSenderId === 'me' ? 'You' : message.user,
-          replyTo: message.replyTo
-            ? {
-              ...message.replyTo,
-              senderId: message.replyTo.senderId
-                ? normalizeSenderId(message.replyTo.senderId)
-                : message.replyTo.senderId,
-            }
-            : message.replyTo,
-        };
+      const snapshotMessages = rawMessages.map((message) => {
+        if (!viewerUserId) {
+          return message;
+        }
+        return normalizeThreadMessageFromRecord(
+          message as unknown as UnknownRecord,
+          viewerUserId,
+          asString(message.senderId) ?? userId,
+          userId,
+          userDirectory,
+        );
       });
+      return dedupeAndSortThreadMessages(snapshotMessages);
     },
     async sendThreadMessage(request) {
       if (!request.userId) return;
