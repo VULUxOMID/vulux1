@@ -21,6 +21,7 @@ import { AppText } from './AppText';
 import { useProfile } from '../context/ProfileContext';
 import { useFriendshipsRepo, useNotificationsRepo } from '../data/provider';
 import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+import { resolveSessionGate } from '../auth/sessionGate';
 import { useUserProfile } from '../context/UserProfileContext';
 import { trackSpacetimeProfileView } from '../lib/spacetime';
 import { colors, radius, spacing } from '../theme';
@@ -96,7 +97,18 @@ function getRelationshipStatus(
 
 export function ProfileModal() {
   const { selectedUser, hideProfile } = useProfile();
-  const { userId: viewerUserId } = useSessionAuth();
+  const {
+    userId: viewerUserId,
+    hasSession,
+    isLoaded: isAuthLoaded,
+    isSignedIn,
+  } = useSessionAuth();
+  const sessionGate = resolveSessionGate({
+    isAuthLoaded,
+    hasSession,
+    isSignedIn,
+    userId: viewerUserId,
+  });
   const { userProfile } = useUserProfile();
   const friendshipsRepo = useFriendshipsRepo();
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -459,6 +471,14 @@ export function ProfileModal() {
 
   // Handle navigating to DMs
   const handleOpenDM = () => {
+    if (!sessionGate.hasAuthenticatedSession) {
+      showToast(
+        sessionGate.shouldShowSignInRequired
+          ? 'Sign in required to open direct messages.'
+          : 'Preparing your session...',
+      );
+      return;
+    }
     const targetUserId =
       (typeof selectedUser?.id === 'string' && selectedUser.id.trim().length > 0
         ? selectedUser.id.trim()
