@@ -9,6 +9,11 @@ import {
   normalizeProfileViewDedupeWindowMs,
 } from './profileViewMetrics';
 import { resolveProfileIdentityFields } from './profileIdentity';
+import {
+  buildReportDedupeKey,
+  evaluateReportSubmissionPolicy,
+  normalizeReportStatus,
+} from './reportingPolicy';
 
 type JsonRecord = Record<string, unknown>;
 type JsonArray = unknown[];
@@ -31,6 +36,9 @@ const FUEL_PACK_COSTS: Record<number, { gems: number; cash: number }> = {
 };
 
 const TRUSTED_GEM_PURCHASE_AMOUNTS = new Set([100, 550, 1200, 2500]);
+const REPORT_REASON_MAX_LENGTH = 80;
+const REPORT_DETAILS_MAX_LENGTH = 1000;
+const REPORT_CONTEXT_MAX_LENGTH = 4000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1634,6 +1642,195 @@ function readPublicProfileSummaryItem(ctx: any, userId: string | null | undefine
   const normalizedUserId = readString(userId);
   if (!normalizedUserId) return null;
   return ctx.db.publicProfileSummaryItem.userId.find(normalizedUserId) ?? null;
+}
+
+function normalizeOptionalText(value: unknown, maxLength: number): string | null {
+  const normalized = readString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length > maxLength) {
+    throw new Error(`Text must be ${maxLength} characters or fewer.`);
+  }
+
+  return normalized;
+}
+
+function readReportTargetType(value: unknown): 'user' | 'message' | 'live' {
+  const normalized = readString(value)?.toLowerCase();
+  if (normalized === 'user' || normalized === 'message' || normalized === 'live') {
+    return normalized;
+  }
+  throw new Error('targetType must be one of: user, message, live.');
+}
+
+function readReportRow(ctx: any, reportId: string) {
+  return ctx.db.reportItem.id.find(reportId) ?? null;
+}
+
+function upsertReportRow(ctx: any, row: {
+  id: string;
+  reporterUserId: string;
+  targetType: string;
+  targetId: string;
+  reportedUserId: string | null;
+  surface: string;
+  reason: string;
+  details: string | null;
+  contextJson: string;
+  status: string;
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+  reviewedAtIsoUtc: string | null;
+  createdAt: unknown;
+  updatedAt: unknown;
+}) {
+  const existing = ctx.db.reportItem.id.find(row.id);
+  if (existing) {
+    ctx.db.reportItem.id.delete(row.id);
+  }
+
+  ctx.db.reportItem.insert({
+    id: row.id,
+    reporterUserId: row.reporterUserId,
+    targetType: row.targetType,
+    targetId: row.targetId,
+    reportedUserId: row.reportedUserId,
+    surface: row.surface,
+    reason: row.reason,
+    details: row.details,
+    contextJson: row.contextJson,
+    status: row.status,
+    reviewedBy: row.reviewedBy,
+    reviewNotes: row.reviewNotes,
+    reviewedAtIsoUtc: row.reviewedAtIsoUtc,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+}
+
+function appendReportModerationAction(
+  ctx: any,
+  input: {
+    actionType: 'report_submitted' | 'report_reviewed';
+    actorUserId: string;
+    reportId: string;
+    targetUserId?: string | null;
+    payload: JsonRecord;
+  },
+): void {
+  ctx.db.moderationActionItem.insert({
+    id: makeId(ctx, 'moderation-report'),
+    actorUserId: input.actorUserId,
+    targetUserId: readString(input.targetUserId) ?? '',
+    item: toJsonString({
+      actionType: input.actionType,
+      reportId: input.reportId,
+      ...input.payload,
+    }),
+    createdAt: ctx.timestamp,
+  });
+}
+
+function buildReportModerationContext(
+  ctx: any,
+  input: {
+    targetType: 'user' | 'message' | 'live';
+    targetId: string;
+    surface: string;
+    clientContext: JsonRecord;
+  },
+): { context: JsonRecord; reportedUserId: string | null } {
+  const clientContext = { ...input.clientContext };
+  const context: JsonRecord = {
+    ...clientContext,
+    surface: input.surface,
+    targetType: input.targetType,
+    targetId: input.targetId,
+  };
+
+  if (input.targetType === 'user') {
+    const profileSummary = readPublicProfileSummaryItem(ctx, input.targetId);
+    if (profileSummary) {
+      context.reportedUsername = readString(profileSummary.username) ?? input.targetId;
+      context.reportedAvatarUrl = readString(profileSummary.avatarUrl);
+      context.reportedBadge = readString(profileSummary.badge);
+    }
+    return {
+      context,
+      reportedUserId: input.targetId,
+    };
+  }
+
+  if (input.targetType === 'message') {
+    const messageRow = ctx.db.globalMessageItem.id.find(input.targetId);
+    if (messageRow) {
+      const payload = parseJsonRecord(messageRow.item);
+      const senderId = readString(payload.senderId);
+      const senderProfile = readPublicProfileSummaryItem(ctx, senderId);
+      context.roomId = readString(messageRow.roomId) ?? readString(payload.roomId) ?? 'global';
+      context.messageText = readString(payload.text);
+      context.messageExcerpt = readString(payload.text)?.slice(0, 240) ?? null;
+      context.messageType = readString(payload.type);
+      context.messageCreatedAtMs = timestampToMs(messageRow.createdAt);
+      context.messageSenderUserId = senderId;
+      context.messageSenderUsername =
+        readString(senderProfile?.username) ??
+        readString(payload.user) ??
+        readString(payload.username);
+      return {
+        context,
+        reportedUserId: senderId,
+      };
+    }
+
+    return {
+      context,
+      reportedUserId: normalizeOptionalText(clientContext.reportedUserId, 200),
+    };
+  }
+
+  const live = readLiveItem(ctx, input.targetId);
+  const hostUserId =
+    readString(live.hostUserId) ??
+    readString(live.ownerUserId) ??
+    readString((normalizeHostList(live.hosts)[0] ?? {}).id);
+  const hostProfile = readPublicProfileSummaryItem(ctx, hostUserId);
+  context.liveTitle = readString(live.title) ?? readString(clientContext.liveTitle);
+  context.liveViewerCount = toNonNegativeInt(live.viewers, toNonNegativeInt(clientContext.liveViewerCount));
+  context.liveHostUserId = hostUserId;
+  context.liveHostUsername =
+    readString(hostProfile?.username) ??
+    readString((normalizeHostList(live.hosts)[0] ?? {}).username) ??
+    readString(clientContext.liveHostUsername);
+  context.liveEndedAt = toNonNegativeInt(live.endedAt);
+  return {
+    context,
+    reportedUserId: hostUserId,
+  };
+}
+
+function listExistingReportPolicyRecords(ctx: any): Array<{
+  reporterUserId: string;
+  dedupeKey: string;
+  createdAtMs: number;
+}> {
+  const rows: Array<{ reporterUserId: string; dedupeKey: string; createdAtMs: number }> = [];
+  for (const row of ctx.db.reportItem.iter()) {
+    rows.push({
+      reporterUserId: readString(row.reporterUserId) ?? '',
+      dedupeKey: buildReportDedupeKey({
+        reporterUserId: readString(row.reporterUserId) ?? '',
+        targetType: readString(row.targetType) ?? '',
+        targetId: readString(row.targetId) ?? '',
+        surface: readString(row.surface) ?? '',
+        reason: readString(row.reason) ?? '',
+      }),
+      createdAtMs: timestampToMs(row.createdAt),
+    });
+  }
+  return rows;
 }
 
 function readAccountStateItem(ctx: any, userId: string): JsonRecord {
@@ -5224,6 +5421,170 @@ export const grantAdminCurrency = schemaDb.reducer(
       balanceAfter: toJsonString(nextState),
       metadata: toJsonString({ source: 'grantAdminCurrency' }),
       createdAt: ctx.timestamp,
+    });
+  },
+);
+
+export const submitReport = schemaDb.reducer(
+  {
+    id: t.option(t.string()),
+    targetType: t.string(),
+    targetId: t.string(),
+    surface: t.string(),
+    reason: t.string(),
+    details: t.option(t.string()),
+    contextJson: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const reporterUserId = resolveCallerUserId(ctx);
+    const targetType = readReportTargetType(args.targetType);
+    const targetId = normalizeOptionalText(args.targetId, 200);
+    const surface = normalizeOptionalText(args.surface, 80);
+    const reason = normalizeOptionalText(args.reason, REPORT_REASON_MAX_LENGTH);
+    const details = normalizeOptionalText(args.details, REPORT_DETAILS_MAX_LENGTH);
+    const clientContext = parseJsonRecord(args.contextJson);
+
+    if (!targetId) {
+      throw new Error('targetId is required.');
+    }
+    if (!surface) {
+      throw new Error('surface is required.');
+    }
+    if (!reason) {
+      throw new Error('reason is required.');
+    }
+
+    const dedupeKey = buildReportDedupeKey({
+      reporterUserId,
+      targetType,
+      targetId,
+      surface,
+      reason,
+    });
+    const decision = evaluateReportSubmissionPolicy({
+      reporterUserId,
+      dedupeKey,
+      nowMs: nowMs(ctx),
+      existingReports: listExistingReportPolicyRecords(ctx),
+    });
+    if (!decision.allowed) {
+      unauthorized(decision.message);
+    }
+
+    const derivedContext = buildReportModerationContext(ctx, {
+      targetType,
+      targetId,
+      surface,
+      clientContext,
+    });
+    const reportedUserId =
+      derivedContext.reportedUserId ??
+      normalizeOptionalText(clientContext.reportedUserId, 200);
+    const contextJson = toJsonString({
+      ...derivedContext.context,
+      reportedUserId,
+    });
+    if (contextJson.length > REPORT_CONTEXT_MAX_LENGTH) {
+      throw new Error(`Report context exceeds ${REPORT_CONTEXT_MAX_LENGTH} characters.`);
+    }
+
+    const reportId = normalizeOptionalText(args.id, 200) ?? makeId(ctx, 'report');
+    upsertReportRow(ctx, {
+      id: reportId,
+      reporterUserId,
+      targetType,
+      targetId,
+      reportedUserId,
+      surface,
+      reason,
+      details,
+      contextJson,
+      status: 'open',
+      reviewedBy: null,
+      reviewNotes: null,
+      reviewedAtIsoUtc: null,
+      createdAt: ctx.timestamp,
+      updatedAt: ctx.timestamp,
+    });
+
+    appendReportModerationAction(ctx, {
+      actionType: 'report_submitted',
+      actorUserId: reporterUserId,
+      reportId,
+      targetUserId: reportedUserId,
+      payload: {
+        status: 'open',
+        targetType,
+        targetId,
+        surface,
+        reason,
+        details,
+      },
+    });
+  },
+);
+
+export const reviewReport = schemaDb.reducer(
+  {
+    reportId: t.string(),
+    status: t.string(),
+    reviewNotes: t.option(t.string()),
+  },
+  (ctx, args) => {
+    const adminUserId = assertAdmin(ctx);
+    const reportId = normalizeOptionalText(args.reportId, 200);
+    const nextStatus = normalizeReportStatus(args.status);
+    const nextReviewNotes = normalizeOptionalText(args.reviewNotes, REPORT_DETAILS_MAX_LENGTH);
+
+    if (!reportId) {
+      throw new Error('reportId is required.');
+    }
+    if (!nextStatus) {
+      throw new Error('status must be one of: open, triaged, resolved, dismissed.');
+    }
+
+    const existing = readReportRow(ctx, reportId);
+    if (!existing) {
+      throw new Error(`report_not_found:${reportId}`);
+    }
+
+    const previousStatus = readString(existing.status) ?? 'open';
+    const previousReviewNotes = readString(existing.reviewNotes);
+    if (previousStatus === nextStatus && previousReviewNotes === nextReviewNotes) {
+      throw new Error('Report review update must change status or notes.');
+    }
+
+    upsertReportRow(ctx, {
+      id: readString(existing.id) ?? reportId,
+      reporterUserId: readString(existing.reporterUserId) ?? '',
+      targetType: readString(existing.targetType) ?? '',
+      targetId: readString(existing.targetId) ?? '',
+      reportedUserId: readString(existing.reportedUserId),
+      surface: readString(existing.surface) ?? '',
+      reason: readString(existing.reason) ?? '',
+      details: readString(existing.details),
+      contextJson: readString(existing.contextJson) ?? '{}',
+      status: nextStatus,
+      reviewedBy: adminUserId,
+      reviewNotes: nextReviewNotes,
+      reviewedAtIsoUtc: new Date(nowMs(ctx)).toISOString(),
+      createdAt: existing.createdAt ?? ctx.timestamp,
+      updatedAt: ctx.timestamp,
+    });
+
+    appendReportModerationAction(ctx, {
+      actionType: 'report_reviewed',
+      actorUserId: adminUserId,
+      reportId,
+      targetUserId: readString(existing.reportedUserId),
+      payload: {
+        previousStatus,
+        nextStatus,
+        reviewNotes: nextReviewNotes,
+        targetType: readString(existing.targetType),
+        targetId: readString(existing.targetId),
+        surface: readString(existing.surface),
+      },
     });
   },
 );

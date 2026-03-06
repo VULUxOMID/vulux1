@@ -32,6 +32,7 @@ const PROFILE_VIEW_METRIC_LABEL_V2 = 'Corrected v2 (deduped, self-view excluded)
 const CURRENT_IDENTITY_PROVIDER = 'clerk';
 const EVENT_METRICS_TIMEZONE = 'UTC';
 const EVENT_ACTIVE_WINDOW_MS = 120_000;
+const VIEW_ADMIN_ROLE_NAMES = new Set(['admin', 'super_admin', 'superadmin', 'owner']);
 function readString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
@@ -292,6 +293,27 @@ function requireViewCallerUserId(ctx: any): string {
     return findMappedCallerUserId(ctx) ?? readViewCallerIdentity(ctx) ?? '__unmapped__';
 }
 
+function callerHasAdminRoleForView(ctx: any): boolean {
+    const callerUserId = findMappedCallerUserId(ctx) ?? readLegacyCallerUserIdFromClaims(ctx);
+    if (!callerUserId) {
+        return false;
+    }
+
+    for (const row of ctx.db.userRole.iter()) {
+        if (readString(row.vuluUserId) !== callerUserId) {
+            continue;
+        }
+
+        const role = readString(row.role)?.toLowerCase();
+        const enabled = readBoolean((row as Record<string, unknown>)?.enabled);
+        if (role && VIEW_ADMIN_ROLE_NAMES.has(role) && enabled !== false) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 export const spacetimedb = schema({
     socialUserItem: table(
         { public: false },
@@ -393,6 +415,26 @@ export const spacetimedb = schema({
             targetUserId: t.string().index(),
             item: t.string(), // json
             createdAt: t.timestamp(),
+        }
+    ),
+    reportItem: table(
+        { public: false },
+        {
+            id: t.string().primaryKey(),
+            reporterUserId: t.string().index(),
+            targetType: t.string().index(),
+            targetId: t.string().index(),
+            reportedUserId: t.option(t.string()),
+            surface: t.string().index(),
+            reason: t.string(),
+            details: t.option(t.string()),
+            contextJson: t.string(),
+            status: t.string().index(),
+            reviewedBy: t.option(t.string()),
+            reviewNotes: t.option(t.string()),
+            reviewedAtIsoUtc: t.option(t.string()),
+            createdAt: t.timestamp(),
+            updatedAt: t.timestamp(),
         }
     ),
     // Compatibility shim for legacy identity mapping rows that still exist in hosted maincloud.
@@ -833,6 +875,24 @@ const myProfileViewMetricsRow = t.row('MyProfileViewMetricsRow', {
     updatedAt: t.timestamp(),
 });
 
+const reportViewRow = t.row('ReportViewRow', {
+    id: t.string(),
+    reporterUserId: t.string(),
+    targetType: t.string(),
+    targetId: t.string(),
+    reportedUserId: t.option(t.string()),
+    surface: t.string(),
+    reason: t.string(),
+    details: t.option(t.string()),
+    contextJson: t.string(),
+    status: t.string(),
+    reviewedBy: t.option(t.string()),
+    reviewNotes: t.option(t.string()),
+    reviewedAtIsoUtc: t.option(t.string()),
+    createdAt: t.timestamp(),
+    updatedAt: t.timestamp(),
+});
+
 export const publicProfileSummary = spacetimedb.anonymousView(
     { name: 'public_profile_summary', public: true },
     t.array(publicProfileSummaryRow),
@@ -1084,6 +1144,71 @@ export const myRoles = spacetimedb.view(
             });
         }
 
+        return rows;
+    },
+);
+
+export const mySubmittedReports = spacetimedb.view(
+    { name: 'my_submitted_reports', public: true },
+    t.array(reportViewRow),
+    (ctx) => {
+        const callerUserId = requireViewCallerUserId(ctx);
+        const rows = [];
+        for (const row of ctx.db.reportItem.iter()) {
+            if (readString(row.reporterUserId) !== callerUserId) {
+                continue;
+            }
+
+            rows.push({
+                id: row.id,
+                reporterUserId: row.reporterUserId,
+                targetType: row.targetType,
+                targetId: row.targetId,
+                reportedUserId: row.reportedUserId,
+                surface: row.surface,
+                reason: row.reason,
+                details: row.details,
+                contextJson: row.contextJson,
+                status: row.status,
+                reviewedBy: row.reviewedBy,
+                reviewNotes: row.reviewNotes,
+                reviewedAtIsoUtc: row.reviewedAtIsoUtc,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+            });
+        }
+        return rows;
+    },
+);
+
+export const adminReportQueue = spacetimedb.view(
+    { name: 'admin_report_queue', public: true },
+    t.array(reportViewRow),
+    (ctx) => {
+        if (!callerHasAdminRoleForView(ctx)) {
+            return [];
+        }
+
+        const rows = [];
+        for (const row of ctx.db.reportItem.iter()) {
+            rows.push({
+                id: row.id,
+                reporterUserId: row.reporterUserId,
+                targetType: row.targetType,
+                targetId: row.targetId,
+                reportedUserId: row.reportedUserId,
+                surface: row.surface,
+                reason: row.reason,
+                details: row.details,
+                contextJson: row.contextJson,
+                status: row.status,
+                reviewedBy: row.reviewedBy,
+                reviewNotes: row.reviewNotes,
+                reviewedAtIsoUtc: row.reviewedAtIsoUtc,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+            });
+        }
         return rows;
     },
 );

@@ -7,6 +7,7 @@ export type AdminTabId =
   | 'incidents'
   | 'users'
   | 'moderation'
+  | 'reports'
   | 'finance'
   | 'events'
   | 'contentOps'
@@ -28,6 +29,7 @@ export const ADMIN_TABS: AdminTabDefinition[] = [
   { id: 'incidents', label: 'Incidents', icon: 'alert-circle', requiredAction: 'VIEW_INCIDENT_CENTER' },
   { id: 'users', label: 'Users', icon: 'people', requiredAction: 'VIEW_USERS' },
   { id: 'moderation', label: 'Moderation', icon: 'shield-checkmark', requiredAction: 'VIEW_MESSAGE_LOGS' },
+  { id: 'reports', label: 'Reports', icon: 'flag', requiredAction: 'VIEW_MESSAGE_LOGS' },
   { id: 'finance', label: 'Finance', icon: 'wallet', requiredAction: 'EDIT_WALLET' },
   { id: 'events', label: 'Events', icon: 'calendar', requiredAction: 'EDIT_EVENT_CONFIG' },
   { id: 'contentOps', label: 'Content Ops', icon: 'play', requiredAction: 'UNPUBLISH_CONTENT' },

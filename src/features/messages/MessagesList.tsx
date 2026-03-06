@@ -13,6 +13,7 @@ type MessagesListProps = {
   onPressConversation: (conversation: Conversation) => void;
   onMarkAsRead?: (conversation: Conversation) => void;
   onViewProfile: (userId: string) => void;
+  onReportUser?: (conversation: Conversation) => void;
   onScroll: (event: any) => void;
   onEndReached?: () => void;
 };
@@ -24,6 +25,7 @@ function MessagesListComponent({
   onPressConversation,
   onMarkAsRead,
   onViewProfile,
+  onReportUser,
   onScroll,
   onEndReached,
 }: MessagesListProps) {
@@ -35,9 +37,10 @@ function MessagesListComponent({
         onPress={onPressConversation}
         onMarkAsRead={onMarkAsRead}
         onViewProfile={onViewProfile}
+        onReportUser={onReportUser}
       />
     ),
-    [onMarkAsRead, onPressConversation, onViewProfile, socialUsersById],
+    [onMarkAsRead, onPressConversation, onReportUser, onViewProfile, socialUsersById],
   );
 
   if (loading) {

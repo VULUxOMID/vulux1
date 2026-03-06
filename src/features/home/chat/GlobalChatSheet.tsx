@@ -24,11 +24,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { AppText, AppTextInput } from '../../../components';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { MessageActionMenu } from '../../chat/MessageActionMenu';
+import { MessageActionMenu, type ActionId } from '../../chat/MessageActionMenu';
 import { hapticConfirm, hapticTap, hapticWarn } from '../../../utils/haptics';
 import { normalizeImageUri } from '../../../utils/imageSource';
-
-type ActionId = 'reply' | 'copy' | 'edit' | 'delete';
+import { ReportComposerModal } from '../../reports/ReportComposerModal';
+import { submitReport } from '../../reports/reportingClient';
+import { toast } from '../../../components/Toast';
 
 type AnchorRect = {
   x: number;
@@ -142,6 +143,8 @@ export function GlobalChatSheet({
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<AnchorRect | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
@@ -646,6 +649,13 @@ export function GlobalChatSheet({
         hapticTap();
         Clipboard.setStringAsync(msg.text);
         closeMenu();
+        return;
+      }
+
+      if (id === 'report') {
+        hapticWarn();
+        closeMenu();
+        setReportModalVisible(true);
       }
     },
     [closeMenu, selectedMessage, setMessages, editing, onDeleteMessage]
@@ -1054,6 +1064,50 @@ export function GlobalChatSheet({
           onClose={closeMenu}
           onAction={handleAction}
           onReaction={handleReaction}
+        />
+
+        <ReportComposerModal
+          visible={reportModalVisible}
+          loading={reportSubmitting}
+          title="Report message"
+          subtitle="This sends the message and sender context into the moderation review queue."
+          onClose={() => {
+            if (reportSubmitting) {
+              return;
+            }
+            setReportModalVisible(false);
+          }}
+          onSubmit={async ({ reason, details }) => {
+            if (!selectedMessage) {
+              return;
+            }
+
+            setReportSubmitting(true);
+            try {
+              await submitReport({
+                targetType: 'message',
+                targetId: selectedMessage.id,
+                surface: 'global_chat',
+                reason,
+                details,
+                context: {
+                  roomId: 'global',
+                  messageText: selectedMessage.text,
+                  messageExcerpt: selectedMessage.text.slice(0, 240),
+                  messageSenderUserId: selectedMessage.senderId ?? null,
+                  messageSenderUsername: selectedMessage.user,
+                  messageCreatedAtMs: selectedMessage.createdAt,
+                },
+              });
+              setReportModalVisible(false);
+              hapticConfirm();
+              toast.success('Report sent.');
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'Unable to send report.');
+            } finally {
+              setReportSubmitting(false);
+            }
+          }}
         />
       </View>
     </Modal>

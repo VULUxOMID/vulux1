@@ -69,6 +69,7 @@ import {
   unlockOrientationSafely,
 } from '../../utils/webRuntimeCompat';
 import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
+import { submitReport } from '../reports/reportingClient';
 import {
   type LiveControlEvent,
   derivePendingHostInviteIds,
@@ -477,8 +478,8 @@ export default function LiveScreen() {
 
   const pendingInviteHostUserId = useMemo(() => {
     if (!hasPendingHostInvite) return null;
-    return liveRoom?.hostUser?.id ?? liveRoom?.ownerUserId ?? null;
-  }, [hasPendingHostInvite, liveRoom?.hostUser?.id, liveRoom?.ownerUserId]);
+    return liveRoom?.hostUser?.id ?? null;
+  }, [hasPendingHostInvite, liveRoom?.hostUser?.id]);
 
   const pendingInviteHostUser = useMemo(() => {
     if (!hasPendingHostInvite || !liveRoom) return null;
@@ -489,8 +490,8 @@ export default function LiveScreen() {
 
   const canRespondToHostRequest = useMemo(() => {
     if (!pendingHostRequestUserId) return false;
-    return isHost || (Boolean(userId) && liveRoom?.ownerUserId === userId);
-  }, [isHost, liveRoom?.ownerUserId, pendingHostRequestUserId, userId]);
+    return isHost || (Boolean(userId) && liveRoom?.hostUser?.id === userId);
+  }, [isHost, liveRoom?.hostUser?.id, pendingHostRequestUserId, userId]);
 
   const pendingHostRequestDisplayName = useMemo(
     () => formatLiveParticipantLabel(pendingHostRequestUser, pendingHostRequestUserId, 'Viewer'),
@@ -533,7 +534,7 @@ export default function LiveScreen() {
   useEffect(() => {
     if (!liveRoom) return;
     
-    let timeoutId: NodeJS.Timeout | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     
     const interval = setInterval(() => {
       // Randomly pick a streamer to be "speaking"
@@ -546,7 +547,7 @@ export default function LiveScreen() {
         // Clear after a bit - track timeout for cleanup
         timeoutId = setTimeout(() => {
           setSpeakingUserIds([]);
-        }, 1500) as unknown as NodeJS.Timeout;
+        }, 1500);
       }
     }, 3000);
     
@@ -1825,19 +1826,43 @@ export default function LiveScreen() {
 
                     <SheetButton
                       label={isSubmittingReport ? 'Submitting...' : 'Report'}
-                      onPress={() => {
+                      onPress={async () => {
                         if (isSubmittingReport) return;
+                        if (!reportReason) {
+                          toast.error('Choose a reason before sending the report.');
+                          return;
+                        }
                         setIsSubmittingReport(true);
-                        Keyboard.dismiss();
-                        setActiveSheet(null);
-                        setReportStep(1);
-                        setReportReason(null);
-                        setReportDetails('');
-                        setReportScreenshot(null);
-                        setTimeout(() => {
-                          setIsSubmittingReport(false);
+                        try {
+                          await submitReport({
+                            targetType: 'live',
+                            targetId: currentLiveId || routeLiveId,
+                            surface: 'live_room',
+                            reason: reportReason,
+                            details: reportDetails,
+                            context: {
+                              liveTitle: liveRoom?.title ?? activeLive?.title ?? null,
+                              liveHostUserId: liveRoom?.hostUser?.id ?? null,
+                              liveHostUsername: liveRoom?.hostUser?.username ?? liveRoom?.hostUser?.name ?? null,
+                              liveViewerCount:
+                                (liveRoom?.watchers?.length ?? 0) +
+                                (liveRoom?.streamers?.length ?? 0) +
+                                (liveRoom?.hostUser ? 1 : 0),
+                              evidenceLocalUri: reportScreenshot,
+                            },
+                          });
+                          Keyboard.dismiss();
+                          setActiveSheet(null);
+                          setReportStep(1);
+                          setReportReason(null);
+                          setReportDetails('');
+                          setReportScreenshot(null);
                           toast.success('Report sent.');
-                        }, 400);
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : 'Unable to send report.');
+                        } finally {
+                          setIsSubmittingReport(false);
+                        }
                       }}
                     />
                 </Pressable>
