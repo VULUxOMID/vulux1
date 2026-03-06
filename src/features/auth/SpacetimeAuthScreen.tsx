@@ -663,6 +663,7 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
         firstName: profileParts.firstName,
         lastName: profileParts.lastName,
         unsafeMetadata: {
+          username: profileParts.username,
           displayName: profileParts.displayName,
         },
       });

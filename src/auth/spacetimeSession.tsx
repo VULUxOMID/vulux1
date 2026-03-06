@@ -60,6 +60,13 @@ type SessionUser = {
   delete: () => Promise<void>;
 };
 
+function readMetadataString(metadata: unknown, key: string): string | null {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+  return normalizeString((metadata as Record<string, unknown>)[key]);
+}
+
 type CachedVuluSession = {
   clerkUserId: string;
   issuer: string | null;
@@ -301,10 +308,23 @@ function buildSessionUser(
       ? [{ emailAddress: primaryEmailAddress }]
       : [];
 
+  const metadataUsername =
+    readMetadataString(user.unsafeMetadata, 'username') ??
+    readMetadataString(user.publicMetadata, 'username');
+  const firstName = normalizeString(user.firstName);
+  const lastName = normalizeString(user.lastName);
+  const metadataDisplayName =
+    readMetadataString(user.unsafeMetadata, 'displayName') ??
+    readMetadataString(user.publicMetadata, 'displayName');
+  const derivedFullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+
   return {
     id: normalizeString(user.id) ?? '',
-    username: normalizeString(user.username),
-    fullName: normalizeString(user.fullName),
+    username: normalizeString(user.username) ?? metadataUsername,
+    fullName:
+      normalizeString(user.fullName) ??
+      (derivedFullName.length > 0 ? derivedFullName : null) ??
+      metadataDisplayName,
     imageUrl: normalizeString(user.imageUrl),
     primaryEmailAddress: primaryEmailAddress ? { emailAddress: primaryEmailAddress } : null,
     emailAddresses,
