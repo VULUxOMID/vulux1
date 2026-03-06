@@ -138,8 +138,7 @@ function hasMeaningfulProfileData(profile: UserProfile): boolean {
     profile.username.trim() ||
     profile.avatarUrl.trim() ||
     profile.photos.length > 0 ||
-    (profile.statusMessage?.trim() ?? '').length > 0 ||
-    profile.presenceStatus !== 'offline',
+    (profile.statusMessage?.trim() ?? '').length > 0,
   );
 }
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveProfileIdentityFields } from './profileIdentity';
+import { mergeAccountStateProfileIdentity, resolveProfileIdentityFields } from './profileIdentity';
 
 test('empty payload identity fields preserve existing profile identity', () => {
   const resolved = resolveProfileIdentityFields(
@@ -82,4 +82,29 @@ test('social fallback uses existing profile identity instead of userId-style fal
   assert.equal(resolved.username, 'vulu.studio');
   assert.equal(resolved.displayName, 'Vulu Studio');
   assert.equal(resolved.name, 'Vulu Studio');
+});
+
+test('account state profile merge preserves existing identity when incoming fields are blank', () => {
+  const merged = mergeAccountStateProfileIdentity(
+    {
+      username: '',
+      displayName: '',
+      name: '',
+      avatarUrl: '',
+      presenceStatus: 'busy',
+    },
+    {
+      username: 'misa',
+      displayName: 'Misachan',
+      name: 'Misachan',
+      avatarUrl: 'https://example.com/avatar.jpg',
+      presenceStatus: 'online',
+    },
+  );
+
+  assert.equal(merged.username, 'misa');
+  assert.equal(merged.displayName, 'Misachan');
+  assert.equal(merged.name, 'Misachan');
+  assert.equal(merged.avatarUrl, 'https://example.com/avatar.jpg');
+  assert.equal(merged.presenceStatus, 'busy');
 });

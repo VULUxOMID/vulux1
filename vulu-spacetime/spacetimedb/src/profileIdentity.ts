@@ -64,3 +64,24 @@ export function resolveProfileIdentityFields(
     name,
   };
 }
+
+export function mergeAccountStateProfileIdentity(
+  incomingProfile: JsonRecord,
+  existingProfile: JsonRecord,
+): JsonRecord {
+  const identity = resolveProfileIdentityFields(incomingProfile, existingProfile, {});
+  const avatarUrl =
+    firstDefinedString([
+      incomingProfile.avatarUrl,
+      existingProfile.avatarUrl,
+    ]) ?? '';
+
+  return {
+    ...existingProfile,
+    ...incomingProfile,
+    username: identity.username,
+    displayName: identity.displayName,
+    name: identity.name,
+    avatarUrl,
+  };
+}

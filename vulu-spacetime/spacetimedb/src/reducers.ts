@@ -15,7 +15,7 @@ import {
   evaluateProfileViewDecision,
   normalizeProfileViewDedupeWindowMs,
 } from './profileViewMetrics';
-import { resolveProfileIdentityFields } from './profileIdentity';
+import { mergeAccountStateProfileIdentity, resolveProfileIdentityFields } from './profileIdentity';
 import {
   buildReportDedupeKey,
   evaluateReportSubmissionPolicy,
@@ -2940,7 +2940,7 @@ function applySocialStatus(ctx: any, payload: JsonRecord): void {
 
 function applyAccountStateUpsert(ctx: any, payload: JsonRecord): void {
   const userId = readString(payload.userId);
-  const updates = isRecord(payload.updates) ? payload.updates : {};
+  const updates = isRecord(payload.updates) ? { ...payload.updates } : {};
   if (!userId) return;
 
   if (Object.prototype.hasOwnProperty.call(updates, 'wallet')) {
@@ -2948,6 +2948,10 @@ function applyAccountStateUpsert(ctx: any, payload: JsonRecord): void {
   }
 
   const currentState = readAccountStateItem(ctx, userId);
+  if (isRecord(updates.profile)) {
+    const existingProfile = isRecord(currentState.profile) ? currentState.profile : {};
+    updates.profile = mergeAccountStateProfileIdentity(updates.profile, existingProfile);
+  }
   const nextState = deepMerge(currentState, updates);
   writeAccountStateItem(ctx, userId, nextState);
 }
