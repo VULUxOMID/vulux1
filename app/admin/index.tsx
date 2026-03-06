@@ -22,6 +22,7 @@ import { HealthTab } from '../../src/features/admin/tabs/HealthTab';
 import { IncidentCenterTab } from '../../src/features/admin/tabs/IncidentCenterTab';
 import { UsersTab } from '../../src/features/admin/tabs/UsersTab';
 import { MessageModerationTab } from '../../src/features/admin/tabs/MessageModerationTab';
+import { ReportsTab } from '../../src/features/admin/tabs/ReportsTab';
 import { FinanceTab } from '../../src/features/admin/tabs/FinanceTab';
 import { EventsTab } from '../../src/features/admin/tabs/EventsTab';
 import { ContentOpsTab } from '../../src/features/admin/tabs/ContentOpsTab';
@@ -73,6 +74,7 @@ export default function AdminMainScreen() {
                 );
             case 'users': return <UsersTab />;
             case 'moderation': return <MessageModerationTab />;
+            case 'reports': return <ReportsTab />;
             case 'finance': return <FinanceTab />;
             case 'events': return <EventsTab />;
             case 'contentOps': return <ContentOpsTab />;

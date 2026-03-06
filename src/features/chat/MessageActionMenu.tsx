@@ -5,7 +5,7 @@ import { Animated, Dimensions, Modal, Platform, Pressable, StyleSheet, View } fr
 import { AppText } from '../../components';
 import { colors, radius, spacing } from '../../theme';
 
-type ActionId = 'reply' | 'copy' | 'edit' | 'delete';
+export type ActionId = 'reply' | 'copy' | 'edit' | 'delete' | 'report';
 
 type AnchorRect = {
   x: number;
@@ -44,6 +44,8 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
     if (isMine) {
       base.push({ id: 'edit', label: 'Edit', icon: 'pencil-outline', tone: 'primary' });
       base.push({ id: 'delete', label: 'Delete', icon: 'trash-outline', tone: 'danger' });
+    } else {
+      base.push({ id: 'report', label: 'Report', icon: 'flag-outline', tone: 'danger' });
     }
     return base;
   }, [isMine]);

@@ -30,6 +30,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { AppText } from '../../src/components';
 import { colors, radius, spacing } from '../../src/theme';
 import { MessageActionMenu } from '../../src/features/chat/MessageActionMenu';
+import type { ActionId } from '../../src/features/chat/MessageActionMenu';
 import { hapticConfirm, hapticTap, hapticWarn } from '../../src/utils/haptics';
 import { toast } from '../../src/components/Toast';
 import { useProfile } from '../../src/context/ProfileContext';
@@ -41,9 +42,6 @@ import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBu
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { subscribeConversation } from '../../src/lib/spacetime';
 import { uploadMediaAsset } from '../../src/utils/mediaUpload';
-
-// Types
-type ActionId = 'reply' | 'copy' | 'edit' | 'delete';
 
 type AnchorRect = {
   x: number;

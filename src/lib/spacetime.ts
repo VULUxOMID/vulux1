@@ -294,6 +294,7 @@ const IDENTITY_SUBSCRIPTION_VIEWS = [
   'my_roles',
   'my_profile',
   'my_account_state',
+  'my_submitted_reports',
   'my_profile_view_metrics',
   'my_notifications',
   'my_friendships',
@@ -323,11 +324,13 @@ const SUBSCRIPTION_VIEW_REFRESH_SCOPES: Record<string, string[]> = {
   my_roles: ['roles'],
   my_profile: ['profile'],
   my_account_state: ['wallet', 'profile'],
+  my_submitted_reports: ['reports', 'moderation'],
   my_profile_view_metrics: ['profile', 'counts'],
   my_notifications: ['notifications', 'counts'],
   my_friendships: ['friendships', 'social', 'search', 'counts'],
   my_conversations: ['messages', 'conversations', 'counts'],
   my_conversation_messages: ['messages', 'conversations', 'global_messages', 'counts'],
+  admin_report_queue: ['reports', 'moderation'],
 };
 
 const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
@@ -346,11 +349,13 @@ const SUBSCRIPTION_VIEW_TABLE_KEYS: Record<string, string[]> = {
   my_roles: ['myRoles', 'my_roles'],
   my_profile: ['myProfile', 'my_profile'],
   my_account_state: ['myAccountState', 'my_account_state'],
+  my_submitted_reports: ['mySubmittedReports', 'my_submitted_reports'],
   my_profile_view_metrics: ['myProfileViewMetrics', 'my_profile_view_metrics'],
   my_notifications: ['myNotifications', 'my_notifications'],
   my_friendships: ['myFriendships', 'my_friendships'],
   my_conversations: ['myConversations', 'my_conversations'],
   my_conversation_messages: ['myConversationMessages', 'my_conversation_messages'],
+  admin_report_queue: ['adminReportQueue', 'admin_report_queue'],
 };
 
 type TableListenerBinding = {
@@ -1320,10 +1325,21 @@ export function subscribeBootstrap(): () => void {
 }
 
 export function subscribeAuthIdentity(): () => void {
-  const views = ['my_identity', 'my_roles', 'my_profile'];
+  const views = ['my_identity', 'my_roles', 'my_profile', 'my_submitted_reports'];
   const spec = buildScopedSubscriptionSpec(
     'auth_identity',
     'auth-identity',
+    views,
+    [buildViewSelectQueries(views)],
+  );
+  return activateScopedSubscription(spec);
+}
+
+export function subscribeAdminReports(): () => void {
+  const views = ['admin_report_queue'];
+  const spec = buildScopedSubscriptionSpec(
+    'admin_reports',
+    'admin-reports',
     views,
     [buildViewSelectQueries(views)],
   );

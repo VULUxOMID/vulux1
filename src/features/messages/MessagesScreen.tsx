@@ -9,7 +9,7 @@ import { useFriends } from '../../context';
 import { useProfile } from '../../context/ProfileContext';
 import { useRepositories } from '../../data/provider';
 import type { Conversation, SocialUser } from '../../data/contracts';
-import { hapticTap } from '../../utils/haptics';
+import { hapticConfirm, hapticTap, hapticWarn } from '../../utils/haptics';
 import { FriendLivePreviewSheet } from '../home/FriendLivePreviewSheet';
 import { type LiveItem } from '../home/LiveSection';
 import { type Friend } from '../home/ActivitiesRow';
@@ -25,6 +25,9 @@ import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import type { LiveUser } from '../liveroom/types';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { subscribeFriends } from '../../lib/spacetime';
+import { ReportComposerModal } from '../reports/ReportComposerModal';
+import { submitReport } from '../reports/reportingClient';
+import { toast } from '../../components/Toast';
 
 export default function MessagesScreen() {
   const router = useRouter();
@@ -102,6 +105,8 @@ export default function MessagesScreen() {
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [previewLive, setPreviewLive] = useState<LiveItem | null>(null);
   const [otherFriendsInLive, setOtherFriendsInLive] = useState<Friend[]>([]);
+  const [reportConversation, setReportConversation] = useState<Conversation | null>(null);
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -231,6 +236,11 @@ export default function MessagesScreen() {
     [showProfile, socialUsers, socialUsersById],
   );
 
+  const handleReportUser = useCallback((conversation: Conversation) => {
+    hapticWarn();
+    setReportConversation(conversation);
+  }, []);
+
   return (
     <AppScreen noPadding>
       <MessagesHeader
@@ -248,6 +258,7 @@ export default function MessagesScreen() {
         onPressConversation={handleConversationPress}
         onMarkAsRead={handleMarkConversationRead}
         onViewProfile={handleViewProfile}
+        onReportUser={handleReportUser}
         onScroll={handleScroll}
         onEndReached={handleLoadMoreConversations}
       />
@@ -260,6 +271,50 @@ export default function MessagesScreen() {
         friend={selectedFriend}
         live={previewLive}
         otherFriendsInLive={otherFriendsInLive}
+      />
+
+      <ReportComposerModal
+        visible={Boolean(reportConversation)}
+        loading={isSubmittingReport}
+        title="Report user"
+        subtitle="This sends the user and DM context into the moderation review queue."
+        onClose={() => {
+          if (isSubmittingReport) {
+            return;
+          }
+          setReportConversation(null);
+        }}
+        onSubmit={async ({ reason, details }) => {
+          if (!reportConversation) {
+            return;
+          }
+
+          const otherUser = socialUsersById[reportConversation.otherUserId];
+          setIsSubmittingReport(true);
+          try {
+            await submitReport({
+              targetType: 'user',
+              targetId: reportConversation.otherUserId,
+              surface: 'dm_conversation_list',
+              reason,
+              details,
+              context: {
+                conversationId: reportConversation.id,
+                otherUserId: reportConversation.otherUserId,
+                otherUsername: otherUser?.username ?? null,
+                lastMessageText: reportConversation.lastMessage.text ?? '',
+                lastMessageCreatedAtMs: reportConversation.lastMessage.createdAt,
+              },
+            });
+            setReportConversation(null);
+            hapticConfirm();
+            toast.success('Report sent.');
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Unable to send report.');
+          } finally {
+            setIsSubmittingReport(false);
+          }
+        }}
       />
     </AppScreen>
   );

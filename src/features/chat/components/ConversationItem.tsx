@@ -17,6 +17,7 @@ interface ConversationItemProps {
   onClose?: (conversation: Conversation) => void;
   onFavorite?: (conversation: Conversation) => void;
   onViewProfile?: (userId: string) => void;
+  onReportUser?: (conversation: Conversation) => void;
 }
 
 function hasImageUri(value: string | undefined | null): value is string {
@@ -47,6 +48,7 @@ export function ConversationItem({
   onClose,
   onFavorite,
   onViewProfile,
+  onReportUser,
 }: ConversationItemProps) {
   const [menuVisible, setMenuVisible] = useState(false);
   const otherUser = useMemo<SocialUser>(() => {
@@ -293,6 +295,14 @@ export function ConversationItem({
             <View style={styles.menuGroup}>
               <Pressable
                 style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => handleMenuOption(() => onReportUser?.(conversation))}
+              >
+                <Ionicons name="flag-outline" size={20} color={colors.accentDanger} />
+                <AppText style={[styles.menuItemText, styles.menuItemTextDanger]}>Report user</AppText>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
                 onPress={() => handleMenuOption(() => onMarkAsRead?.(conversation))}
               >
                 <Ionicons name="eye" size={20} color={colors.textSecondary} />
@@ -481,6 +491,9 @@ const styles = StyleSheet.create({
   menuItemText: {
     fontSize: 16,
     color: colors.textPrimary,
+  },
+  menuItemTextDanger: {
+    color: colors.accentDanger,
   },
 });
 
