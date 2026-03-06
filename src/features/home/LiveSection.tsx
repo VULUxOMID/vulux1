@@ -29,15 +29,7 @@ export type LiveItem = {
   hosts: HostUser[];
 };
 
-export function LiveSection({
-  lives,
-  loading = false,
-  showHeader = true,
-}: {
-  lives: LiveItem[];
-  loading?: boolean;
-  showHeader?: boolean;
-}) {
+export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loading?: boolean }) {
   const router = useRouter();
 
   // Sorting Logic:
@@ -69,14 +61,12 @@ export function LiveSection({
   };
 
   return (
-    <View style={[styles.liveSection, !showHeader && styles.liveSectionCompact]}>
-      {showHeader ? (
-        <View style={styles.liveHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-            <AppText variant="h3">Live now</AppText>
-          </View>
+    <View style={styles.liveSection}>
+      <View style={styles.liveHeader}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <AppText variant="h3">Live now</AppText>
         </View>
-      ) : null}
+      </View>
       {loading ? (
         <LiveSectionSkeleton />
       ) : (
@@ -374,9 +364,6 @@ const styles = StyleSheet.create({
   liveSection: {
     gap: spacing.md,
     marginTop: spacing.xl,
-  },
-  liveSectionCompact: {
-    marginTop: 0,
   },
   liveHeader: {
     flexDirection: 'row',

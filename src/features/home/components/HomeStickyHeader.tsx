@@ -7,7 +7,6 @@ import { HomeSearchBar } from './HomeSearchBar';
 
 type HomeStickyHeaderProps = {
   topInset?: number;
-  title?: string;
   searchAnim: Animated.Value;
   searchText: string;
   onChangeSearchText: (text: string) => void;
@@ -15,7 +14,6 @@ type HomeStickyHeaderProps = {
 
 export const HomeStickyHeader = React.memo(function HomeStickyHeader({
   topInset = 0,
-  title,
   searchAnim,
   searchText,
   onChangeSearchText,
@@ -23,7 +21,7 @@ export const HomeStickyHeader = React.memo(function HomeStickyHeader({
   return (
     <View style={[styles.stickyHeader, { paddingTop: spacing.sm + topInset }]}
     >
-      <TopBar title={title} />
+      <TopBar />
       <Animated.View
         style={[
           styles.searchBarContainer,
