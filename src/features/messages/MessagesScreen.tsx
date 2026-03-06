@@ -28,20 +28,31 @@ import { isSpacetimeViewActive, subscribeFriends } from '../../lib/spacetime';
 import { ReportComposerModal } from '../reports/ReportComposerModal';
 import { submitReport } from '../reports/reportingClient';
 import { toast } from '../../components/Toast';
+import { resolveSessionGate } from '../../auth/sessionGate';
+import { resolveMessagesEmptyState } from './messagesAuthUi';
 
 export default function MessagesScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
-  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
+  const { userId, hasSession, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { showProfile } = useProfile();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
   const [conversationLimit, setConversationLimit] = useState(50);
-  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
+  const sessionGate = resolveSessionGate({
+    isAuthLoaded,
+    hasSession,
+    isSignedIn,
+    userId,
+    isFocused,
+    isAppActive,
+  });
+  const canReadMessages = sessionGate.hasAuthenticatedSession;
+  const canSyncMessages = sessionGate.canRunForegroundQueries;
   const socialUsers = useMemo<SocialUser[]>(
-    () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : []),
-    [queriesEnabled, socialRepo],
+    () => (canReadMessages ? socialRepo.listUsers({ limit: 300 }) : []),
+    [canReadMessages, socialRepo],
   );
   const socialUsersById = useMemo<Record<string, SocialUser>>(() => {
     return socialUsers.reduce<Record<string, SocialUser>>((acc, user) => {
@@ -50,31 +61,31 @@ export default function MessagesScreen() {
     }, {});
   }, [socialUsers]);
   const lives = useMemo<LiveItem[]>(
-    () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
-    [liveRepo, queriesEnabled],
+    () => (canReadMessages ? liveRepo.listLives({ limit: 120 }) : []),
+    [canReadMessages, liveRepo],
   );
   const liveIds = useMemo(() => new Set(lives.map((live) => live.id)), [lives]);
   const friendIds = useMemo(() => friends.map((friend) => friend.id), [friends]);
   const livePresence = useMemo(
     () =>
-      queriesEnabled
+      canReadMessages
         ? liveRepo.listPresence({
           limit: 500,
           userIds: friendIds,
         })
         : [],
-    [friendIds, liveRepo, queriesEnabled],
+    [canReadMessages, friendIds, liveRepo],
   );
   const friendActivities = useMemo<FriendLiveActivity[]>(
     () => {
-      if (!queriesEnabled) return [];
+      if (!canReadMessages) return [];
       return buildFriendActivitiesFromPresence({
         friendIds,
         liveIds,
         livePresence,
       });
     },
-    [friendIds, liveIds, livePresence, queriesEnabled],
+    [canReadMessages, friendIds, liveIds, livePresence],
   );
   const validFriendActivities = useMemo(
     () =>
@@ -88,14 +99,18 @@ export default function MessagesScreen() {
     [friends, validFriendActivities],
   );
   const conversationsQueryArgs = useMemo(
-    () => (queriesEnabled ? { limit: conversationLimit } : undefined),
-    [conversationLimit, queriesEnabled],
+    () => (canReadMessages ? { limit: conversationLimit } : undefined),
+    [canReadMessages, conversationLimit],
   );
   const conversations = useMemo(
-    () => (queriesEnabled ? messagesRepo.listConversations(conversationsQueryArgs) : []),
-    [conversationsQueryArgs, messagesRepo, queriesEnabled],
+    () => (canReadMessages ? messagesRepo.listConversations(conversationsQueryArgs) : []),
+    [canReadMessages, conversationsQueryArgs, messagesRepo],
   );
-  const conversationsLoading = queriesEnabled && !isSpacetimeViewActive('my_conversations');
+  const conversationsLoading = canSyncMessages && !isSpacetimeViewActive('my_conversations');
+  const emptyState = useMemo(
+    () => resolveMessagesEmptyState(canReadMessages, sessionGate),
+    [canReadMessages, sessionGate],
+  );
 
   useEffect(() => {
     setConversationLimit(50);
@@ -115,16 +130,16 @@ export default function MessagesScreen() {
   }, []);
 
   useEffect(() => {
-    if (!queriesEnabled) return;
+    if (!canSyncMessages) return;
     requestBackendRefresh();
-  }, [queriesEnabled]);
+  }, [canSyncMessages]);
 
   useEffect(() => {
-    if (!queriesEnabled) {
+    if (!canSyncMessages) {
       return;
     }
     return subscribeFriends();
-  }, [queriesEnabled]);
+  }, [canSyncMessages]);
 
   const handleFriendPress = useCallback(
     (friend: Friend) => {
@@ -255,12 +270,8 @@ export default function MessagesScreen() {
         conversations={listData}
         socialUsersById={socialUsersById}
         loading={conversationsLoading}
-        emptyTitle={queriesEnabled ? 'No DMs yet' : 'Sign in to view DMs'}
-        emptySubtitle={
-          queriesEnabled
-            ? 'Open a profile or a friend to start your first conversation.'
-            : 'Authentication is required to load your messages.'
-        }
+        emptyTitle={emptyState.title}
+        emptySubtitle={emptyState.subtitle}
         onPressConversation={handleConversationPress}
         onMarkAsRead={handleMarkConversationRead}
         onViewProfile={handleViewProfile}

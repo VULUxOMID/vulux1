@@ -42,6 +42,7 @@ import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBu
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { subscribeConversation } from '../../src/lib/spacetime';
 import { uploadMediaAsset } from '../../src/utils/mediaUpload';
+import { resolveSessionGate } from '../../src/auth/sessionGate';
 
 type AnchorRect = {
   x: number;
@@ -519,7 +520,23 @@ export default function ChatDetailScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
-  const { userId: viewerUserId, isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
+  const {
+    userId: viewerUserId,
+    hasSession,
+    isLoaded: isAuthLoaded,
+    isSignedIn,
+    getToken,
+  } = useAuth();
+  const sessionGate = resolveSessionGate({
+    isAuthLoaded,
+    hasSession,
+    isSignedIn,
+    userId: viewerUserId,
+    isFocused,
+    isAppActive,
+  });
+  const hasAuthenticatedSession = sessionGate.hasAuthenticatedSession;
+  const canSyncThread = sessionGate.canRunForegroundQueries;
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -527,8 +544,8 @@ export default function ChatDetailScreen() {
   const { cash: walletCash, spendCash, addCash } = useWallet();
   const { messages: messagesRepo, social: socialRepo } = useRepositories();
   const socialUsers = useMemo<SocialUser[]>(
-    () => (isAuthLoaded && isSignedIn ? socialRepo.listUsers({ limit: 300 }) : []),
-    [isAuthLoaded, isSignedIn, socialRepo],
+    () => (hasAuthenticatedSession ? socialRepo.listUsers({ limit: 300 }) : []),
+    [hasAuthenticatedSession, socialRepo],
   );
   const routeUserToken = useMemo(() => normalizeRouteUserToken(userId), [userId]);
   const resolvedRouteUser = useMemo(() => {
@@ -580,15 +597,15 @@ export default function ChatDetailScreen() {
   const previousMessageCountRef = useRef(0);
   const scrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const repositoryThreadMessages = useMemo(() => {
-    if (!resolvedOtherUserId) return [];
+    if (!hasAuthenticatedSession || !resolvedOtherUserId) return [];
     return messagesRepo
       .listThreadSeedMessages(resolvedOtherUserId)
       .map((message) => normalizeThreadMessage(message as unknown as Record<string, any>, viewerUserId ?? null))
       .sort((a, b) => a.createdAt - b.createdAt);
-  }, [messagesRepo, resolvedOtherUserId, viewerUserId]);
+  }, [hasAuthenticatedSession, messagesRepo, resolvedOtherUserId, viewerUserId]);
   const conversationRows = useMemo(
-    () => messagesRepo.listConversations(),
-    [messagesRepo],
+    () => (hasAuthenticatedSession ? messagesRepo.listConversations() : []),
+    [hasAuthenticatedSession, messagesRepo],
   );
 
   const messages = useMemo(() => {
@@ -664,19 +681,16 @@ export default function ChatDetailScreen() {
   }, [clearScheduledScrolls, resolvedOtherUserId]);
 
   useEffect(() => {
-    if (!isFocused || !isAppActive || !isAuthLoaded || !isSignedIn || !viewerUserId) {
+    if (!canSyncThread || !viewerUserId) {
       return;
     }
 
     requestBackendRefresh();
-  }, [isAppActive, isAuthLoaded, isFocused, isSignedIn, viewerUserId]);
+  }, [canSyncThread, viewerUserId]);
 
   useEffect(() => {
     if (
-      !isFocused ||
-      !isAppActive ||
-      !isAuthLoaded ||
-      !isSignedIn ||
+      !canSyncThread ||
       !viewerUserId ||
       !resolvedOtherUserId
     ) {
@@ -687,10 +701,7 @@ export default function ChatDetailScreen() {
       windowMs: 7 * 24 * 60 * 60 * 1000,
     });
   }, [
-    isAppActive,
-    isAuthLoaded,
-    isFocused,
-    isSignedIn,
+    canSyncThread,
     resolvedOtherUserId,
     viewerUserId,
   ]);
@@ -887,6 +898,10 @@ export default function ChatDetailScreen() {
   };
 
   const handleSend = () => {
+    if (!hasAuthenticatedSession || !viewerUserId) {
+      toast.error('Sign in required to send messages.');
+      return;
+    }
     setComposerMenuVisible(false);
     const v = text.trim();
     if (!v) return;

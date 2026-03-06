@@ -4,6 +4,9 @@ import React, { useMemo } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { AppScreen, AppText } from '../src/components';
+import { toast } from '../src/components/Toast';
+import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { resolveSessionGate } from '../src/auth/sessionGate';
 import { useFriends } from '../src/context';
 import { useProfile } from '../src/context/ProfileContext';
 import type { LiveUser } from '../src/features/liveroom/types';
@@ -15,6 +18,18 @@ function hasImageUri(value: string | undefined | null): value is string {
 
 export default function FriendsScreen() {
   const router = useRouter();
+  const {
+    userId,
+    hasSession,
+    isLoaded: isAuthLoaded,
+    isSignedIn,
+  } = useSessionAuth();
+  const sessionGate = resolveSessionGate({
+    isAuthLoaded,
+    hasSession,
+    isSignedIn,
+    userId,
+  });
   const { friends } = useFriends();
   const { showProfile } = useProfile();
 
@@ -42,6 +57,14 @@ export default function FriendsScreen() {
   };
 
   const openChat = (friendId: string) => {
+    if (!sessionGate.hasAuthenticatedSession) {
+      toast.error(
+        sessionGate.shouldShowSignInRequired
+          ? 'Sign in required to open direct messages.'
+          : 'Preparing your session...',
+      );
+      return;
+    }
     const normalizedFriendId = friendId.trim();
     if (!normalizedFriendId) return;
     router.push(`/chat/${encodeURIComponent(normalizedFriendId)}`);
