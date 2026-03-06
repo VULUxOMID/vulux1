@@ -141,7 +141,10 @@ function buildSuccessMessage(transaction: WalletTransactionRecord): string {
     case 'purchase_fuel_pack':
       return `Added ${transaction.deltaFuel}m fuel and updated your wallet balance.`;
     case 'claim_ad_reward':
+    case 'claim_earn_ad_reward':
       return `Reward added: +${transaction.deltaGems} Gems.`;
+    case 'claim_earn_streak_reward':
+      return `Streak reward added: +${transaction.deltaGems} Gems.`;
     case 'convert_gems_to_cash':
       return `Exchanged ${Math.abs(transaction.deltaGems)} Gems for ${transaction.deltaCash} Cash.`;
     case 'convert_cash_to_gems':
@@ -158,7 +161,10 @@ function buildSuccessTitle(transaction: WalletTransactionRecord): string {
     case 'purchase_fuel_pack':
       return 'Refuel complete';
     case 'claim_ad_reward':
+    case 'claim_earn_ad_reward':
       return 'Reward claimed';
+    case 'claim_earn_streak_reward':
+      return 'Streak updated';
     case 'convert_gems_to_cash':
     case 'convert_cash_to_gems':
       return 'Exchange complete';

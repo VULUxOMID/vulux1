@@ -13,6 +13,8 @@ import AppendModerationActionReducer from "../append_moderation_action_reducer";
 import BanLiveUserReducer from "../ban_live_user_reducer";
 import BoostLiveReducer from "../boost_live_reducer";
 import ClaimAdRewardReducer from "../claim_ad_reward_reducer";
+import ClaimEarnAdWallRewardReducer from "../claim_earn_ad_wall_reward_reducer";
+import ClaimEarnStreakRewardReducer from "../claim_earn_streak_reward_reducer";
 import ConvertCashToGemsReducer from "../convert_cash_to_gems_reducer";
 import ConvertGemsToCashReducer from "../convert_gems_to_cash_reducer";
 import ConvertGemsToFuelReducer from "../convert_gems_to_fuel_reducer";
@@ -58,6 +60,8 @@ export type AppendModerationActionParams = __Infer<typeof AppendModerationAction
 export type BanLiveUserParams = __Infer<typeof BanLiveUserReducer>;
 export type BoostLiveParams = __Infer<typeof BoostLiveReducer>;
 export type ClaimAdRewardParams = __Infer<typeof ClaimAdRewardReducer>;
+export type ClaimEarnAdWallRewardParams = __Infer<typeof ClaimEarnAdWallRewardReducer>;
+export type ClaimEarnStreakRewardParams = __Infer<typeof ClaimEarnStreakRewardReducer>;
 export type ConvertCashToGemsParams = __Infer<typeof ConvertCashToGemsReducer>;
 export type ConvertGemsToCashParams = __Infer<typeof ConvertGemsToCashReducer>;
 export type ConvertGemsToFuelParams = __Infer<typeof ConvertGemsToFuelReducer>;
@@ -95,4 +99,3 @@ export type TrackProfileViewParams = __Infer<typeof TrackProfileViewReducer>;
 export type UnbanLiveUserParams = __Infer<typeof UnbanLiveUserReducer>;
 export type UpdateLiveParams = __Infer<typeof UpdateLiveReducer>;
 export type UpsertAccountStateParams = __Infer<typeof UpsertAccountStateReducer>;
-
