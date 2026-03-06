@@ -8,6 +8,7 @@ import {
   evaluateProfileViewDecision,
   normalizeProfileViewDedupeWindowMs,
 } from './profileViewMetrics';
+import { resolveProfileIdentityFields } from './profileIdentity';
 
 type JsonRecord = Record<string, unknown>;
 type JsonArray = unknown[];
@@ -1554,11 +1555,13 @@ function refreshPublicProfileSummaryItem(ctx: any, userId: string): void {
   ]);
 
   const username =
-    readString(profile.username) ??
-    readString(profile.displayName) ??
-    readString(social.username) ??
-    readString(social.name) ??
-    userId;
+    resolveFriendlyUserLabel(userId, [
+      readString(profile.username),
+      readString(profile.displayName),
+      readString(profile.name),
+      readString(social.username),
+      readString(social.name),
+    ]);
 
   const avatarUrl =
     readString(profile.avatarUrl) ??
@@ -2559,9 +2562,14 @@ function upsertSocialFromProfile(ctx: any, payload: JsonRecord): void {
   const userId = readString(payload.userId);
   if (!userId) return;
 
-  const username = readString(payload.username) ?? readString(payload.displayName) ?? userId;
-  const avatarUrl = readString(payload.avatarUrl) ?? '';
   const existingSocial = readSocialUserItem(ctx, userId);
+  const existingProfile = readUserProfileItem(ctx, userId);
+  const identity = resolveProfileIdentityFields(payload, existingProfile, existingSocial);
+  const avatarUrl =
+    readString(payload.avatarUrl) ??
+    readString(existingProfile.avatarUrl) ??
+    readString(existingSocial.avatarUrl) ??
+    '';
   const incomingStatusText = readString(payload.statusText) ?? readString(payload.statusMessage);
   const statusText =
     incomingStatusText ??
@@ -2593,13 +2601,13 @@ function upsertSocialFromProfile(ctx: any, payload: JsonRecord): void {
       ? readString(existingSocial.lastSeen) ?? toIsoString(nowMs(ctx))
       : readString(existingSocial.lastSeen) ?? '');
 
-  const existingProfile = readUserProfileItem(ctx, userId);
   const nextProfile = {
     ...existingProfile,
     ...payload,
     userId,
-    username,
-    displayName: readString(payload.displayName) ?? username,
+    username: identity.username,
+    displayName: identity.displayName,
+    name: identity.name,
     avatarUrl,
     statusText,
     statusMessage:
@@ -2611,7 +2619,8 @@ function upsertSocialFromProfile(ctx: any, payload: JsonRecord): void {
   const nextSocial = {
     ...existingSocial,
     userId,
-    username,
+    username: identity.username,
+    name: identity.name,
     avatarUrl,
     status,
     statusText,
@@ -2629,6 +2638,8 @@ function applySocialStatus(ctx: any, payload: JsonRecord): void {
   if (!userId) return;
 
   const existing = readSocialUserItem(ctx, userId);
+  const existingProfile = readUserProfileItem(ctx, userId);
+  const identity = resolveProfileIdentityFields(payload, existingProfile, existing);
   const status = resolveSocialPresenceStatus(
     [
       {
@@ -2658,8 +2669,13 @@ function applySocialStatus(ctx: any, payload: JsonRecord): void {
   const next = {
     ...existing,
     userId,
-    username: readString(payload.username) ?? existing.username ?? userId,
-    avatarUrl: readString(payload.avatarUrl) ?? existing.avatarUrl ?? '',
+    username: identity.username,
+    name: identity.name,
+    avatarUrl:
+      readString(payload.avatarUrl) ??
+      readString(existing.avatarUrl) ??
+      readString(existingProfile.avatarUrl) ??
+      '',
     status,
     statusText,
     statusMessage: statusText,
