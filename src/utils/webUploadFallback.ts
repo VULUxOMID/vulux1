@@ -3,6 +3,50 @@ type FileSystemLike = {
   createUploadTask?: unknown;
 };
 
+function normalizeHost(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = normalizeHost(hostname);
+  return normalized === 'localhost' || normalized === '127.0.0.1';
+}
+
+function isPrivateNetworkHost(hostname: string): boolean {
+  const normalized = normalizeHost(hostname);
+  return (
+    /^10\./.test(normalized) ||
+    /^192\.168\./.test(normalized) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)
+  );
+}
+
+export function resolveUploadSignerBaseUrl(
+  baseUrl: string,
+  currentHostname?: string | null,
+): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  try {
+    const resolved = new URL(trimmed);
+    const current = currentHostname ? normalizeHost(currentHostname) : '';
+    if (
+      current &&
+      isLoopbackHost(current) &&
+      isPrivateNetworkHost(resolved.hostname) &&
+      normalizeHost(resolved.hostname) !== current
+    ) {
+      resolved.hostname = current;
+    }
+    return resolved.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
 export function shouldUseWebUploadFallback(
   platformOs: string,
   fileSystem: FileSystemLike,

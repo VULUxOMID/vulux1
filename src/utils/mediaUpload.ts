@@ -5,6 +5,7 @@ import { getBackendTokenTemplate } from '../config/backendToken';
 import { recordUploadedMediaAsset } from './spacetimePersistence';
 import {
   readUploadBlob,
+  resolveUploadSignerBaseUrl,
   shouldUseWebUploadFallback,
   uploadBlobToSignedUrl,
 } from './webUploadFallback';
@@ -50,7 +51,12 @@ function trim(value: string | undefined): string | undefined {
 }
 
 function getUploadSignerBaseUrl(): string {
-  return trim(process.env.EXPO_PUBLIC_UPLOAD_SIGNER_URL) ?? '';
+  const configured = trim(process.env.EXPO_PUBLIC_UPLOAD_SIGNER_URL) ?? '';
+  const currentHostname =
+    typeof window !== 'undefined' && window.location?.hostname
+      ? window.location.hostname
+      : undefined;
+  return resolveUploadSignerBaseUrl(configured, currentHostname);
 }
 
 async function parseSignerJson(response: Response): Promise<any> {
