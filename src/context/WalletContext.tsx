@@ -7,7 +7,11 @@ import {
 import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
 import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
 import {
+  fetchMyWalletBalance,
+} from '../data/adapters/backend/walletQueries';
+import {
   hasAuthoritativeWalletForUser,
+  resolveAuthoritativeWalletState,
   shouldRefreshWalletFromBackendEvent,
   shouldRefreshWalletFromSpacetimeEvent,
 } from './walletHydration';
@@ -156,6 +160,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const walletUserIdRef = useRef<string | null>(null);
   const walletHydratedRef = useRef(walletHydrated);
   const walletStateAvailableRef = useRef(walletStateAvailable);
+  const withdrawalHistoryRef = useRef<WithdrawalRequest[]>(withdrawalHistory);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -168,6 +173,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     walletStateAvailableRef.current = walletStateAvailable;
   }, [walletStateAvailable]);
+
+  useEffect(() => {
+    withdrawalHistoryRef.current = withdrawalHistory;
+  }, [withdrawalHistory]);
 
   // Keep refs in sync with state
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
@@ -246,10 +255,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       );
       if (!active) return;
 
-      const walletState =
-        accountState?.wallet && typeof accountState.wallet === 'object'
-          ? (accountState.wallet as Record<string, unknown>)
-          : null;
+      const walletBalance = fetchMyWalletBalance();
+      const resolvedWalletState = resolveAuthoritativeWalletState(
+        accountState,
+        walletBalance,
+        userId,
+      );
+      const walletState = resolvedWalletState.walletState;
       const hasWalletState = walletState !== null;
 
       if (!hasWalletState && attempt < WALLET_HYDRATION_MAX_RETRIES) {
@@ -302,13 +314,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
 
       walletUserIdRef.current = userId;
-      setWalletStateAvailable(hasWalletState);
+      setWalletStateAvailable(resolvedWalletState.walletStateAvailable);
       const normalizedWalletState = walletState ?? {};
 
       const nextGems = toNonNegativeNumber(normalizedWalletState.gems);
       const nextCash = toNonNegativeNumber(normalizedWalletState.cash);
       const nextFuel = toNonNegativeNumber(normalizedWalletState.fuel);
-      const nextWithdrawalHistory = parseWithdrawalHistory(normalizedWalletState.withdrawalHistory);
+      const nextWithdrawalHistory =
+        resolvedWalletState.source === 'account_state'
+          ? parseWithdrawalHistory(normalizedWalletState.withdrawalHistory)
+          : withdrawalHistoryRef.current;
 
       gemsRef.current = nextGems;
       cashRef.current = nextCash;

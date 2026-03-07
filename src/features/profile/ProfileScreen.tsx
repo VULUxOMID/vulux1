@@ -214,6 +214,7 @@ export default function ProfileScreen() {
       walletHydrated,
       walletStateAvailable,
     );
+    const walletLoadingLabel = walletHydrated ? 'Syncing' : 'Loading';
 
     switch (activeTab) {
       case 'wallet':
@@ -224,6 +225,7 @@ export default function ProfileScreen() {
               gemsBalance={gems}
               fuelBalance={fuel}
               isLoading={!showAuthoritativeWallet}
+              loadingLabel={walletLoadingLabel}
               rank={currentRank}
               isRankPublic={isRankPublic}
               onToggleRankPrivacy={setIsRankPublic}
