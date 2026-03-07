@@ -7,6 +7,7 @@ import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { colors, spacing } from '../../theme';
 import { useWallet } from '../../context';
 import { FuelGauge } from '../liveroom/components/FuelGauge';
+import { getTopBarWalletChipState } from './topBarWalletDisplay';
 
 type TopBarProps = {
   title?: string;
@@ -20,24 +21,22 @@ function DefaultTopActions() {
     walletHydrated,
     walletStateAvailable,
   );
-
-  const formatCash = (amount: number) => {
-    if (amount >= 1000) {
-      return `${(amount / 1000).toFixed(1)}k`;
-    }
-    return amount.toString();
-  };
+  const walletChipState = getTopBarWalletChipState({
+    cash,
+    fuel,
+    showAuthoritativeWallet,
+  });
 
   return (
     <>
       <FuelGauge
         fuelMinutes={fuel}
-        labelOverride={showAuthoritativeWallet ? undefined : '--'}
+        labelOverride={walletChipState.fuelLabelOverride}
         onPress={() => router.push('/(tabs)/shop')}
       />
       <CurrencyPill
         icon="cash"
-        label={showAuthoritativeWallet ? formatCash(cash) : '--'}
+        label={walletChipState.cashLabel}
         color={colors.accentSuccess}
         onPress={() => router.push('/(tabs)/shop')}
         showDot
