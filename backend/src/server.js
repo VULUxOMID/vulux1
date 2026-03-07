@@ -8,6 +8,7 @@ import {
   generatePresignedUrl,
   getPublicUrlForObjectKey,
   isR2Configured,
+  uploadObject,
 } from "./r2.js";
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
 
@@ -64,7 +65,7 @@ const rateLimitBuckets = new Map();
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
 }
 
 function sendJson(res, statusCode, payload) {
@@ -97,6 +98,24 @@ async function readJsonBody(req) {
   } catch {
     throw new Error("Request body must be valid JSON.");
   }
+}
+
+async function readRawBody(req, maxBytes) {
+  const chunks = [];
+  let totalBytes = 0;
+
+  for await (const chunk of req) {
+    const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += bufferChunk.length;
+    if (Number.isFinite(maxBytes) && maxBytes > 0 && totalBytes > maxBytes) {
+      throw Object.assign(new Error(`Upload exceeds allowed size (${maxBytes} bytes).`), {
+        statusCode: 413,
+      });
+    }
+    chunks.push(bufferChunk);
+  }
+
+  return Buffer.concat(chunks);
 }
 
 function getBearerToken(req) {
@@ -170,6 +189,11 @@ function buildObjectKey(userId, mediaType, contentType) {
   const normalizedMediaType = resolveMediaPrefix(normalizedUserId, mediaType);
   const extension = extensionForContentType(contentType);
   return `uploads/${normalizedUserId}/${normalizedMediaType}-${randomUUID()}.${extension}`;
+}
+
+function buildProxyUploadUrl(req, objectKey) {
+  const origin = `http://${req.headers.host ?? "localhost"}`;
+  return `${origin}/upload?objectKey=${encodeURIComponent(objectKey)}`;
 }
 
 function getClientIp(req) {
@@ -272,6 +296,23 @@ function validateUploadRequest(body) {
   };
 }
 
+function resolveMaxBytesForContentType(contentType) {
+  if (typeof contentType !== "string" || !contentType.trim()) {
+    return MAX_BYTES_BY_MEDIA_TYPE.media;
+  }
+
+  if (contentType.startsWith("image/")) {
+    return MAX_BYTES_BY_MEDIA_TYPE.image;
+  }
+  if (contentType.startsWith("audio/")) {
+    return MAX_BYTES_BY_MEDIA_TYPE.audio;
+  }
+  if (contentType.startsWith("video/")) {
+    return MAX_BYTES_BY_MEDIA_TYPE.video;
+  }
+  return MAX_BYTES_BY_MEDIA_TYPE.media;
+}
+
 const server = http.createServer(async (req, res) => {
   setCorsHeaders(res);
 
@@ -322,6 +363,7 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, {
         url: presignedUrl,
+        webUploadUrl: buildProxyUploadUrl(req, objectKey),
         objectKey,
         publicUrl: getPublicUrlForObjectKey(objectKey),
         requiredHeaders: {
@@ -340,6 +382,74 @@ const server = http.createServer(async (req, res) => {
         error instanceof Error && error.message
           ? error.message
           : "Failed to create upload URL.";
+      sendJson(res, statusCode, { error: message });
+      return;
+    }
+  }
+
+  if (req.method === "PUT" && url.pathname === "/upload") {
+    try {
+      if (!isR2Configured) {
+        sendJson(res, 503, { error: "Storage is not fully configured." });
+        return;
+      }
+
+      const viewerUserId = await requireViewerUserId(req);
+      const objectKey = url.searchParams.get("objectKey")?.trim() ?? "";
+      if (!objectKey) {
+        sendJson(res, 400, { error: "objectKey is required." });
+        return;
+      }
+
+      const expectedPrefix = `uploads/${sanitizeUserId(viewerUserId)}/`;
+      if (!objectKey.startsWith(expectedPrefix)) {
+        sendJson(res, 403, { error: "Upload target does not belong to this user." });
+        return;
+      }
+
+      const contentType =
+        typeof req.headers["content-type"] === "string"
+          ? req.headers["content-type"].trim().toLowerCase()
+          : "";
+      if (!contentType) {
+        sendJson(res, 400, { error: "Content-Type header is required." });
+        return;
+      }
+
+      validateMimeForMediaType("media", contentType);
+      const maxBytes = resolveMaxBytesForContentType(contentType);
+      const body = await readRawBody(req, maxBytes);
+      if (!body.length) {
+        sendJson(res, 400, { error: "Upload body is empty." });
+        return;
+      }
+
+      assertWithinRateLimit(viewerUserId, getClientIp(req));
+      await uploadObject({
+        objectKey,
+        contentType,
+        body,
+      });
+
+      console.log(
+        `[upload-signer] proxy-upload user=${viewerUserId} bytes=${body.length} type=${contentType} key=${objectKey}`,
+      );
+
+      sendJson(res, 200, {
+        ok: true,
+        objectKey,
+        publicUrl: getPublicUrlForObjectKey(objectKey),
+      });
+      return;
+    } catch (error) {
+      const statusCode =
+        error && typeof error === "object" && "statusCode" in error
+          ? Number(error.statusCode) || 500
+          : 500;
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to upload file.";
       sendJson(res, statusCode, { error: message });
       return;
     }

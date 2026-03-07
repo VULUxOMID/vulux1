@@ -67,3 +67,22 @@ export async function generatePresignedUrl({
   });
   return url;
 }
+
+export async function uploadObject({
+  objectKey,
+  contentType,
+  body,
+}) {
+  if (!isR2Configured) {
+    throw new Error("Storage not configured");
+  }
+
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: objectKey,
+    Body: body,
+    ...(contentType ? { ContentType: contentType } : {}),
+  });
+
+  await s3Client.send(command);
+}

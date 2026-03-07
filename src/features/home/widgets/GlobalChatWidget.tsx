@@ -1,9 +1,8 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../../components';
-import { colors, radius, spacing } from '../../../theme';
+import { colors } from '../../../theme';
 import { HomePillCard } from './HomePillCard';
 
 export function GlobalChatWidget({
@@ -74,18 +73,6 @@ export function GlobalChatWidget({
     </View>
   );
 
-  const collapsedContent = (
-    <View style={styles.collapsedContent}>
-      <AppText style={styles.collapsedContentText}>
-        {isChatOpen ? 'Chat is open' : 'Tap to open and chat with everyone'}
-      </AppText>
-      <View style={styles.openIndicator}>
-        <Ionicons name="chatbubble-ellipses-outline" size={14} color={colors.textSecondary} />
-        <AppText style={styles.openIndicatorText}>Open</AppText>
-      </View>
-    </View>
-  );
-
   return (
     <Animated.View style={[styles.animatedWrap, { transform: [{ scale }] }]}>
       <HomePillCard
@@ -94,7 +81,6 @@ export function GlobalChatWidget({
         onPress={handleOpen}
         onPressIn={runPop}
         rightContent={rightContent}
-        collapsedContent={collapsedContent}
         showChevron={true}
       />
       <View
@@ -134,34 +120,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 11,
-  },
-  collapsedContent: {
-    paddingBottom: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  collapsedContentText: {
-    flex: 1,
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  openIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
-  },
-  openIndicatorText: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    fontWeight: '600',
   },
   persistentBorder: {
     ...StyleSheet.absoluteFillObject,

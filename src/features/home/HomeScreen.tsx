@@ -527,7 +527,7 @@ export default function HomeScreen() {
           loading={friendsLoading}
         />
         <HomeWidgetStack
-          onOpenChat={() => setShowChat(true)}
+          onOpenChat={() => setShowChat((current) => !current)}
           onAnnounceWinner={handleWinnerAnnouncement}
           friends={friends}
           activePlayersNow={activePlayersNow}
