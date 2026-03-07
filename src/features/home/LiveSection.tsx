@@ -8,6 +8,7 @@ import { colors, radius, spacing } from '../../theme';
 import { hapticTap } from '../../utils/haptics';
 import { useLive } from '../../context/LiveContext';
 import { LiveSectionSkeleton } from './components/LiveSectionSkeleton';
+import { LIVE_EMPTY_STATE, shouldShowLiveEmptyState } from './liveEmptyState';
 
 export type HostUser = {
   id?: string;
@@ -43,6 +44,10 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
 
   const featured = sortedLives[0];
   const gridLives = sortedLives.slice(1);
+  const showEmptyState = shouldShowLiveEmptyState({
+    loading,
+    livesCount: sortedLives.length,
+  });
 
   const { switchLiveRoom } = useLive();
 
@@ -60,6 +65,11 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
     });
   };
 
+  const handleGoLive = () => {
+    hapticTap();
+    router.push('/go-live');
+  };
+
   return (
     <View style={styles.liveSection}>
       <View style={styles.liveHeader}>
@@ -69,6 +79,26 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
       </View>
       {loading ? (
         <LiveSectionSkeleton />
+      ) : showEmptyState ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go Live"
+          onPress={handleGoLive}
+          style={({ pressed }) => [styles.emptyStateCard, pressed && styles.emptyStateCardPressed]}
+        >
+          <View style={styles.emptyStateCopy}>
+            <View style={styles.emptyStateBadge}>
+              <Ionicons name="radio-outline" size={14} color={colors.accentPrimary} />
+              <AppText style={styles.emptyStateBadgeText}>Live rooms</AppText>
+            </View>
+            <AppText style={styles.emptyStateTitle}>{LIVE_EMPTY_STATE.title}</AppText>
+            <AppText style={styles.emptyStateDescription}>{LIVE_EMPTY_STATE.description}</AppText>
+          </View>
+          <View style={styles.emptyStateCta}>
+            <AppText style={styles.emptyStateCtaText}>{LIVE_EMPTY_STATE.ctaLabel}</AppText>
+            <Ionicons name="arrow-forward" size={16} color={colors.textOnLight} />
+          </View>
+        </Pressable>
       ) : (
         <>
           {featured ? <FeaturedLiveCard item={featured} onPress={() => handleOpenLive(featured)} /> : null}
@@ -370,6 +400,66 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: spacing.xs,
+  },
+  emptyStateCard: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  emptyStateCardPressed: {
+    backgroundColor: colors.surface,
+  },
+  emptyStateCopy: {
+    gap: spacing.sm,
+  },
+  emptyStateBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  emptyStateBadgeText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  emptyStateTitle: {
+    color: colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: -0.4,
+  },
+  emptyStateDescription: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  emptyStateCta: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderRadius: radius.full,
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  emptyStateCtaText: {
+    color: colors.textOnLight,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.2,
   },
   
   // Gallery
