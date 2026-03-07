@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, ScrollView, Image, Platform } from 'react-native';
+import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
@@ -357,13 +357,28 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     return () => clearInterval(timer);
   }, [activePlayersNow, runtimeConfig.autoplayFrequencySeconds, runtimeConfig.enabled]);
 
-  const toggle = () => {
+  const openDetails = () => {
+    if (expanded) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded((v) => !v);
+    setExpanded(true);
+  };
+
+  const closeDetails = () => {
+    if (!expanded) {
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(false);
   };
 
   const handleEntryPress = () => {
+    if (!runtimeConfig.enabled || hasEntered) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Animate button press
@@ -408,16 +423,19 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     .toString()
     .padStart(2, '0');
   const progressPercent = Math.min(progress * 100, 100);
-  const progressBarHeight = expanded ? 6 : 3;
-  const winnerLine = lastWinner
-    ? winnerHighlight
-      ? `Winner: @${lastWinner}`
-      : `Last winner: @${lastWinner}`
-    : 'Next draw soon';
-
-  if (!runtimeConfig.enabled) {
-    return null;
-  }
+  const winnerLine = !runtimeConfig.enabled
+    ? 'Entries are temporarily unavailable'
+    : lastWinner
+      ? winnerHighlight
+        ? `Winner: @${lastWinner}`
+        : `Last winner: @${lastWinner}`
+      : `Next draw in ${remainingMinutes}:${remainingSeconds}`;
+  const hasFunds = entryCost <= 0 || cash >= entryCost;
+  const entryHint = runtimeConfig.enabled
+    ? entryCost > 0
+      ? `Tap to open details and spend ${formatCurrencyLong(entryCost)} to enter.`
+      : 'Tap to open details and enter this free event.'
+    : 'Tap to open details and check availability.';
 
   // Collapsed state content - shown below header
   const collapsedContent = (
@@ -447,6 +465,17 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
           {winnerLine}
         </AppText>
       </View>
+      <View style={styles.eventActionRow}>
+        <AppText variant="small" secondary style={styles.eventActionHint}>
+          {entryHint}
+        </AppText>
+        <View style={styles.eventActionPill}>
+          <Ionicons name="open-outline" size={14} color={colors.textSecondary} />
+          <AppText variant="small" style={styles.eventActionPillText}>
+            Open
+          </AppText>
+        </View>
+      </View>
     </View>
   );
 
@@ -454,11 +483,24 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     <>
       <HomePillCard
         title="Event"
-        onPress={toggle}
+        onPress={openDetails}
         expanded={expanded}
         collapsedContent={collapsedContent}
       >
         <View style={styles.eventDetails}>
+          <View style={styles.eventDetailsHeader}>
+            <AppText variant="small" secondary style={styles.eventDescription}>
+              {runtimeConfig.enabled
+                ? 'How it works: enter before the timer ends. One winner is picked each draw.'
+                : 'Event entry is paused right now. You can still view timing and status details here.'}
+            </AppText>
+            <Pressable onPress={closeDetails} style={styles.hideDetailsButton}>
+              <Ionicons name="chevron-up" size={14} color={colors.textSecondary} />
+              <AppText variant="small" style={styles.hideDetailsText}>
+                Hide
+              </AppText>
+            </Pressable>
+          </View>
           <AppText variant="small" secondary style={styles.eventDescription}>
             {prizePool > 0
               ? `Enter now for the next ${formatCurrencyLong(prizePool)} draw.`
@@ -487,34 +529,50 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
             />
           </View>
 
-          <Pressable
-            onPress={hasEntered ? undefined : handleEntryPress}
-            disabled={hasEntered}
-          >
-            <Animated.View style={[
-              styles.eventButtonContainer,
-              { transform: [{ scale: buttonScaleAnim }] },
-              hasEntered && styles.eventButtonDisabled
-            ]}>
-              {hasEntered ? (
-                <View style={styles.eventButtonEntered}>
-                  <Ionicons name="checkmark-circle" size={18} color={colors.accentSuccess} />
-                  <AppText style={styles.eventButtonEnteredText}>Entered • Waiting for Draw</AppText>
-                </View>
-              ) : (
-                <LinearGradient
-                  colors={[colors.accentSuccess, '#059669']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.eventButton}
-                >
-                  <AppText style={styles.eventButtonText}>
-                    {entryCost > 0 ? `$${entryCost} to Enter` : 'Enter Event'}
-                  </AppText>
-                </LinearGradient>
-              )}
-            </Animated.View>
-          </Pressable>
+          {runtimeConfig.enabled ? (
+            <>
+              <Pressable
+                onPress={hasEntered ? undefined : handleEntryPress}
+                disabled={hasEntered}
+              >
+                <Animated.View style={[
+                  styles.eventButtonContainer,
+                  { transform: [{ scale: buttonScaleAnim }] },
+                  hasEntered && styles.eventButtonDisabled
+                ]}>
+                  {hasEntered ? (
+                    <View style={styles.eventButtonEntered}>
+                      <Ionicons name="checkmark-circle" size={18} color={colors.accentSuccess} />
+                      <AppText style={styles.eventButtonEnteredText}>Entered • Waiting for Draw</AppText>
+                    </View>
+                  ) : (
+                    <LinearGradient
+                      colors={[colors.accentSuccess, '#059669']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.eventButton}
+                    >
+                      <AppText style={styles.eventButtonText}>
+                        {entryCost > 0 ? `$${entryCost} to Enter` : 'Enter Event'}
+                      </AppText>
+                    </LinearGradient>
+                  )}
+                </Animated.View>
+              </Pressable>
+              {!hasEntered && !hasFunds ? (
+                <AppText variant="small" style={styles.entryBlockedText}>
+                  Entry unavailable: top up your wallet to join this draw.
+                </AppText>
+              ) : null}
+            </>
+          ) : (
+            <View style={styles.eventUnavailableCard}>
+              <Ionicons name="pause-circle-outline" size={18} color={colors.textSecondary} />
+              <AppText variant="small" secondary style={styles.eventUnavailableText}>
+                Entry is unavailable right now. Check back soon.
+              </AppText>
+            </View>
+          )}
         </View>
       </HomePillCard>
 
@@ -624,6 +682,31 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     marginTop: spacing.xs,
   },
+  eventActionRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  eventActionHint: {
+    flex: 1,
+  },
+  eventActionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  eventActionPillText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
   progressFill: {
     height: '100%',
     backgroundColor: colors.accentSuccess,
@@ -641,8 +724,29 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     gap: spacing.xs,
   },
+  eventDetailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  hideDetailsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  hideDetailsText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
   eventDescription: {
-    textAlign: 'center',
+    flex: 1,
+    textAlign: 'left',
     marginBottom: spacing.xs,
   },
   eventStatsRow: {
@@ -713,5 +817,25 @@ const styles = StyleSheet.create({
     color: colors.accentSuccess,
     fontWeight: '700',
     fontSize: 14,
+  },
+  entryBlockedText: {
+    color: colors.accentDanger,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+  },
+  eventUnavailableCard: {
+    marginTop: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  eventUnavailableText: {
+    flex: 1,
   },
 });
