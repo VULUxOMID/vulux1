@@ -252,6 +252,48 @@ export default function ProfileScreen() {
     <AppScreen noPadding style={styles.container}>
       <ProfileHeader onSettingsPress={handleSettings} />
 
+      <View style={styles.heroActionsSection}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Edit Profile"
+          onPress={handleEditProfile}
+          style={({ pressed }) => [
+            styles.primaryActionButton,
+            pressed && styles.primaryActionButtonPressed,
+          ]}
+        >
+          <Ionicons name="create-outline" size={18} color={colors.textOnLight} />
+          <View style={styles.actionTextBlock}>
+            <AppText variant="bodyBold" style={styles.primaryActionTitle}>
+              Edit Profile
+            </AppText>
+            <AppText variant="small" style={styles.primaryActionSubtitle}>
+              Photos, display name, bio
+            </AppText>
+          </View>
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open Account"
+          onPress={handleAccountPress}
+          style={({ pressed }) => [
+            styles.secondaryActionButton,
+            pressed && styles.secondaryActionButtonPressed,
+          ]}
+        >
+          <Ionicons name="settings-outline" size={18} color={colors.textPrimary} />
+          <View style={styles.actionTextBlock}>
+            <AppText variant="bodyBold" style={styles.secondaryActionTitle}>
+              Account
+            </AppText>
+            <AppText variant="small" style={styles.secondaryActionSubtitle}>
+              Email, password, sign-in details
+            </AppText>
+          </View>
+        </Pressable>
+      </View>
+
       <View style={styles.topSection}>
         <View style={styles.avatarSection}>
           <ProfileAvatar
@@ -262,48 +304,6 @@ export default function ProfileScreen() {
             statusMessage={userProfile.statusMessage}
             onStatusPress={handleStatusPress}
           />
-        </View>
-
-        <View style={styles.quickActionsSection}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Edit Profile"
-            onPress={handleEditProfile}
-            style={({ pressed }) => [
-              styles.primaryActionButton,
-              pressed && styles.primaryActionButtonPressed,
-            ]}
-          >
-            <Ionicons name="create-outline" size={18} color={colors.textOnLight} />
-            <View style={styles.actionTextBlock}>
-              <AppText variant="bodyBold" style={styles.primaryActionTitle}>
-                Edit Profile
-              </AppText>
-              <AppText variant="small" style={styles.primaryActionSubtitle}>
-                Photos, display name, bio
-              </AppText>
-            </View>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open Account"
-            onPress={handleAccountPress}
-            style={({ pressed }) => [
-              styles.secondaryActionButton,
-              pressed && styles.secondaryActionButtonPressed,
-            ]}
-          >
-            <Ionicons name="settings-outline" size={18} color={colors.textPrimary} />
-            <View style={styles.actionTextBlock}>
-              <AppText variant="bodyBold" style={styles.secondaryActionTitle}>
-                Account
-              </AppText>
-              <AppText variant="small" style={styles.secondaryActionSubtitle}>
-                Email, password, sign-in details
-              </AppText>
-            </View>
-          </Pressable>
         </View>
 
         <View style={styles.statsContainer}>
@@ -346,6 +346,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  heroActionsSection: {
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
   topSection: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
@@ -354,10 +359,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.md,
     marginTop: spacing.xs,
-  },
-  quickActionsSection: {
-    gap: spacing.sm,
-    marginBottom: spacing.md,
   },
   primaryActionButton: {
     flexDirection: 'row',
