@@ -18,6 +18,10 @@ import { ShopEarnTab } from '../../src/features/shop/ShopEarnTab';
 import { ShopWalletTab } from '../../src/features/shop/ShopWalletTab';
 import { WithdrawalModal } from '../../src/features/shop/WithdrawalModal';
 import { ShopTab } from '../../src/features/shop/types';
+import {
+  DEFAULT_MIN_WITHDRAWAL_GEMS,
+  getWithdrawalEligibility,
+} from '../../src/features/shop/withdrawalEligibility';
 import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBus';
@@ -61,7 +65,9 @@ export default function ShopScreen() {
     cash, 
     fuel, 
     requestWithdrawal,
-    withdrawalHistory
+    withdrawalHistory,
+    walletHydrated,
+    walletStateAvailable,
   } = useWallet();
 
   const [activeTab, setActiveTab] = useState<ShopTab>('buy');
@@ -141,8 +147,18 @@ export default function ShopScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
 
-  const MIN_WITHDRAWAL_GEMS = 500; // $5.00
+  const MIN_WITHDRAWAL_GEMS = DEFAULT_MIN_WITHDRAWAL_GEMS;
   const isActionPending = receipt.status === 'pending';
+  const withdrawalEligibility = useMemo(
+    () =>
+      getWithdrawalEligibility({
+        gems,
+        walletHydrated,
+        walletStateAvailable,
+        minWithdrawalGems: MIN_WITHDRAWAL_GEMS,
+      }),
+    [MIN_WITHDRAWAL_GEMS, gems, walletHydrated, walletStateAvailable],
+  );
 
   const runWalletAction = useCallback(
     async (params: {
@@ -423,8 +439,12 @@ export default function ShopScreen() {
   };
 
   const handleOpenWithdrawal = useCallback(() => {
+    if (!withdrawalEligibility.canRequestWithdrawal) {
+      toast.info(withdrawalEligibility.disabledReason ?? 'Withdrawal is unavailable right now.');
+      return;
+    }
     setIsWithdrawModalVisible(true);
-  }, []);
+  }, [withdrawalEligibility]);
 
   const handleCloseWithdrawal = useCallback(() => {
     setIsWithdrawModalVisible(false);
@@ -503,6 +523,7 @@ export default function ShopScreen() {
             gems={gems}
             cash={cash}
             withdrawalHistory={withdrawalHistory}
+            withdrawalEligibility={withdrawalEligibility}
             onExchangeGemsToCash={handleGemsToCash}
             onExchangeCashToGems={handleCashToGems}
             onOpenWithdrawal={handleOpenWithdrawal}
@@ -515,6 +536,8 @@ export default function ShopScreen() {
       <WithdrawalModal
         visible={isWithdrawModalVisible}
         gems={gems}
+        canRequestWithdrawal={withdrawalEligibility.canRequestWithdrawal}
+        disabledReason={withdrawalEligibility.disabledReason}
         onClose={handleCloseWithdrawal}
         onSubmit={handleSubmitWithdrawal}
         minWithdrawalGems={MIN_WITHDRAWAL_GEMS}
