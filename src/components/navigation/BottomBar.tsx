@@ -149,7 +149,7 @@ export function BottomBar({
         accessibilityRole="button"
         accessibilityLabel="Profile"
         onPress={() => {
-          router.push('/(tabs)/profile');
+          router.replace('/profile');
         }}
         style={styles.iconButton}
       >
