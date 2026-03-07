@@ -82,6 +82,8 @@ export function HomePillCard({
     onPress?.();
   };
 
+  const canPressCollapsedContent = Boolean(!expanded && collapsedContent && onPress);
+
   return (
     <View style={[styles.container, style]}>
       <Pressable
@@ -121,9 +123,21 @@ export function HomePillCard({
       </Pressable>
 
       {!expanded && collapsedContent ? (
-        <View style={styles.collapsedContent}>
-          {collapsedContent}
-        </View>
+        canPressCollapsedContent ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${title}`}
+            onPress={handlePress}
+            onPressIn={onPressIn}
+            style={({ pressed }) => [styles.collapsedContent, pressed && styles.pressed]}
+          >
+            {collapsedContent}
+          </Pressable>
+        ) : (
+          <View style={styles.collapsedContent}>
+            {collapsedContent}
+          </View>
+        )
       ) : null}
 
       {expanded && children ? (
@@ -206,5 +220,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
-
 
