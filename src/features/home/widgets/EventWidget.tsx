@@ -357,22 +357,10 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     return () => clearInterval(timer);
   }, [activePlayersNow, runtimeConfig.autoplayFrequencySeconds, runtimeConfig.enabled]);
 
-  const openDetails = () => {
-    if (expanded) {
-      return;
-    }
+  const toggleDetails = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(true);
-  };
-
-  const closeDetails = () => {
-    if (!expanded) {
-      return;
-    }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(false);
+    setExpanded((current) => !current);
   };
 
   const handleEntryPress = () => {
@@ -431,12 +419,6 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
         : `Last winner: @${lastWinner}`
       : `Next draw in ${remainingMinutes}:${remainingSeconds}`;
   const hasFunds = entryCost <= 0 || cash >= entryCost;
-  const entryHint = runtimeConfig.enabled
-    ? entryCost > 0
-      ? `Tap to open details and spend ${formatCurrencyLong(entryCost)} to enter.`
-      : 'Tap to open details and enter this free event.'
-    : 'Tap to open details and check availability.';
-
   // Collapsed state content - shown below header
   const collapsedContent = (
     <View style={styles.collapsedContent}>
@@ -465,17 +447,6 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
           {winnerLine}
         </AppText>
       </View>
-      <View style={styles.eventActionRow}>
-        <AppText variant="small" secondary style={styles.eventActionHint}>
-          {entryHint}
-        </AppText>
-        <View style={styles.eventActionPill}>
-          <Ionicons name="open-outline" size={14} color={colors.textSecondary} />
-          <AppText variant="small" style={styles.eventActionPillText}>
-            Open
-          </AppText>
-        </View>
-      </View>
     </View>
   );
 
@@ -483,7 +454,7 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     <>
       <HomePillCard
         title="Event"
-        onPress={openDetails}
+        onPress={toggleDetails}
         expanded={expanded}
         collapsedContent={collapsedContent}
       >
@@ -494,12 +465,6 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
                 ? 'How it works: enter before the timer ends. One winner is picked each draw.'
                 : 'Event entry is paused right now. You can still view timing and status details here.'}
             </AppText>
-            <Pressable onPress={closeDetails} style={styles.hideDetailsButton}>
-              <Ionicons name="chevron-up" size={14} color={colors.textSecondary} />
-              <AppText variant="small" style={styles.hideDetailsText}>
-                Hide
-              </AppText>
-            </Pressable>
           </View>
           <AppText variant="small" secondary style={styles.eventDescription}>
             {prizePool > 0
@@ -682,31 +647,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     marginTop: spacing.xs,
   },
-  eventActionRow: {
-    marginTop: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  eventActionHint: {
-    flex: 1,
-  },
-  eventActionPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-  },
-  eventActionPillText: {
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
   progressFill: {
     height: '100%',
     backgroundColor: colors.accentSuccess,
@@ -725,24 +665,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   eventDetailsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  hideDetailsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-  },
-  hideDetailsText: {
-    color: colors.textSecondary,
-    fontWeight: '600',
+    marginBottom: spacing.xs,
   },
   eventDescription: {
     flex: 1,

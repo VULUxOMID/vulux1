@@ -1,7 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LayoutAnimation, Platform, Pressable, StyleSheet, UIManager, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { LayoutAnimation, Platform, StyleSheet, UIManager, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
 import { AppScreen, AppText, PillTabs } from '../../components';
@@ -120,11 +119,6 @@ export default function ProfileScreen() {
   const handleEditProfile = () => {
     router.push('/edit-profile');
   };
-
-  const handleAccountPress = useCallback(() => {
-    hapticTap();
-    router.push('/account');
-  }, [router]);
 
   const handleBalancePress = () => {
     router.push('/(tabs)/shop');
@@ -252,48 +246,6 @@ export default function ProfileScreen() {
     <AppScreen noPadding style={styles.container}>
       <ProfileHeader onSettingsPress={handleSettings} />
 
-      <View style={styles.heroActionsSection}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Edit Profile"
-          onPress={handleEditProfile}
-          style={({ pressed }) => [
-            styles.primaryActionButton,
-            pressed && styles.primaryActionButtonPressed,
-          ]}
-        >
-          <Ionicons name="create-outline" size={18} color={colors.textOnLight} />
-          <View style={styles.actionTextBlock}>
-            <AppText variant="bodyBold" style={styles.primaryActionTitle}>
-              Edit Profile
-            </AppText>
-            <AppText variant="small" style={styles.primaryActionSubtitle}>
-              Photos, display name, bio
-            </AppText>
-          </View>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open Account"
-          onPress={handleAccountPress}
-          style={({ pressed }) => [
-            styles.secondaryActionButton,
-            pressed && styles.secondaryActionButtonPressed,
-          ]}
-        >
-          <Ionicons name="settings-outline" size={18} color={colors.textPrimary} />
-          <View style={styles.actionTextBlock}>
-            <AppText variant="bodyBold" style={styles.secondaryActionTitle}>
-              Account
-            </AppText>
-            <AppText variant="small" style={styles.secondaryActionSubtitle}>
-              Email, password, sign-in details
-            </AppText>
-          </View>
-        </Pressable>
-      </View>
-
       <View style={styles.topSection}>
         <View style={styles.avatarSection}>
           <ProfileAvatar
@@ -346,11 +298,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  heroActionsSection: {
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
   topSection: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
@@ -359,48 +306,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.md,
     marginTop: spacing.xs,
-  },
-  primaryActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    borderRadius: spacing.lg,
-    backgroundColor: colors.accentPrimary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.mdPlus,
-  },
-  primaryActionButtonPressed: {
-    backgroundColor: colors.accentPrimarySoft,
-  },
-  secondaryActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    borderRadius: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceAlt,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.mdPlus,
-  },
-  secondaryActionButtonPressed: {
-    backgroundColor: colors.surface,
-  },
-  actionTextBlock: {
-    flex: 1,
-    gap: spacing.xsMinus,
-  },
-  primaryActionTitle: {
-    color: colors.textOnLight,
-  },
-  primaryActionSubtitle: {
-    color: 'rgba(0, 0, 0, 0.72)',
-  },
-  secondaryActionTitle: {
-    color: colors.textPrimary,
-  },
-  secondaryActionSubtitle: {
-    color: colors.textSecondary,
   },
   statsContainer: {
     marginBottom: spacing.sm,

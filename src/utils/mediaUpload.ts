@@ -1,7 +1,13 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 import { getBackendToken } from './backendToken';
 import { getBackendTokenTemplate } from '../config/backendToken';
 import { recordUploadedMediaAsset } from './spacetimePersistence';
+import {
+  readUploadBlob,
+  shouldUseWebUploadFallback,
+  uploadBlobToSignedUrl,
+} from './webUploadFallback';
 
 type BackendGetToken = (options?: { template?: string }) => Promise<string | null>;
 
@@ -30,6 +36,7 @@ type UploadMediaResult = {
 
 type UploadTargetResponse = {
   url: string;
+  webUploadUrl?: string | null;
   objectKey: string;
   publicUrl?: string | null;
   requiredHeaders?: Record<string, string>;
@@ -117,6 +124,11 @@ async function requestSignedUploadTarget(
 }
 
 async function getFileSizeBytes(uri: string): Promise<number> {
+  if (shouldUseWebUploadFallback(Platform.OS, FileSystem)) {
+    const blob = await readUploadBlob(uri);
+    return blob.size;
+  }
+
   const info = await FileSystem.getInfoAsync(uri, { size: true } as any);
   if (!info.exists) {
     throw new Error('Selected file is no longer available');
@@ -142,6 +154,14 @@ async function uploadFileUriToSignedUrl(
     ...(requiredHeaders ?? {}),
     ...(!requiredHeaders?.['Content-Type'] ? { 'Content-Type': contentType } : {}),
   };
+
+  if (shouldUseWebUploadFallback(Platform.OS, FileSystem)) {
+    console.log('[upload] put -> uploading (web)');
+    const blob = await readUploadBlob(fileUri);
+    await uploadBlobToSignedUrl(url, blob, normalizedHeaders, onProgress);
+    console.log('[upload] put -> uploaded');
+    return;
+  }
 
   console.log('[upload] put -> uploading');
   const uploadTask = FileSystem.createUploadTask(
@@ -204,13 +224,21 @@ export async function uploadMediaAsset({
   }
 
   const uploadTarget = await requestSignedUploadTarget(token, contentType, mediaType, size);
+  const useWebProxy = shouldUseWebUploadFallback(Platform.OS, FileSystem) && !!uploadTarget.webUploadUrl;
+  const uploadUrl = useWebProxy ? uploadTarget.webUploadUrl ?? uploadTarget.url : uploadTarget.url;
+  const uploadHeaders = useWebProxy
+    ? {
+        ...(uploadTarget.requiredHeaders ?? {}),
+        Authorization: `Bearer ${token}`,
+      }
+    : uploadTarget.requiredHeaders;
 
   await uploadFileUriToSignedUrl(
-    uploadTarget.url,
+    uploadUrl,
     uri,
     contentType,
     onProgress,
-    uploadTarget.requiredHeaders,
+    uploadHeaders,
   );
 
   const publicUrl = uploadTarget.publicUrl ?? uploadTarget.url.split('?')[0];
