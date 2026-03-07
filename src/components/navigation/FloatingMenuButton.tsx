@@ -21,6 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../../theme';
 import { FLOATING_BUTTON_SIZE, NAV_BAR_HEIGHT } from './layoutConstants';
 import { useAdminAuth } from '../../features/admin/hooks/useAdminAuth';
+import { ADMIN_MENU_ITEMS, MENU_ITEMS, type MenuKey } from './floatingMenuConfig';
 
 // Magnetic position with pull strength
 type MagnetPosition = { x: number; y: number; pullStrength: number };
@@ -33,22 +34,13 @@ const MENU_SECTION_GAP = 10;
 const MENU_PADDING_Y = 20; // Increased to 20 for more spacing
 const ITEM_SIZE = 50;
 const VELOCITY_THRESHOLD = 0.5;
+const EXPANDED_MENU_WIDTH = 182;
 
 const SPRING_CONFIG = {
   tension: 60,
   friction: 9,
   useNativeDriver: false,
 };
-
-type MenuKey =
-  | 'music'
-  | 'play'
-  | 'clash-of-drone'
-  | 'leaderboard'
-  | 'shop'
-  | 'videos'
-  | 'admin'
-  | 'admin-v2';
 
 type MenuNotifications = {
   [key in MenuKey]?: number;
@@ -57,25 +49,6 @@ type MenuNotifications = {
 type FloatingMenuButtonProps = {
   notifications?: MenuNotifications;
 };
-
-const MENU_ITEMS: { id: MenuKey; icon: string; route: string; matchRoutes: string[] }[] = [
-  { id: 'music', icon: 'musical-notes', route: '/(tabs)/music', matchRoutes: ['/music'] },
-  { id: 'videos', icon: 'videocam', route: '/(tabs)/videos', matchRoutes: ['/videos'] },
-  { id: 'play', icon: 'game-controller', route: '/(tabs)/play', matchRoutes: ['/play'] },
-  {
-    id: 'clash-of-drone',
-    icon: 'hardware-chip',
-    route: '/game/clash-of-drone',
-    matchRoutes: ['/game/clash-of-drone'],
-  },
-  { id: 'leaderboard', icon: 'trophy', route: '/(tabs)/leaderboard', matchRoutes: ['/leaderboard'] },
-  { id: 'shop', icon: 'cart', route: '/(tabs)/shop', matchRoutes: ['/shop'] },
-];
-
-const ADMIN_MENU_ITEMS = [
-  { id: 'admin', icon: 'shield', route: '/admin', matchRoutes: ['/admin'] },
-  { id: 'admin-v2', icon: 'grid', route: '/admin-v2', matchRoutes: ['/admin-v2'] },
-] as const;
 
 const MAX_MENU_ITEM_COUNT = MENU_ITEMS.length + ADMIN_MENU_ITEMS.length;
 
@@ -128,8 +101,6 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   const MENU_PADDING = MENU_PADDING_Y;
 
   // Vertical List Layout
-  const EXPANDED_WIDTH = 66; // 50px items + 16px padding (8px each side)
-
   const maxItems = activeMenuItems.length;
   const LIST_HEIGHT = (maxItems * ITEM_SIZE) +
     ((maxItems - 1) * MENU_ITEM_GAP);
@@ -142,7 +113,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   // Interpolations
   const currentWidth = morphAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [FLOATING_BUTTON_SIZE, EXPANDED_WIDTH]
+    outputRange: [FLOATING_BUTTON_SIZE, EXPANDED_MENU_WIDTH]
   });
 
   // Use measured content height if available, otherwise fallback to calculated
@@ -185,6 +156,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   // Initial Position (Bottom Right or Saved)
   // We use a ref for the Animated Value to avoid re-creating it, but we need to initialize it correctly.
   const defaultPos = { x: width - FLOATING_BUTTON_SIZE - 20, y: height - safeBottom - FLOATING_BUTTON_SIZE };
+  const [isRightAligned, setIsRightAligned] = useState(defaultPos.x > width / 2);
 
   // Use Animated.ValueXY for fluid movement
   const pan = useRef(new Animated.ValueXY(defaultPos)).current;
@@ -221,11 +193,13 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
           if (!isNaN(safeX) && !isNaN(safeY)) {
             pan.setValue({ x: safeX, y: safeY });
             xPosAnim.setValue(safeY > height * 0.35 ? 1 : 0);
+            setIsRightAligned(safeX > width / 2);
           }
         } else {
           // No saved pos: reset to default (handles rotation/resize)
           pan.setValue(defaultPos);
           xPosAnim.setValue(defaultPos.y > height * 0.35 ? 1 : 0);
+          setIsRightAligned(defaultPos.x > width / 2);
         }
       } catch (e) {
         // Ignore error
@@ -379,7 +353,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
       }
     });
     return bestPosition;
-  }, [magnetPositions, width]);
+  }, [magnetPositions, magnetPositionsExpanded, width]);
 
 
   const panResponder = useRef(
@@ -446,6 +420,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
             });
 
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          setIsRightAligned(bestPos.x > width / 2);
 
           Animated.spring(pan, {
             toValue: { x: bestPos.x, y: bestPos.y },
@@ -486,6 +461,11 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
     })
   );
 
+  const horizontalShift = morphAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, isRightAligned ? -(EXPANDED_MENU_WIDTH - FLOATING_BUTTON_SIZE) : 0],
+  });
+
   return (
     <>
       {/* Overlay to close menu when clicking outside */}
@@ -505,6 +485,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
             transform: [
               { translateX: pan.x },
               { translateY: pan.y },
+              { translateX: horizontalShift },
               { scale: buttonScale },
               { translateY: verticalShift } // Additional shift for expansion
             ],
@@ -538,6 +519,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
           }
         ]}>
           <Ionicons name="apps" size={28} color={colors.textPrimary} />
+          <Text style={styles.fabLabel}>Menu</Text>
           {hasNotifications && (
             <View style={styles.mainBadge}>
               <Text style={styles.mainBadgeText}>
@@ -571,12 +553,19 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
               <Pressable
                 onPress={toggleMenu}
                 style={[styles.menuItem, styles.toggleButton]}
+                accessibilityRole="button"
+                accessibilityLabel="Close navigation menu"
               >
-                <Animated.View style={{
-                  transform: [{ rotate: morphAnim.interpolate({ inputRange: [0.5, 1], outputRange: ['-90deg', '0deg'] }) }]
-                }}>
-                  <Ionicons name="close" size={24} color={colors.textSecondary} />
+                <Animated.View style={styles.menuItemIcon}>
+                  <Animated.View
+                    style={{
+                      transform: [{ rotate: morphAnim.interpolate({ inputRange: [0.5, 1], outputRange: ['-90deg', '0deg'] }) }]
+                    }}
+                  >
+                    <Ionicons name="close" size={24} color={colors.textSecondary} />
+                  </Animated.View>
                 </Animated.View>
+                <Text style={styles.menuItemLabel}>Close</Text>
               </Pressable>
             </Animated.View>
 
@@ -614,12 +603,23 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
                       router.push(item.route as any);
                       closeMenu();
                     }}
+                    accessibilityRole="button"
+                    accessibilityLabel={item.accessibilityLabel}
                   >
                     <Ionicons
                       name={item.icon as keyof typeof Ionicons.glyphMap}
                       size={24}
                       color={isActive ? colors.textPrimary : colors.textSecondary}
+                      style={styles.menuItemIcon}
                     />
+                    <Text
+                      style={[
+                        styles.menuItemLabel,
+                        isActive ? styles.menuItemLabelActive : null,
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
 
                     {count > 0 && (
                       <View style={styles.miniBadge} />
@@ -674,13 +674,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  fabLabel: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.3,
+  },
   menuContent: {
     width: '100%',
     alignItems: 'center',
     paddingVertical: MENU_PADDING_Y,
   },
   toggleButton: {
-    width: ITEM_SIZE,
+    width: EXPANDED_MENU_WIDTH - 16,
     height: ITEM_SIZE,
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 14, // Match menuItem borderRadius
@@ -690,18 +697,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
-  itemsList: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    width: '100%',
-    gap: MENU_ITEM_GAP,
-  },
   menuItem: {
-    width: ITEM_SIZE,
+    width: EXPANDED_MENU_WIDTH - 16,
     height: ITEM_SIZE,
     borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    flexDirection: 'row',
+    paddingHorizontal: 14,
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
@@ -711,6 +714,18 @@ const styles = StyleSheet.create({
   },
   menuItemActive: {
     backgroundColor: colors.accentPrimarySubtle, // Use the proper theme token
+  },
+  menuItemLabel: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  menuItemLabelActive: {
+    color: colors.textPrimary,
+  },
+  menuItemIcon: {
+    marginRight: 12,
   },
   mainBadge: {
     position: 'absolute',
@@ -733,8 +748,8 @@ const styles = StyleSheet.create({
   },
   miniBadge: {
     position: 'absolute',
-    top: -2,
-    right: -2,
+    top: 8,
+    right: 8,
     width: 10,
     height: 10,
     borderRadius: 5,
