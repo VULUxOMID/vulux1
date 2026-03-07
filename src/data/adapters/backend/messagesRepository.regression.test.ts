@@ -245,6 +245,94 @@ test('thread fallback remains visible while my_conversation_messages is active b
   assert.equal(messages[0]?.text, 'fallback thread message');
 });
 
+test('global chat rows are room-scoped and de-duped by message id', () => {
+  const repo = createRepo('viewer-global-1');
+  const dbRows = [
+    {
+      id: 'global-1',
+      roomId: 'global',
+      createdAt: 100,
+      item: JSON.stringify({
+        eventType: 'global_chat_message',
+        id: 'global-1',
+        senderId: 'friend-1',
+        user: 'Friend 1',
+        text: 'first copy',
+        createdAt: 100,
+      }),
+    },
+    {
+      id: 'global-1',
+      roomId: 'global',
+      createdAt: 101,
+      item: JSON.stringify({
+        eventType: 'global_chat_message',
+        id: 'global-1',
+        senderId: 'friend-1',
+        user: 'Friend 1',
+        text: 'deduped copy',
+        createdAt: 101,
+      }),
+    },
+    {
+      id: 'live-1',
+      roomId: 'live-room-1',
+      createdAt: 102,
+      item: JSON.stringify({
+        eventType: 'global_chat_message',
+        id: 'live-1',
+        senderId: 'friend-2',
+        user: 'Friend 2',
+        text: 'live scoped',
+        createdAt: 102,
+      }),
+    },
+  ];
+
+  const dbView = {
+    globalMessageItem: makeIterTable(dbRows),
+    publicProfileSummary: makeIterTable([]),
+  };
+
+  const messages = withMockSpacetime(dbView, {}, () => repo.listGlobalMessages({ roomId: 'global' }));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]?.id, 'global-1');
+  assert.equal(messages[0]?.text, 'deduped copy');
+});
+
+test('global chat cache persists during transient reconnect gaps', () => {
+  const repo = createRepo('viewer-global-2');
+  const dbRows = [
+    {
+      id: 'global-cache-1',
+      roomId: 'global',
+      createdAt: 200,
+      item: JSON.stringify({
+        eventType: 'global_chat_message',
+        id: 'global-cache-1',
+        senderId: 'friend-cache',
+        user: 'Friend Cache',
+        text: 'persist me',
+        createdAt: 200,
+      }),
+    },
+  ];
+  const dbView = {
+    globalMessageItem: makeIterTable(dbRows),
+    publicProfileSummary: makeIterTable([]),
+  };
+
+  const first = withMockSpacetime(dbView, {}, () => repo.listGlobalMessages({ roomId: 'global' }));
+  assert.equal(first.length, 1);
+  assert.equal(first[0]?.id, 'global-cache-1');
+
+  dbRows.length = 0;
+  const second = withMockSpacetime(dbView, {}, () => repo.listGlobalMessages({ roomId: 'global' }));
+  assert.equal(second.length, 1);
+  assert.equal(second[0]?.id, 'global-cache-1');
+  assert.equal(second[0]?.text, 'persist me');
+});
+
 test('authoritative empty thread row clears stale cache instead of replaying old messages', () => {
   const viewerUserId = 'viewer-3';
   const row = {

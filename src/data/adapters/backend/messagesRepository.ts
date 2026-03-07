@@ -557,6 +557,31 @@ function dedupeAndSortThreadMessages(messages: ThreadSeedMessage[]): ThreadSeedM
   });
 }
 
+function dedupeAndSortGlobalMessages(messages: GlobalChatMessage[]): GlobalChatMessage[] {
+  const uniqueByMessageId = new Map<string, GlobalChatMessage>();
+  for (const message of messages) {
+    const normalizedRoomId = (message.roomId ?? '').trim().toLowerCase();
+    const dedupeKey = `${normalizedRoomId}::${message.id}`;
+    const existing = uniqueByMessageId.get(dedupeKey);
+    if (!existing) {
+      uniqueByMessageId.set(dedupeKey, message);
+      continue;
+    }
+    if (
+      message.createdAt > existing.createdAt ||
+      (message.createdAt === existing.createdAt && message.text.length >= existing.text.length)
+    ) {
+      uniqueByMessageId.set(dedupeKey, message);
+    }
+  }
+
+  return Array.from(uniqueByMessageId.values()).sort((left, right) => {
+    const byCreatedAt = left.createdAt - right.createdAt;
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return left.id.localeCompare(right.id);
+  });
+}
+
 function parseConversationFromRow(row: any, viewerUserId: string): Conversation | null {
   const ownerUserId = asString(row?.ownerUserId ?? row?.owner_user_id);
   const otherUserId = asString(row?.otherUserId ?? row?.other_user_id);
@@ -877,14 +902,16 @@ export function createBackendMessagesRepository(
         .map((msgRow: any) => parseGlobalMessageRow(msgRow, userDirectory))
         .filter((msg): msg is GlobalChatMessage => !!msg);
 
-      const filtered = stMessages.filter((message) => {
-        const messageRoomId = typeof message.roomId === 'string' ? message.roomId.trim() : '';
-        const messageRoomIdLower = messageRoomId.toLowerCase();
-        if (requestedRoomId) {
-          return messageRoomIdLower === requestedRoomIdLower;
-        }
-        return messageRoomId.length === 0 || messageRoomIdLower === 'global';
-      });
+      const filtered = dedupeAndSortGlobalMessages(
+        stMessages.filter((message) => {
+          const messageRoomId = typeof message.roomId === 'string' ? message.roomId.trim() : '';
+          const messageRoomIdLower = messageRoomId.toLowerCase();
+          if (requestedRoomId) {
+            return messageRoomIdLower === requestedRoomIdLower;
+          }
+          return messageRoomId.length === 0 || messageRoomIdLower === 'global';
+        }),
+      );
       const roomCacheKey = requestedRoomIdLower ?? '__global_default__';
       if (filtered.length > 0) {
         globalMessagesCacheByRoom.set(roomCacheKey, filtered);

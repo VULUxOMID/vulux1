@@ -28,6 +28,7 @@ import {
 } from './activityFriends';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
+import { resolveSessionGate } from '../../auth/sessionGate';
 import {
   spacetimeDb,
   subscribeBootstrap,
@@ -51,15 +52,26 @@ export default function HomeScreen() {
     replyToMessageId?: string;
   }>();
   const insets = useSafeAreaInsets();
-  const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
+  const { isLoaded: isAuthLoaded, hasSession, isSignedIn, userId } = useSessionAuth();
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { userProfile } = useUserProfile();
   const { activeLive, liveRoom, isHost, isLiveEnding, liveState } = useLive();
   const [eventMetricsRefreshNonce, setEventMetricsRefreshNonce] = useState(0);
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
   const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
-  const queriesEnabled =
-    isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
+  const sessionGate = useMemo(
+    () =>
+      resolveSessionGate({
+        isAuthLoaded,
+        hasSession,
+        isSignedIn,
+        userId,
+        isFocused,
+        isAppActive,
+      }),
+    [hasSession, isAppActive, isAuthLoaded, isFocused, isSignedIn, userId],
+  );
+  const queriesEnabled = sessionGate.canRunForegroundQueries;
   const repositoryLives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 100 }) : []),
     [liveRepo, queriesEnabled],
@@ -175,6 +187,7 @@ export default function HomeScreen() {
   const searchVisibleRef = useRef(false);
   const canToggleSearchRef = useRef(true);
   const [showChat, setShowChat] = useState(false);
+  const [globalChatLoading, setGlobalChatLoading] = useState(false);
   const [globalMessages, setGlobalMessages] = useState<ChatMessage[]>([]);
   const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
@@ -239,6 +252,23 @@ export default function HomeScreen() {
       setGlobalMessages([]);
     }
   }, [isAuthLoaded, isSignedIn, userId]);
+
+  useEffect(() => {
+    if (!showChat || !queriesEnabled) {
+      setGlobalChatLoading(false);
+      return;
+    }
+    if (repositoryGlobalMessages.length > 0 || globalMessages.length > 0) {
+      setGlobalChatLoading(false);
+      return;
+    }
+
+    setGlobalChatLoading(true);
+    const timer = setTimeout(() => {
+      setGlobalChatLoading(false);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [globalMessages.length, queriesEnabled, repositoryGlobalMessages.length, showChat]);
 
   useEffect(() => {
     if (!queriesEnabled) return;
@@ -549,6 +579,7 @@ export default function HomeScreen() {
         }}
         currentUserDisplayName={currentUserDisplayName}
         currentUserId={userId}
+        isLoading={globalChatLoading}
       />
 
       <FriendLivePreviewSheet
