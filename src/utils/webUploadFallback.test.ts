@@ -3,9 +3,20 @@ import assert from 'node:assert/strict';
 
 import {
   readUploadBlob,
+  resolveUploadSignerBaseUrl,
   shouldUseWebUploadFallback,
   uploadBlobToSignedUrl,
 } from './webUploadFallback';
+
+test('localhost web rewrites private-lan signer host to current host', () => {
+  const resolved = resolveUploadSignerBaseUrl('http://192.168.0.192:3000', '127.0.0.1');
+  assert.equal(resolved, 'http://127.0.0.1:3000');
+});
+
+test('non-local web leaves signer host unchanged', () => {
+  const resolved = resolveUploadSignerBaseUrl('http://192.168.0.192:3000', 'vulu.studio');
+  assert.equal(resolved, 'http://192.168.0.192:3000');
+});
 
 test('web fallback activates when platform is web', () => {
   assert.equal(
