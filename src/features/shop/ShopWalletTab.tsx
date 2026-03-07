@@ -7,11 +7,13 @@ import { AppButton, AppText, CashIcon, SectionCard } from '../../components';
 import { toast } from '../../components/Toast';
 import { colors, radius, spacing } from '../../theme';
 import type { WithdrawalRequest } from '../../context';
+import type { WithdrawalEligibility } from './withdrawalEligibility';
 
 type ShopWalletTabProps = {
   gems: number;
   cash: number;
   withdrawalHistory: WithdrawalRequest[];
+  withdrawalEligibility: WithdrawalEligibility;
   onExchangeGemsToCash: (amount: number) => void;
   onExchangeCashToGems: (amount: number) => void;
   onOpenWithdrawal: () => void;
@@ -84,6 +86,7 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
   gems,
   cash,
   withdrawalHistory,
+  withdrawalEligibility,
   onExchangeGemsToCash,
   onExchangeCashToGems,
   onOpenWithdrawal,
@@ -92,6 +95,11 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
 }: ShopWalletTabProps) {
   const exchangeRows = useMemo(() => EXCHANGE_OPTIONS, []);
   const recentHistory = useMemo(() => withdrawalHistory.slice(0, 3), [withdrawalHistory]);
+  const withdrawalHelperText = isActionPending
+    ? 'Finish the current wallet action before requesting a payout.'
+    : withdrawalEligibility.disabledReason ??
+      `Based on ${withdrawalEligibility.availableGems} payout-eligible Gems in your synced wallet.`;
+  const canOpenWithdrawal = withdrawalEligibility.canRequestWithdrawal && !isActionPending;
 
   return (
     <View style={styles.container}>
@@ -144,17 +152,22 @@ export const ShopWalletTab = React.memo(function ShopWalletTab({
             Available for Payout
           </AppText>
           <AppText variant="h1" style={styles.withdrawalValue}>
-            ${(gems * 0.01).toFixed(2)}
+            {withdrawalEligibility.availablePayoutLabel}
           </AppText>
           <AppText variant="tiny" secondary style={styles.withdrawalSubtext}>
-            Based on {gems} gems in your balance
+            {withdrawalHelperText}
           </AppText>
           <AppButton
             title="Request Withdrawal"
             variant="primary"
             onPress={onOpenWithdrawal}
             style={styles.fullWidthButton}
-            disabled={isActionPending}
+            disabled={!canOpenWithdrawal}
+            accessibilityLabel={
+              canOpenWithdrawal
+                ? 'Request withdrawal'
+                : `Request withdrawal unavailable. ${withdrawalHelperText}`
+            }
           />
         </LinearGradient>
 
