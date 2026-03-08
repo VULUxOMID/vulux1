@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppScreen, AppText, Avatar } from '../../src/components';
 import { useFriends } from '../../src/context';
 import { colors, radius, spacing, typography } from '../../src/theme';
-import { hapticTap, hapticSuccess } from '../../src/utils/haptics';
+import { hapticConfirm, hapticTap } from '../../src/utils/haptics';
 import { toast } from '../../src/components/Toast';
 
 export default function NewGroupScreen() {
@@ -61,7 +61,7 @@ export default function NewGroupScreen() {
             toast.show('Select at least one member to create a group.');
             return;
         }
-        hapticSuccess();
+        hapticConfirm();
         toast.show('Group created successfully!');
         // Real implementation would call backend and navigate to the new group ID
         // For now, we simulate success and return to chat list
@@ -119,7 +119,7 @@ export default function NewGroupScreen() {
                                     style={styles.chip}
                                     onPress={() => toggleUser(f.id)}
                                 >
-                                    <Avatar uri={f.avatarUrl || f.imageUrl} name={f.name} size={20} />
+                                    <Avatar uri={f.avatarUrl || f.imageUrl} name={f.name} size="xs" />
                                     <AppText style={styles.chipText} numberOfLines={1}>
                                         {f.name}
                                     </AppText>
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: colors.surfaceHighlight,
+        backgroundColor: colors.surfaceAlt,
         borderRadius: radius.full,
         padding: 4,
         paddingRight: 10,
