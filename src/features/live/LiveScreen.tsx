@@ -25,6 +25,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useLive } from '../../context/LiveContext';
 import { useProfile } from '../../context/ProfileContext';
 import { useWallet } from '../../context/WalletContext';
+import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { useRepositories } from '../../data/provider';
 import { AppButton, AppScreen, AppText } from '../../components';
 import { ConfirmSheet } from '../../components/ConfirmSheet';
@@ -168,8 +169,11 @@ export default function LiveScreen() {
     gems: userGems,
     cash: userCash,
     fuel,
+    walletHydrated,
+    walletStateAvailable,
     spendCash,
   } = useWallet();
+  const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
   const {
     activeLive,
     liveRoom,
@@ -1090,6 +1094,13 @@ export default function LiveScreen() {
       return;
     }
 
+    if (!walletReady) {
+      setRefuelReceipt(
+        buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
+      );
+      return;
+    }
+
     if (!userId) {
       setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
       return;
@@ -1109,7 +1120,7 @@ export default function LiveScreen() {
     });
     setRefuelReceipt(nextReceipt);
     hapticImpact(nextReceipt.status === 'success' ? 'medium' : 'heavy');
-  }, [fuel, refuelReceipt.status, userId]);
+  }, [fuel, refuelReceipt.status, userId, walletReady]);
 
   const dismissKeyboard = useCallback(() => {
     Keyboard.dismiss();
@@ -1449,6 +1460,7 @@ export default function LiveScreen() {
           userGems={userGems}
           userCash={userCash}
           receipt={refuelReceipt}
+          walletReady={walletReady}
         />
 
         <KickConfirmModal

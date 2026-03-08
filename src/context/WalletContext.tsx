@@ -279,7 +279,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      if (!accountState) {
+      if (!accountState && !hasWalletState) {
         if (
           hasAuthoritativeWalletForUser(
             walletUserIdRef.current,

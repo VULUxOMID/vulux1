@@ -26,6 +26,7 @@ import {
 } from '../src/utils/webRuntimeCompat';
 import { useWallet } from '../src/context/WalletContext';
 import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
+import { hasAuthoritativeWallet } from '../src/context/walletHydration';
 import {
   buildRefuelPendingReceipt,
   IDLE_REFUEL_RECEIPT,
@@ -47,7 +48,7 @@ export default function GoLiveScreen() {
   const insets = useSafeAreaInsets();
   const { userId } = useSessionAuth();
   const { startLive, activeLive, liveRoom } = useLive();
-  const { fuel, gems, cash, walletStateAvailable } = useWallet();
+  const { fuel, gems, cash, walletHydrated, walletStateAvailable } = useWallet();
 
   const [title, setTitle] = useState('');
   const [inviteOnly, setInviteOnly] = useState(false);
@@ -56,6 +57,7 @@ export default function GoLiveScreen() {
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
+  const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
   const isOutOfFuel = walletStateAvailable && fuel <= 0;
   const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
   const canStartLive = hasValidTitle && !isOutOfFuel && !pendingStart;
@@ -143,6 +145,13 @@ export default function GoLiveScreen() {
 
     if (refuelReceipt.status === 'success') {
       closeFuelSheet();
+      return;
+    }
+
+    if (!walletReady) {
+      setRefuelReceipt(
+        buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
+      );
       return;
     }
 
@@ -368,6 +377,7 @@ export default function GoLiveScreen() {
         userGems={gems}
         userCash={cash}
         receipt={refuelReceipt}
+        walletReady={walletReady}
       />
     </View>
   );

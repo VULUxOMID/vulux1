@@ -74,3 +74,29 @@ export function buildRefuelFailureMessage(
 export function buildRefuelFallbackSuccessMessage(amount: FuelFillAmount): string {
   return `Added ${formatFuelPackLabel(amount)} fuel and refreshed your wallet.`;
 }
+
+export function getRefuelActionLabel(params: {
+  status: RefuelReceiptState['status'];
+  walletReady: boolean;
+  canAfford: boolean;
+  paymentType: 'gems' | 'cash';
+  defaultLabel: string;
+}): string {
+  if (params.status === 'pending') {
+    return 'Processing...';
+  }
+
+  if (params.status === 'success') {
+    return 'Done';
+  }
+
+  if (!params.walletReady) {
+    return 'Syncing wallet...';
+  }
+
+  if (!params.canAfford) {
+    return `Not enough ${params.paymentType === 'gems' ? 'Gems' : 'Cash'}`;
+  }
+
+  return params.defaultLabel;
+}
