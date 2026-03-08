@@ -4,6 +4,7 @@ import { useIsFocused } from '@react-navigation/native';
 
 import { AppScreen, AppText } from '../../components';
 import { spacing } from '../../theme';
+import { useWallet } from '../../context';
 import { useProfile } from '../../context/ProfileContext';
 import { useAuth } from '../../context/AuthContext';
 import { useUserProfile } from '../../context/UserProfileContext';
@@ -20,6 +21,12 @@ import {
   subscribeBootstrap,
   subscribeSpacetimeTelemetry,
 } from '../../lib/spacetime';
+import {
+  buildCurrentUserPreviewEntry,
+  buildVisibleLeaderboardItems,
+  deriveCurrentUserLabels,
+  getMeScopeSummary,
+} from './viewModel';
 
 type LeaderboardScope = 'all' | 'friends' | 'me';
 type EmptyStateConfig = {
@@ -34,8 +41,10 @@ export function LeaderboardScreen() {
   const isFocused = useIsFocused();
   const { user, initializing } = useAuth();
   const { userProfile } = useUserProfile();
+  const { cash } = useWallet();
   const friendshipsRepo = useFriendshipsRepo();
   const leaderboardRepo = useLeaderboardRepo();
+  const [isPublic, setIsPublic] = useState(true);
   const [scope, setScope] = useState<LeaderboardScope>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [telemetrySnapshot, setTelemetrySnapshot] = useState(() =>
@@ -73,6 +82,7 @@ export function LeaderboardScreen() {
   );
 
   const leaderboardData = useMemo(() => {
+    const currentUserLabels = deriveCurrentUserLabels(user, userProfile);
     return rawLeaderboardData.map((item) => {
       const isCurrentUser =
         item.isCurrentUser || item.id === user?.uid || item.id === userProfile.id;
@@ -85,24 +95,19 @@ export function LeaderboardScreen() {
 
       return {
         ...item,
-        displayName:
-          userProfile.name || user?.displayName || userProfile.username || item.displayName,
-        username: userProfile.username || item.username,
-        avatarUrl: userProfile.avatarUrl || user?.photoURL || item.avatarUrl,
+        displayName: currentUserLabels.displayName,
+        username: currentUserLabels.username,
+        avatarUrl: currentUserLabels.avatarUrl || item.avatarUrl,
         isCurrentUser: true,
         isFriend: false,
       };
     });
   }, [
     acceptedFriendIds,
+    cash,
     rawLeaderboardData,
-    user?.displayName,
-    user?.photoURL,
-    user?.uid,
-    userProfile.avatarUrl,
-    userProfile.id,
-    userProfile.name,
-    userProfile.username,
+    user,
+    userProfile,
   ]);
 
   const currentUserEntry = useMemo(
@@ -112,29 +117,37 @@ export function LeaderboardScreen() {
       ) ?? null,
     [leaderboardData, user?.uid, userProfile.id],
   );
+  const currentUserPreview = useMemo(
+    () =>
+      buildCurrentUserPreviewEntry({
+        currentUserEntry,
+        user,
+        userProfile,
+        cashAmount: cash,
+      }),
+    [cash, currentUserEntry, user, userProfile],
+  );
 
   const filteredData = useMemo(() => {
-    let data = leaderboardData;
-
-    if (scope === 'friends') {
-      data = data.filter((item) => acceptedFriendIds.has(item.id));
-    } else if (scope === 'me') {
-      data = data.filter(
-        (item) => item.isCurrentUser || item.id === user?.uid || item.id === userProfile.id,
-      );
-    }
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.trim().toLowerCase();
-      data = data.filter(
-        (item) =>
-          item.displayName.toLowerCase().includes(query) ||
-          item.username.toLowerCase().includes(query),
-      );
-    }
-
-    return data;
-  }, [acceptedFriendIds, leaderboardData, scope, searchQuery, user?.uid, userProfile.id]);
+    return buildVisibleLeaderboardItems({
+      scope,
+      isPublic,
+      searchQuery,
+      leaderboardData,
+      currentUserPreview,
+      currentUserId: user?.uid ?? userProfile.id,
+      acceptedFriendIds,
+    });
+  }, [
+    acceptedFriendIds,
+    currentUserPreview,
+    isPublic,
+    leaderboardData,
+    scope,
+    searchQuery,
+    user?.uid,
+    userProfile.id,
+  ]);
 
   const isConnecting =
     telemetrySnapshot.connectionState === 'idle' ||
@@ -153,9 +166,7 @@ export function LeaderboardScreen() {
 
   const summaryText = useMemo(() => {
     if (scope === 'me') {
-      return currentUserEntry
-        ? `Your current rank is #${currentUserEntry.rank}.`
-        : 'Your rank appears as soon as the authoritative leaderboard row arrives.';
+      return getMeScopeSummary(currentUserPreview, isPublic);
     }
 
     if (scope === 'friends') {
@@ -167,7 +178,7 @@ export function LeaderboardScreen() {
     return filteredData.length === 1
       ? '1 ranked profile in the current view.'
       : `${filteredData.length} ranked profiles in the current view.`;
-  }, [currentUserEntry, filteredData.length, scope]);
+  }, [currentUserPreview, filteredData.length, isPublic, scope]);
 
   const statusLabel = useMemo(() => {
     if (isReconnectState) {
@@ -216,8 +227,10 @@ export function LeaderboardScreen() {
     if (scope === 'me') {
       return {
         iconName: 'person-outline',
-        title: 'Your rank is not available yet',
-        message: 'We only show your row once the leaderboard feed returns it for your account.',
+        title: isPublic ? 'Your rank is not available yet' : 'You are hidden from the leaderboard',
+        message: isPublic
+          ? 'Your personal row stays visible here while the authoritative rank finishes hydrating.'
+          : 'Turn Public Profile back on to show your row to other players. Your personal view stays here.',
       };
     }
 
@@ -281,6 +294,10 @@ export function LeaderboardScreen() {
     hapticTap();
     setScope(value as LeaderboardScope);
   }, []);
+  const handleTogglePrivacy = useCallback((value: boolean) => {
+    hapticTap();
+    setIsPublic(value);
+  }, []);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
@@ -300,6 +317,8 @@ export function LeaderboardScreen() {
   const headerComponent = useMemo(
     () => (
       <LeaderboardListHeader
+        isPublic={isPublic}
+        onToggle={handleTogglePrivacy}
         scopeValue={scope}
         onScopeChange={handleScopeChange}
         searchValue={searchQuery}
@@ -313,6 +332,8 @@ export function LeaderboardScreen() {
       handleClearSearch,
       handleScopeChange,
       handleSearchChange,
+      handleTogglePrivacy,
+      isPublic,
       scope,
       searchQuery,
       statusLabel,
