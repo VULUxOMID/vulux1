@@ -11,6 +11,10 @@ import {
   uploadObject,
 } from "./r2.js";
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
+import {
+  createRealtimeTicketStore,
+  DEFAULT_REALTIME_TICKET_TTL_MS,
+} from "./realtimeTickets.js";
 
 const port = Number.parseInt(process.env.PORT ?? "3000", 10) || 3000;
 const authJwksUrl = (process.env.AUTH_JWKS_URL ?? "").trim();
@@ -61,6 +65,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
 ]);
 const rateLimitBuckets = new Map();
+const realtimeTicketStore = createRealtimeTicketStore();
 
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -382,6 +387,32 @@ const server = http.createServer(async (req, res) => {
         error instanceof Error && error.message
           ? error.message
           : "Failed to create upload URL.";
+      sendJson(res, statusCode, { error: message });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/realtime/tickets") {
+    try {
+      const viewerUserId = await requireViewerUserId(req);
+      const issued = realtimeTicketStore.issue(viewerUserId);
+
+      console.log(`[upload-signer] realtime-ticket user=${viewerUserId}`);
+
+      sendJson(res, 200, {
+        ticket: issued.ticket,
+        expiresInSeconds: Math.floor(DEFAULT_REALTIME_TICKET_TTL_MS / 1000),
+      });
+      return;
+    } catch (error) {
+      const statusCode =
+        error && typeof error === "object" && "statusCode" in error
+          ? Number(error.statusCode) || 500
+          : 500;
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to issue realtime ticket.";
       sendJson(res, statusCode, { error: message });
       return;
     }

@@ -13,7 +13,7 @@ export type BackendRealtimeStatus = 'connecting' | 'connected' | 'disconnected' 
 const ENDPOINT_NOT_FOUND_COOLDOWN_MS = 5 * 60_000;
 const MAX_RECONNECT_BACKOFF_MS = 60_000;
 const REALTIME_PROTOCOL = 'vulu.realtime.v1';
-const REALTIME_AUTH_PROTOCOL_PREFIX = 'vulu.auth.bearer.';
+const REALTIME_TICKET_PROTOCOL_PREFIX = 'vulu.auth.ticket.';
 
 function isMissingRealtimeEndpoint(reason: string): boolean {
   const normalized = reason.toLowerCase();
@@ -63,8 +63,57 @@ function parseEvent(rawData: unknown): BackendRealtimeEvent | null {
   }
 }
 
-function buildRealtimeProtocols(token: string): string[] {
-  return [REALTIME_PROTOCOL, `${REALTIME_AUTH_PROTOCOL_PREFIX}${token}`];
+function getRealtimeTicketUrl(realtimeBaseUrl: string): string {
+  const url = new URL(realtimeBaseUrl);
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/tickets`;
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+async function parseJsonSafely(response: Response): Promise<any> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    return text ? { text } : null;
+  }
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function issueRealtimeTicket(realtimeBaseUrl: string, token: string): Promise<string> {
+  const response = await fetch(getRealtimeTicketUrl(realtimeBaseUrl), {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  });
+  const payload = await parseJsonSafely(response);
+  if (!response.ok) {
+    const message =
+      payload && typeof payload.error === 'string'
+        ? payload.error
+        : `Realtime ticket request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  const ticket =
+    payload && typeof payload.ticket === 'string' ? payload.ticket.trim() : '';
+  if (!ticket) {
+    throw new Error('Realtime ticket response did not include a ticket.');
+  }
+  return ticket;
+}
+
+function buildRealtimeProtocols(ticket: string): string[] {
+  return [REALTIME_PROTOCOL, `${REALTIME_TICKET_PROTOCOL_PREFIX}${ticket}`];
 }
 
 export type BackendRealtimeClient = {
@@ -132,7 +181,8 @@ class BackendRealtimeClientImpl implements BackendRealtimeClient {
           url.searchParams.set('userId', this.options.userId);
         }
         connectionUrl = url.toString();
-        connectionProtocols = buildRealtimeProtocols(token);
+        const ticket = await issueRealtimeTicket(baseUrl, token);
+        connectionProtocols = buildRealtimeProtocols(ticket);
       } catch {
         this.opening = false;
         this.setStatus('disconnected');
