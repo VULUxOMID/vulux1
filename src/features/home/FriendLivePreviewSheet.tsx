@@ -22,11 +22,17 @@ import { Friend } from './ActivitiesRow';
 import { LiveItem } from './LiveSection';
 import { useWallet } from '../../context/WalletContext';
 import { useLive } from '../../context/LiveContext';
+import {
+  buildRefuelPendingReceipt,
+  IDLE_REFUEL_RECEIPT,
+  runRefuelAction,
+  type RefuelReceiptState,
+} from '../liveroom/refuelFlow';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../liveroom/types';
 import { hapticTap } from '../../utils/haptics';
 import { normalizeImageUri } from '../../utils/imageSource';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
-import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
+import { buildFailureReceipt } from '../shop/shopReceipts';
 
 // Base screen width for scaling (iPhone 12/13 width)
 const BASE_SCREEN_WIDTH = 390;
@@ -127,6 +133,7 @@ export function FriendLivePreviewSheet({
   const isClosingRef = useRef(false);
   const isSwipeDismissRef = useRef(false);
   const [isRefuelSheetVisible, setIsRefuelSheetVisible] = useState(false);
+  const [refuelReceipt, setRefuelReceipt] = useState<RefuelReceiptState>(IDLE_REFUEL_RECEIPT);
   const [selectedFuelOptionIndex, setSelectedFuelOptionIndex] = useState(0);
   const [fuelPaymentType, setFuelPaymentType] = useState<'gems' | 'cash'>('gems');
 
@@ -224,6 +231,14 @@ export function FriendLivePreviewSheet({
   const selectedFuelCost = FUEL_COSTS[selectedFuelAmount];
   const selectedFuelPrice = fuelPaymentType === 'gems' ? selectedFuelCost.gems : selectedFuelCost.cash;
   const hasEnoughBalance = fuelPaymentType === 'gems' ? gems >= selectedFuelCost.gems : cash >= selectedFuelCost.cash;
+  const isRefuelPending = refuelReceipt.status === 'pending';
+  const isRefuelSuccess = refuelReceipt.status === 'success';
+
+  useEffect(() => {
+    if (!isRefuelSheetVisible) {
+      setRefuelReceipt(IDLE_REFUEL_RECEIPT);
+    }
+  }, [isRefuelSheetVisible]);
 
   // Memoized grid layout calculation
   const gridRows = useMemo(() => {
@@ -370,44 +385,50 @@ export function FriendLivePreviewSheet({
   }, []);
 
   const handleConfirmRefuel = useCallback(async () => {
-    if (fuel >= MAX_FUEL_MINUTES) {
-      toast.info('Your fuel tank is already full.');
+    if (isRefuelPending) {
+      return;
+    }
+
+    if (isRefuelSuccess) {
       setIsRefuelSheetVisible(false);
       return;
     }
 
+    if (fuel >= MAX_FUEL_MINUTES) {
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
+      return;
+    }
+
     if (!hasEnoughBalance) {
-      toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+      setRefuelReceipt(
+        buildFailureReceipt(
+          'purchase_fuel',
+          `You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'} to buy this fuel pack.`,
+        ),
+      );
       return;
     }
 
     if (!userId) {
-      toast.error('Sign in required to refuel.');
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
       return;
     }
 
-    const result = await purchaseFuelPack(
+    setRefuelReceipt(buildRefuelPendingReceipt(selectedFuelAmount));
+    const nextReceipt = await runRefuelAction({
       userId,
-      selectedFuelAmount,
-      fuelPaymentType,
-      'friend_live_preview_refuel',
-    );
-    if (!result.ok) {
-      if (result.code === 'insufficient_balance') {
-        toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
-      } else {
-        toast.error(result.message ?? 'Refuel failed.');
-      }
-      return;
-    }
-
-    setIsRefuelSheetVisible(false);
-    toast.success(`Added ${selectedFuelAmount}m fuel.`);
+      amount: selectedFuelAmount,
+      paymentType: fuelPaymentType,
+      source: 'friend_live_preview_refuel',
+    });
+    setRefuelReceipt(nextReceipt);
     hapticTap();
   }, [
     fuel,
     fuelPaymentType,
     hasEnoughBalance,
+    isRefuelPending,
+    isRefuelSuccess,
     selectedFuelAmount,
     selectedFuelPrice,
     userId,
@@ -693,13 +714,34 @@ export function FriendLivePreviewSheet({
             <View style={styles.refuelOverlay}>
               <Pressable
                 style={styles.refuelOverlayBackdrop}
-                onPress={() => setIsRefuelSheetVisible(false)}
+                onPress={isRefuelPending ? undefined : () => setIsRefuelSheetVisible(false)}
               />
               <View style={styles.refuelSheet}>
                 <AppText style={styles.refuelTitle}>Refuel Before Joining</AppText>
                 <AppText style={styles.refuelSubtitle}>
                   Pick your fuel pack without leaving this live preview.
                 </AppText>
+
+                {refuelReceipt.status !== 'idle' ? (
+                  <View
+                    style={[
+                      styles.refuelStatusCard,
+                      refuelReceipt.status === 'success'
+                        ? styles.refuelStatusCardSuccess
+                        : refuelReceipt.status === 'failure'
+                          ? styles.refuelStatusCardFailure
+                          : styles.refuelStatusCardPending,
+                    ]}
+                  >
+                    <AppText style={styles.refuelStatusTitle}>{refuelReceipt.title}</AppText>
+                    <AppText style={styles.refuelStatusMessage}>{refuelReceipt.message}</AppText>
+                    {refuelReceipt.balanceAfter ? (
+                      <AppText style={styles.refuelStatusBalance}>
+                        Wallet now: {refuelReceipt.balanceAfter.gems} Gems • {refuelReceipt.balanceAfter.cash} Cash • {refuelReceipt.balanceAfter.fuel}m Fuel
+                      </AppText>
+                    ) : null}
+                  </View>
+                ) : null}
 
                 <View style={styles.refuelPaymentRow}>
                   <Pressable
@@ -708,6 +750,7 @@ export function FriendLivePreviewSheet({
                       fuelPaymentType === 'gems' && styles.refuelPaymentChipActive,
                     ]}
                     onPress={() => setFuelPaymentType('gems')}
+                    disabled={isRefuelPending || isRefuelSuccess}
                   >
                     <AppText
                       style={[
@@ -724,6 +767,7 @@ export function FriendLivePreviewSheet({
                       fuelPaymentType === 'cash' && styles.refuelPaymentChipActive,
                     ]}
                     onPress={() => setFuelPaymentType('cash')}
+                    disabled={isRefuelPending || isRefuelSuccess}
                   >
                     <AppText
                       style={[
@@ -743,7 +787,7 @@ export function FriendLivePreviewSheet({
                       selectedFuelOptionIndex === 0 && styles.refuelStepButtonDisabled,
                     ]}
                     onPress={handleDecreaseFuelPack}
-                    disabled={selectedFuelOptionIndex === 0}
+                    disabled={selectedFuelOptionIndex === 0 || isRefuelPending || isRefuelSuccess}
                   >
                     <Ionicons name="remove" size={18} color={colors.textPrimary} />
                   </Pressable>
@@ -760,7 +804,7 @@ export function FriendLivePreviewSheet({
                         styles.refuelStepButtonDisabled,
                     ]}
                     onPress={handleIncreaseFuelPack}
-                    disabled={selectedFuelOptionIndex === FUEL_OPTION_STEPS.length - 1}
+                    disabled={selectedFuelOptionIndex === FUEL_OPTION_STEPS.length - 1 || isRefuelPending || isRefuelSuccess}
                   >
                     <Ionicons name="add" size={18} color={colors.textPrimary} />
                   </Pressable>
@@ -778,12 +822,19 @@ export function FriendLivePreviewSheet({
                 <Pressable
                   style={[
                     styles.refuelConfirmButton,
-                    !hasEnoughBalance && styles.refuelConfirmButtonDisabled,
+                    isRefuelPending || (!hasEnoughBalance && !isRefuelSuccess)
+                      ? styles.refuelConfirmButtonDisabled
+                      : null,
                   ]}
                   onPress={handleConfirmRefuel}
+                  disabled={isRefuelPending || (!hasEnoughBalance && !isRefuelSuccess)}
                 >
                   <AppText style={styles.refuelConfirmButtonText}>
-                    Add Fuel
+                    {isRefuelPending
+                      ? 'Processing...'
+                      : isRefuelSuccess
+                        ? 'Done'
+                        : 'Add Fuel'}
                   </AppText>
                 </Pressable>
               </View>
@@ -1128,6 +1179,39 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+  refuelStatusCard: {
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  refuelStatusCardPending: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  refuelStatusCardSuccess: {
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.28)',
+  },
+  refuelStatusCardFailure: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.24)',
+  },
+  refuelStatusTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  refuelStatusMessage: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  refuelStatusBalance: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
   },
   refuelPaymentRow: {
     flexDirection: 'row',

@@ -51,6 +51,12 @@ import {
   BoostButton,
   InviteToStreamModal,
 } from '../liveroom/components';
+import {
+  buildRefuelPendingReceipt,
+  IDLE_REFUEL_RECEIPT,
+  runRefuelAction,
+  type RefuelReceiptState,
+} from '../liveroom/refuelFlow';
 import { ProfileModal } from '../../components/ProfileModal';
 import { LiveItem } from '../home/LiveSection';
 import { MiniHostsGrid } from './components/MiniHostsGrid';
@@ -68,7 +74,7 @@ import {
   lockPortraitOrientationSafely,
   unlockOrientationSafely,
 } from '../../utils/webRuntimeCompat';
-import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
+import { buildFailureReceipt } from '../shop/shopReceipts';
 import { submitReport } from '../reports/reportingClient';
 import {
   type LiveControlEvent,
@@ -194,6 +200,7 @@ export default function LiveScreen() {
   const hasHandledClosedNavigationRef = useRef(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const keyboardAnimatedHeight = useRef(new Animated.Value(0)).current;
+  const [refuelReceipt, setRefuelReceipt] = useState<RefuelReceiptState>(IDLE_REFUEL_RECEIPT);
 
   // Lock orientation to portrait when screen mounts
   useEffect(() => {
@@ -1073,29 +1080,36 @@ export default function LiveScreen() {
   }, [handlePostLiveNavigation, leaveLive]);
 
   const handleFillFuel = useCallback(async (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
-    if (!userId) {
-      toast.error('Sign in required to refuel.');
+    if (refuelReceipt.status === 'pending') {
       return;
     }
 
-    const result = await purchaseFuelPack(
+    if (refuelReceipt.status === 'success') {
+      setRefuelReceipt(IDLE_REFUEL_RECEIPT);
+      setActiveSheet(null);
+      return;
+    }
+
+    if (!userId) {
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
+      return;
+    }
+
+    if (fuel >= MAX_FUEL_MINUTES) {
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
+      return;
+    }
+
+    setRefuelReceipt(buildRefuelPendingReceipt(amount));
+    const nextReceipt = await runRefuelAction({
       userId,
       amount,
       paymentType,
-      'live_screen_refuel',
-    );
-    if (result.ok) {
-      hapticImpact('medium');
-      return;
-    }
-
-    hapticImpact('heavy');
-    if (result.code === 'insufficient_balance') {
-      toast.warning('Not enough balance to refuel.');
-    } else {
-      toast.error(result.message ?? 'Refuel failed.');
-    }
-  }, [userId]);
+      source: 'live_screen_refuel',
+    });
+    setRefuelReceipt(nextReceipt);
+    hapticImpact(nextReceipt.status === 'success' ? 'medium' : 'heavy');
+  }, [fuel, refuelReceipt.status, userId]);
 
   const dismissKeyboard = useCallback(() => {
     Keyboard.dismiss();
@@ -1423,11 +1437,18 @@ export default function LiveScreen() {
         {/* Fuel Sheet (Premium GemPlus) */}
         <FuelSheet
           visible={activeSheet === 'fuel'}
-          onClose={() => setActiveSheet(null)}
+          onClose={() => {
+            if (refuelReceipt.status === 'pending') {
+              return;
+            }
+            setRefuelReceipt(IDLE_REFUEL_RECEIPT);
+            setActiveSheet(null);
+          }}
           onFill={handleFillFuel}
           currentFuel={fuel}
           userGems={userGems}
           userCash={userCash}
+          receipt={refuelReceipt}
         />
 
         <KickConfirmModal

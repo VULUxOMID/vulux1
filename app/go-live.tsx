@@ -26,11 +26,17 @@ import {
 } from '../src/utils/webRuntimeCompat';
 import { useWallet } from '../src/context/WalletContext';
 import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
+import {
+  buildRefuelPendingReceipt,
+  IDLE_REFUEL_RECEIPT,
+  runRefuelAction,
+  type RefuelReceiptState,
+} from '../src/features/liveroom/refuelFlow';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
+import { buildFailureReceipt } from '../src/features/shop/shopReceipts';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
 import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
-import { purchaseFuelPack } from '../src/data/adapters/backend/walletMutations';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -46,6 +52,7 @@ export default function GoLiveScreen() {
   const [title, setTitle] = useState('');
   const [inviteOnly, setInviteOnly] = useState(false);
   const [showFuelSheet, setShowFuelSheet] = useState(false);
+  const [refuelReceipt, setRefuelReceipt] = useState<RefuelReceiptState>(IDLE_REFUEL_RECEIPT);
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
@@ -73,7 +80,16 @@ export default function GoLiveScreen() {
   const openFuelSheet = () => {
     Keyboard.dismiss();
     blurActiveWebElement();
+    setRefuelReceipt(IDLE_REFUEL_RECEIPT);
     setShowFuelSheet(true);
+  };
+
+  const closeFuelSheet = () => {
+    if (refuelReceipt.status === 'pending') {
+      return;
+    }
+    setShowFuelSheet(false);
+    setRefuelReceipt(IDLE_REFUEL_RECEIPT);
   };
 
   const handleStartLive = async () => {
@@ -121,35 +137,46 @@ export default function GoLiveScreen() {
   };
 
   const handleFillFuel = async (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
+    if (refuelReceipt.status === 'pending') {
+      return;
+    }
+
+    if (refuelReceipt.status === 'success') {
+      closeFuelSheet();
+      return;
+    }
+
     const cost = FUEL_COSTS[amount];
     const canAfford = paymentType === 'gems' ? gems >= cost.gems : cash >= cost.cash;
 
     if (!canAfford) {
-      toast.warning(`You need ${paymentType === 'gems' ? cost.gems : cost.cash} ${paymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+      setRefuelReceipt(
+        buildFailureReceipt(
+          'purchase_fuel',
+          `You need ${paymentType === 'gems' ? cost.gems : cost.cash} ${paymentType === 'gems' ? 'Gems' : 'Cash'} to buy this fuel pack.`,
+        ),
+      );
       return;
     }
 
     if (!userId) {
-      toast.error('Sign in required to refuel.');
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
       return;
     }
 
-    if (fuel < MAX_FUEL_MINUTES) {
-      const result = await purchaseFuelPack(
-        userId,
-        amount,
-        paymentType,
-        'go_live_refuel',
-      );
-
-      if (result.ok) {
-        setShowFuelSheet(false);
-      } else if (result.code === 'insufficient_balance') {
-        toast.warning('Not enough balance to refuel.');
-      } else {
-        toast.error(result.message ?? 'Refuel failed. Please try again.');
-      }
+    if (fuel >= MAX_FUEL_MINUTES) {
+      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
+      return;
     }
+
+    setRefuelReceipt(buildRefuelPendingReceipt(amount));
+    const nextReceipt = await runRefuelAction({
+      userId,
+      amount,
+      paymentType,
+      source: 'go_live_refuel',
+    });
+    setRefuelReceipt(nextReceipt);
   };
 
   return (
@@ -335,11 +362,12 @@ export default function GoLiveScreen() {
       </KeyboardAvoidingView>
       <FuelSheet
         visible={showFuelSheet}
-        onClose={() => setShowFuelSheet(false)}
+        onClose={closeFuelSheet}
         onFill={handleFillFuel}
         currentFuel={fuel}
         userGems={gems}
         userCash={cash}
+        receipt={refuelReceipt}
       />
     </View>
   );
