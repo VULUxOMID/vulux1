@@ -11,6 +11,7 @@ import {
   buildRefuelFallbackSuccessMessage,
   buildRefuelPendingReceipt,
   buildRefuelTransactionMatch,
+  getRefuelActionLabel,
   IDLE_REFUEL_RECEIPT,
   type RefuelReceiptState,
 } from './refuelReceipt';
@@ -19,6 +20,7 @@ export {
   buildRefuelFailureMessage,
   buildRefuelPendingReceipt,
   buildRefuelTransactionMatch,
+  getRefuelActionLabel,
   IDLE_REFUEL_RECEIPT,
 };
 export type { RefuelReceiptState } from './refuelReceipt';

@@ -21,6 +21,7 @@ import { colors, radius, spacing } from '../../theme';
 import { Friend } from './ActivitiesRow';
 import { LiveItem } from './LiveSection';
 import { useWallet } from '../../context/WalletContext';
+import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { useLive } from '../../context/LiveContext';
 import {
   buildRefuelPendingReceipt,
@@ -128,7 +129,7 @@ export function FriendLivePreviewSheet({
   const router = useRouter();
   const { userId } = useSessionAuth();
   const { width: screenWidth } = useWindowDimensions();
-  const { fuel, gems, cash } = useWallet();
+  const { fuel, gems, cash, walletHydrated, walletStateAvailable } = useWallet();
   const { switchLiveRoom } = useLive();
   const isClosingRef = useRef(false);
   const isSwipeDismissRef = useRef(false);
@@ -230,7 +231,8 @@ export function FriendLivePreviewSheet({
   const selectedFuelAmount = FUEL_OPTION_STEPS[selectedFuelOptionIndex] ?? FUEL_OPTION_STEPS[0];
   const selectedFuelCost = FUEL_COSTS[selectedFuelAmount];
   const selectedFuelPrice = fuelPaymentType === 'gems' ? selectedFuelCost.gems : selectedFuelCost.cash;
-  const hasEnoughBalance = fuelPaymentType === 'gems' ? gems >= selectedFuelCost.gems : cash >= selectedFuelCost.cash;
+  const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
+  const hasEnoughBalance = walletReady && (fuelPaymentType === 'gems' ? gems >= selectedFuelCost.gems : cash >= selectedFuelCost.cash);
   const isRefuelPending = refuelReceipt.status === 'pending';
   const isRefuelSuccess = refuelReceipt.status === 'success';
 
@@ -394,6 +396,13 @@ export function FriendLivePreviewSheet({
       return;
     }
 
+    if (!walletReady) {
+      setRefuelReceipt(
+        buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
+      );
+      return;
+    }
+
     if (fuel >= MAX_FUEL_MINUTES) {
       setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
       return;
@@ -429,6 +438,7 @@ export function FriendLivePreviewSheet({
     hasEnoughBalance,
     isRefuelPending,
     isRefuelSuccess,
+    walletReady,
     selectedFuelAmount,
     selectedFuelPrice,
     userId,
@@ -758,7 +768,7 @@ export function FriendLivePreviewSheet({
                         fuelPaymentType === 'gems' && styles.refuelPaymentTextActive,
                       ]}
                     >
-                      Gems ({gems})
+                      {walletReady ? `Gems (${gems})` : 'Gems'}
                     </AppText>
                   </Pressable>
                   <Pressable
@@ -775,7 +785,7 @@ export function FriendLivePreviewSheet({
                         fuelPaymentType === 'cash' && styles.refuelPaymentTextActive,
                       ]}
                     >
-                      Cash ({cash})
+                      {walletReady ? `Cash (${cash})` : 'Cash'}
                     </AppText>
                   </Pressable>
                 </View>
@@ -834,7 +844,9 @@ export function FriendLivePreviewSheet({
                       ? 'Processing...'
                       : isRefuelSuccess
                         ? 'Done'
-                        : 'Add Fuel'}
+                        : !walletReady
+                          ? 'Syncing wallet...'
+                          : 'Add Fuel'}
                   </AppText>
                 </Pressable>
               </View>

@@ -5,6 +5,7 @@ import {
   buildRefuelFailureMessage,
   buildRefuelPendingReceipt,
   buildRefuelTransactionMatch,
+  getRefuelActionLabel,
 } from './refuelReceipt';
 
 test('buildRefuelPendingReceipt keeps copy deterministic', () => {
@@ -62,5 +63,28 @@ test('buildRefuelFailureMessage maps server guardrails to user-safe copy', () =>
       'cash',
     ),
     'Choose a valid fuel pack to continue.',
+  );
+});
+
+test('getRefuelActionLabel prefers wallet syncing copy over insufficient balance', () => {
+  assert.equal(
+    getRefuelActionLabel({
+      status: 'idle',
+      walletReady: false,
+      canAfford: false,
+      paymentType: 'gems',
+      defaultLabel: 'Fill +30m',
+    }),
+    'Syncing wallet...',
+  );
+  assert.equal(
+    getRefuelActionLabel({
+      status: 'idle',
+      walletReady: true,
+      canAfford: false,
+      paymentType: 'gems',
+      defaultLabel: 'Fill +30m',
+    }),
+    'Not enough Gems',
   );
 });

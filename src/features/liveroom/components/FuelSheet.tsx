@@ -5,7 +5,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../../components';
 import { CashIcon } from '../../../components/CashIcon';
 import { colors, radius, spacing } from '../../../theme';
-import { IDLE_REFUEL_RECEIPT, type RefuelReceiptState } from '../refuelFlow';
+import {
+  getRefuelActionLabel,
+  IDLE_REFUEL_RECEIPT,
+  type RefuelReceiptState,
+} from '../refuelFlow';
 import { FuelFillAmount, FUEL_COSTS, MAX_FUEL_MINUTES } from '../types';
 import { hapticTap } from '../../../utils/haptics';
 
@@ -22,6 +26,7 @@ type FuelSheetProps = {
   userGems?: number;
   userCash?: number;
   receipt?: RefuelReceiptState;
+  walletReady?: boolean;
 };
 
 const FILL_AMOUNTS: FuelFillAmount[] = [30, 60, 120, 300, 600];
@@ -34,6 +39,7 @@ export function FuelSheet({
   userGems = 0,
   userCash = 0,
   receipt = IDLE_REFUEL_RECEIPT,
+  walletReady = false,
 }: FuelSheetProps) {
   const insets = useSafeAreaInsets();
   const [selectedAmount, setSelectedAmount] = useState<FuelFillAmount>(30);
@@ -124,7 +130,7 @@ export function FuelSheet({
 
   const cost = FUEL_COSTS[selectedAmount];
   const currentCost = paymentType === 'gems' ? cost.gems : cost.cash;
-  const canAfford = paymentType === 'gems' ? userGems >= cost.gems : userCash >= cost.cash;
+  const canAfford = walletReady && (paymentType === 'gems' ? userGems >= cost.gems : userCash >= cost.cash);
 
   const formatRemainingTime = (fuelUnits: number) => {
     const totalSeconds = Math.max(0, Math.floor(fuelUnits));
@@ -154,14 +160,14 @@ export function FuelSheet({
 
   const fuelPercentage = Math.min((displayedFuel / MAX_FUEL_MINUTES) * 100, 100);
 
-  const fillButtonDisabled = isPending || (!canAfford && !isSuccess);
-  const fillButtonText = isPending
-    ? 'Processing...'
-    : isSuccess
-      ? 'Done'
-      : !canAfford
-        ? `Not enough ${paymentType === 'gems' ? 'Gems' : 'Cash'}`
-        : `Fill +${formatFillAmount(selectedAmount)}`;
+  const fillButtonDisabled = isPending || (!isSuccess && (!walletReady || !canAfford));
+  const fillButtonText = getRefuelActionLabel({
+    status: receipt.status,
+    walletReady,
+    canAfford,
+    paymentType,
+    defaultLabel: `Fill +${formatFillAmount(selectedAmount)}`,
+  });
 
   return (
     <Modal
@@ -274,6 +280,16 @@ export function FuelSheet({
                   Wallet now: {balanceAfter.gems} Gems • {balanceAfter.cash} Cash • {balanceAfter.fuel}m Fuel
                 </AppText>
               ) : null}
+            </View>
+          ) : !walletReady ? (
+            <View style={[styles.statusCard, styles.statusCardPending]}>
+              <View style={styles.statusRow}>
+                <ActivityIndicator color={colors.accentPrimary} size="small" />
+                <AppText style={styles.statusTitle}>Syncing wallet</AppText>
+              </View>
+              <AppText style={styles.statusMessage}>
+                Waiting for your authoritative Gems and Cash balance from the server.
+              </AppText>
             </View>
           ) : null}
 
