@@ -1133,22 +1133,40 @@ export const myIdentity = spacetimedb.view(
     t.array(myIdentityRow),
     (ctx) => {
         const authIdentity = readCallerAuthIdentity(ctx);
-        if (!authIdentity) {
+        if (authIdentity) {
+            const lookupKey = buildIdentityLookupKey(
+                CURRENT_IDENTITY_PROVIDER,
+                authIdentity.issuer,
+                authIdentity.subject,
+            );
+            const row = ctx.db.userIdentity.lookupKey.find(lookupKey);
+            if (row) {
+                return [
+                    {
+                        id: row.id,
+                        vuluUserId: row.vuluUserId,
+                        provider: row.provider,
+                        issuer: row.issuer,
+                        subject: row.subject,
+                        email: row.email,
+                        emailVerified: row.emailVerified,
+                        createdAt: row.createdAt,
+                    },
+                ];
+            }
+        }
+
+        const callerUserId = findMappedCallerUserId(ctx);
+        if (!callerUserId) {
             return [];
         }
 
-        const lookupKey = buildIdentityLookupKey(
-            CURRENT_IDENTITY_PROVIDER,
-            authIdentity.issuer,
-            authIdentity.subject,
-        );
-        const row = ctx.db.userIdentity.lookupKey.find(lookupKey);
-        if (!row) {
-            return [];
-        }
-
-        return [
-            {
+        const rows = [];
+        for (const row of ctx.db.userIdentity.iter()) {
+            if (readString(row.vuluUserId) !== callerUserId) {
+                continue;
+            }
+            rows.push({
                 id: row.id,
                 vuluUserId: row.vuluUserId,
                 provider: row.provider,
@@ -1157,8 +1175,10 @@ export const myIdentity = spacetimedb.view(
                 email: row.email,
                 emailVerified: row.emailVerified,
                 createdAt: row.createdAt,
-            },
-        ];
+            });
+        }
+
+        return rows;
     },
 );
 

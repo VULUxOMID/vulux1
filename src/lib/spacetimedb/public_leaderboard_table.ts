@@ -12,6 +12,9 @@ import {
 
 export default __t.row({
   userId: __t.string().name("user_id"),
+  username: __t.string(),
+  displayName: __t.string().name("display_name"),
+  avatarUrl: __t.string().name("avatar_url"),
   score: __t.u32(),
   gold: __t.u32(),
   gems: __t.u32(),

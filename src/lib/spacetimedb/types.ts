@@ -410,6 +410,9 @@ export type PublicLeaderboardItem = __Infer<typeof PublicLeaderboardItem>;
 
 export const PublicLeaderboardRow = __t.object("PublicLeaderboardRow", {
   userId: __t.string(),
+  username: __t.string(),
+  displayName: __t.string(),
+  avatarUrl: __t.string(),
   score: __t.u32(),
   gold: __t.u32(),
   gems: __t.u32(),
