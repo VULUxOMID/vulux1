@@ -782,33 +782,9 @@ export default function ChatDetailScreen() {
     if (!selectedMessage) return;
     const msg = selectedMessage;
     if (id === 'reply') { hapticTap(); setReplyTo(msg); closeMenu(); return; }
-    if (id === 'edit') { hapticTap(); setReplyTo(null); setEditing(msg); setText(msg.text); closeMenu(); return; }
-    if (id === 'delete') { hapticWarn(); setLocalMessages(prev => prev.filter(m => m.id !== msg.id)); closeMenu(); return; }
+    if (id === 'edit' || id === 'delete') { closeMenu(); return; }
     if (id === 'report') { hapticWarn(); setReportMessage(msg); closeMenu(); return; }
     if (id === 'copy') { hapticTap(); Clipboard.setStringAsync(msg.text); closeMenu(); }
-  }, [closeMenu, selectedMessage]);
-
-  const handleReaction = useCallback((emoji: string) => {
-    if (!selectedMessage) return;
-    hapticTap();
-    setLocalMessages(prev => prev.map(msg => {
-      if (msg.id !== selectedMessage.id) return msg;
-      const currentReactions = msg.reactions || [];
-      const existingIndex = currentReactions.findIndex(r => r.emoji === emoji);
-      let newReactions;
-      if (existingIndex >= 0) {
-        const existing = currentReactions[existingIndex];
-        if (existing.isMine) {
-           if (existing.count === 1) newReactions = currentReactions.filter(r => r.emoji !== emoji);
-           else { newReactions = [...currentReactions]; newReactions[existingIndex] = { ...existing, count: existing.count - 1, isMine: false }; }
-        } else {
-           newReactions = [...currentReactions];
-           newReactions[existingIndex] = { ...existing, count: existing.count + 1, isMine: true };
-        }
-      } else newReactions = [...currentReactions, { emoji, count: 1, isMine: true }];
-      return { ...msg, reactions: newReactions };
-    }));
-    closeMenu();
   }, [closeMenu, selectedMessage]);
 
   const sendMessage = (
@@ -1412,7 +1388,15 @@ export default function ChatDetailScreen() {
         </View>
       </Modal>
 
-      <MessageActionMenu visible={menuVisible} anchor={menuAnchor} isMine={selectedMessage?.senderId === 'me'} onClose={closeMenu} onAction={handleAction} onReaction={handleReaction} />
+      <MessageActionMenu
+        visible={menuVisible}
+        anchor={menuAnchor}
+        isMine={selectedMessage?.senderId === 'me'}
+        supportsOwnMessageMutations={false}
+        supportsReactions={false}
+        onClose={closeMenu}
+        onAction={handleAction}
+      />
 
       <ReportComposerModal
         visible={Boolean(reportMessage)}
