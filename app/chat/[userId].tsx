@@ -43,6 +43,8 @@ import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { subscribeConversation } from '../../src/lib/spacetime';
 import { uploadMediaAsset } from '../../src/utils/mediaUpload';
 import { resolveSessionGate } from '../../src/auth/sessionGate';
+import { ReportComposerModal } from '../../src/features/reports/ReportComposerModal';
+import { submitReport } from '../../src/features/reports/reportingClient';
 
 type AnchorRect = {
   x: number;
@@ -577,6 +579,8 @@ export default function ChatDetailScreen() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [reportMessage, setReportMessage] = useState<ChatMessage | null>(null);
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -780,6 +784,7 @@ export default function ChatDetailScreen() {
     if (id === 'reply') { hapticTap(); setReplyTo(msg); closeMenu(); return; }
     if (id === 'edit') { hapticTap(); setReplyTo(null); setEditing(msg); setText(msg.text); closeMenu(); return; }
     if (id === 'delete') { hapticWarn(); setLocalMessages(prev => prev.filter(m => m.id !== msg.id)); closeMenu(); return; }
+    if (id === 'report') { hapticWarn(); setReportMessage(msg); closeMenu(); return; }
     if (id === 'copy') { hapticTap(); Clipboard.setStringAsync(msg.text); closeMenu(); }
   }, [closeMenu, selectedMessage]);
 
@@ -1408,6 +1413,50 @@ export default function ChatDetailScreen() {
       </Modal>
 
       <MessageActionMenu visible={menuVisible} anchor={menuAnchor} isMine={selectedMessage?.senderId === 'me'} onClose={closeMenu} onAction={handleAction} onReaction={handleReaction} />
+
+      <ReportComposerModal
+        visible={Boolean(reportMessage)}
+        loading={isSubmittingReport}
+        title="Report message"
+        subtitle="This sends the message and DM context into the moderation review queue."
+        onClose={() => {
+          if (isSubmittingReport) {
+            return;
+          }
+          setReportMessage(null);
+        }}
+        onSubmit={async ({ reason, details }) => {
+          if (!reportMessage || !resolvedOtherUserId) {
+            return;
+          }
+
+          setIsSubmittingReport(true);
+          try {
+            await submitReport({
+              targetType: 'message',
+              targetId: reportMessage.id,
+              surface: 'dm_thread',
+              reason,
+              details,
+              context: {
+                otherUserId: resolvedOtherUserId,
+                otherUsername: otherUser.username,
+                messageId: reportMessage.id,
+                messageText: reportMessage.text,
+                messageCreatedAtMs: reportMessage.createdAt,
+                messageSenderId: reportMessage.senderId,
+              },
+            });
+            setReportMessage(null);
+            hapticConfirm();
+            toast.success('Report sent.');
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Unable to send report.');
+          } finally {
+            setIsSubmittingReport(false);
+          }
+        }}
+      />
     </View>
   );
 }
