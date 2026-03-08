@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const API_BASE = 'https://api.clerk.com/v1';
+const SHOULD_PRINT_SECRETS = process.env.QA_PRINT_SECRETS === '1';
 
 function fail(message) {
   console.error(message);
@@ -91,7 +92,11 @@ async function main() {
 
   console.log(`user_id=${userId}`);
   console.log(`ticket_expires_in_seconds=${ttlSeconds}`);
-  console.log(`EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET=${value}`);
+  if (SHOULD_PRINT_SECRETS) {
+    console.log(`EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET=${value}`);
+  } else {
+    console.log('EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET=<redacted>');
+  }
   console.log('note=Export this value before starting Expo web for pending-step fallback.');
 }
 
