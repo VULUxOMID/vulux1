@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -38,6 +39,8 @@ import { buildFailureReceipt } from '../src/features/shop/shopReceipts';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
 import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAppIsActive } from '../src/hooks/useAppIsActive';
+import { subscribeBootstrap } from '../src/lib/spacetime';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -45,8 +48,10 @@ const LIVE_TITLE_MAX_LENGTH = 80;
 
 export default function GoLiveScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
+  const isAppActive = useAppIsActive();
   const insets = useSafeAreaInsets();
-  const { userId } = useSessionAuth();
+  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useSessionAuth();
   const { startLive, activeLive, liveRoom } = useLive();
   const { fuel, gems, cash, walletHydrated, walletStateAvailable } = useWallet();
 
@@ -57,6 +62,7 @@ export default function GoLiveScreen() {
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const normalizedTitle = title.trim();
+  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
   const isOutOfFuel = walletStateAvailable && fuel <= 0;
   const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
@@ -78,6 +84,13 @@ export default function GoLiveScreen() {
       void unlockOrientationSafely();
     };
   }, []);
+
+  useEffect(() => {
+    if (!queriesEnabled) {
+      return;
+    }
+    return subscribeBootstrap();
+  }, [queriesEnabled]);
 
   const openFuelSheet = () => {
     Keyboard.dismiss();

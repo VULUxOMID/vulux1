@@ -1440,11 +1440,30 @@ export function subscribeConversation(
   return activateScopedSubscription(spec);
 }
 
+export function getLiveSubscriptionViews(): string[] {
+  return [
+    'public_profile_summary',
+    'my_friendships',
+    'my_notifications',
+    'my_account_state',
+    'my_wallet_balance',
+    'my_wallet_transactions',
+    'public_live_discovery',
+    'public_live_presence_item',
+    'global_message_item',
+  ];
+}
+
 export function subscribeLive(liveId: string): () => void {
   const normalizedLiveId = liveId.trim();
   const keyLiveId = normalizedLiveId.length > 0 ? normalizedLiveId : 'unknown';
-  const baseViews = ['public_profile_summary', 'my_friendships', 'my_notifications'];
-  const allViews = [...baseViews, 'public_live_discovery', 'public_live_presence_item', 'global_message_item'];
+  const allViews = getLiveSubscriptionViews();
+  const baseViews = allViews.filter(
+    (viewName) =>
+      viewName !== 'public_live_discovery' &&
+      viewName !== 'public_live_presence_item' &&
+      viewName !== 'global_message_item',
+  );
   const baseQueries = buildViewSelectQueries(baseViews);
   const liveQueries = uniqueStrings([
     `SELECT * FROM public_live_discovery WHERE live_id = '${escapeSqlLiteral(keyLiveId)}'`,
