@@ -1,0 +1,11 @@
+{
+  "username": "authqa_admin_1772722630334_f2425830",
+  "email": "authqa+admin.1772722630334.f2425830@example.com",
+  "url": "http://127.0.0.1:19164/login",
+  "clerkSessionId": null,
+  "clerkTokenPresent": false,
+  "clerkTokenMasked": null,
+  "cachedSessionPresent": false,
+  "body": "2\nMissing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Clerk is now the only auth provider for Vulu.\nLog 1 of 2\nUncaught Error\nMissing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Clerk is now the only auth provider for Vulu.\nSource\n \n 1029 |\nexport\n \nfunction\n \nSpacetimeAuthProvider\n({ children }\n:\n { children\n:\n \nReactNode\n }) {\n \n 1030 |\n  \nif\n (\n!\nCLERK_PUBLISHABLE_KEY\n) {\n>\n 1031 |\n    \nthrow\n \nnew\n \nError\n(\n \n      |\n          \n^\n \n 1032 |\n      \n'Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Clerk is now the only auth provider for Vulu.'\n,\n \n 1033 |\n    )\n;\n \n 1034 |\n  }\nvul-104-ws-ticket-auth/src/auth/spacetimeSession.tsx (1031:11)\nCall Stack\nSpacetimeAuthProvider\nvul-104-ws-ticket-auth/src/auth/spacetimeSession.tsx:1031:11\nSee 9 more frames\nComponent Stack\nSpacetimeAuthProvider\nvul-104-ws-ticket-auth/sr",
+  "tickets": null
+}

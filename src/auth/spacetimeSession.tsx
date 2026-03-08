@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ClerkProvider, useAuth as useClerkAuth, useUser as useClerkUser } from '@clerk/clerk-expo';
 import { tokenCache } from '@clerk/clerk-expo/token-cache';
+import Constants from 'expo-constants';
 import {
   createContext,
   useCallback,
@@ -16,6 +17,7 @@ import {
   secureStoreGetItem,
   secureStoreSetItem,
 } from '../utils/secureStoreCompat';
+import { resolveClerkPublishableKey } from './clerkConfig';
 
 import {
   connectSpacetimeDB,
@@ -30,7 +32,10 @@ import {
   subscribeSpacetimeTelemetry,
 } from '../lib/spacetime';
 
-const CLERK_PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? '';
+const CLERK_PUBLISHABLE_KEY = resolveClerkPublishableKey({
+  env: process.env,
+  expoExtra: Constants.expoConfig?.extra ?? null,
+});
 const VULU_SESSION_CACHE_KEY = 'vulu.auth.session';
 const LEGACY_SPACETIME_AUTH_TOKEN_STORAGE_KEY = 'spacetimedb.auth_token';
 const LEGACY_SPACETIME_REFRESH_TOKEN_STORAGE_KEY = 'spacetimedb.auth_refresh_token';
@@ -1029,7 +1034,7 @@ function SessionBridge({ children }: { children: ReactNode }) {
 export function SpacetimeAuthProvider({ children }: { children: ReactNode }) {
   if (!CLERK_PUBLISHABLE_KEY) {
     throw new Error(
-      'Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Clerk is now the only auth provider for Vulu.',
+      'Missing Clerk publishable key. Set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY or NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.',
     );
   }
 

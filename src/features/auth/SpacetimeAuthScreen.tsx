@@ -1,8 +1,10 @@
 import { useSignIn, useSignUp, useUser } from '@clerk/clerk-expo';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { resolveClerkQaSignInTicket } from '../../auth/clerkConfig';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
 import {
   AppButton,
@@ -298,7 +300,16 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
 
     const identifier = normalizeIdentifier(loginEmail);
-    const qaTicket = process.env.EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET?.trim() || null;
+    const qaTicket =
+      resolveClerkQaSignInTicket({
+        env: process.env,
+        expoExtra: Constants.expoConfig?.extra ?? null,
+        runtimeSearch: typeof window !== 'undefined' ? window.location.search : null,
+        runtimeStorageValue:
+          typeof window !== 'undefined'
+            ? window.sessionStorage?.getItem('vulu.qa.clerk_ticket') ?? null
+            : null,
+      }) || null;
     if (!qaTicket && (!identifier || !password)) {
       setErrorMessage('Enter both your email and password.');
       return;
