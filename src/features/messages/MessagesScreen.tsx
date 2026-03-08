@@ -30,6 +30,7 @@ import { submitReport } from '../reports/reportingClient';
 import { toast } from '../../components/Toast';
 import { resolveSessionGate } from '../../auth/sessionGate';
 import { resolveMessagesEmptyState } from './messagesAuthUi';
+import { shouldShowMessagesLoading } from './messagesLoading';
 
 export default function MessagesScreen() {
   const router = useRouter();
@@ -106,7 +107,15 @@ export default function MessagesScreen() {
     () => (canReadMessages ? messagesRepo.listConversations(conversationsQueryArgs) : []),
     [canReadMessages, conversationsQueryArgs, messagesRepo],
   );
-  const conversationsLoading = canSyncMessages && !isSpacetimeViewActive('my_conversations');
+  const conversationsLoading = useMemo(
+    () =>
+      shouldShowMessagesLoading(
+        conversations.length > 0,
+        canSyncMessages,
+        isSpacetimeViewActive('my_conversations'),
+      ),
+    [canSyncMessages, conversations.length],
+  );
   const emptyState = useMemo(
     () => resolveMessagesEmptyState(canReadMessages, sessionGate),
     [canReadMessages, sessionGate],
