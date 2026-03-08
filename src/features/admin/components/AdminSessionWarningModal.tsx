@@ -37,8 +37,8 @@ export function AdminSessionWarningModal() {
           </AppText>
 
           <AppText style={styles.body}>
-            Re-authentication will be required in {Math.max(1, secondsRemaining ?? 0)} seconds if
-            this admin session stays idle.
+            Admin unlock will be required in {Math.max(1, secondsRemaining ?? 0)} seconds if this
+            session stays idle.
           </AppText>
 
           <View style={styles.actions}>
@@ -46,7 +46,7 @@ export function AdminSessionWarningModal() {
               style={[styles.button, styles.secondaryButton]}
               onPress={() => expireAdminSession('locked')}
             >
-              <AppText style={styles.secondaryText}>Re-auth now</AppText>
+              <AppText style={styles.secondaryText}>Lock now</AppText>
             </Pressable>
 
             <Pressable
