@@ -9,6 +9,7 @@ import {
   FUEL_COSTS,
   FuelFillAmount,
   MAX_FUEL_MINUTES,
+  getFuelDisplayCapacity,
 } from '../liveroom/types';
 
 type ShopBuyTabProps = {
@@ -80,7 +81,8 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
     [onFuelPaymentTypeChange]
   );
 
-  const fuelPercent = Math.round((fuel / MAX_FUEL_MINUTES) * 100);
+  const fuelDisplayCapacity = getFuelDisplayCapacity(fuel);
+  const fuelPercent = Math.round((fuel / fuelDisplayCapacity) * 100);
   const fuelPercentText = `${Math.min(fuelPercent, 100)}%`;
 
   return (
@@ -168,14 +170,14 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
               Tank Level: {fuelPercentText}
             </AppText>
             <AppText variant="small" secondary>
-              {fuel}/{MAX_FUEL_MINUTES}m
+              {fuel}/{fuelDisplayCapacity}m
             </AppText>
           </View>
           <View style={styles.fuelTrack}>
             <View
               style={[
                 styles.fuelFill,
-                { width: `${Math.min((fuel / MAX_FUEL_MINUTES) * 100, 100)}%` },
+                { width: `${Math.min((fuel / fuelDisplayCapacity) * 100, 100)}%` },
               ]}
             />
           </View>

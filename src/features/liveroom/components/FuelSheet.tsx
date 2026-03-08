@@ -10,7 +10,7 @@ import {
   IDLE_REFUEL_RECEIPT,
   type RefuelReceiptState,
 } from '../refuelFlow';
-import { FuelFillAmount, FUEL_COSTS, MAX_FUEL_MINUTES } from '../types';
+import { FuelFillAmount, FUEL_COSTS, getFuelDisplayCapacity } from '../types';
 import { hapticTap } from '../../../utils/haptics';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -158,7 +158,8 @@ export function FuelSheet({
     return `${mins}m`;
   };
 
-  const fuelPercentage = Math.min((displayedFuel / MAX_FUEL_MINUTES) * 100, 100);
+  const fuelDisplayCapacity = getFuelDisplayCapacity(displayedFuel);
+  const fuelPercentage = Math.min((displayedFuel / fuelDisplayCapacity) * 100, 100);
 
   const fillButtonDisabled = isPending || (!isSuccess && (!walletReady || !canAfford));
   const fillButtonText = getRefuelActionLabel({
