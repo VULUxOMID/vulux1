@@ -1,3 +1,6 @@
+import { getBackendToken } from '../../../utils/backendToken';
+import { getBackendTokenTemplate } from '../../../config/backendToken';
+
 type DataChangedEvent = {
   type: 'data_changed';
   eventId?: string;
@@ -168,7 +171,10 @@ class BackendRealtimeClientImpl implements BackendRealtimeClient {
       let connectionUrl = baseUrl;
       let connectionProtocols: string[] = [];
       try {
-        const token = await this.options?.getToken();
+        const token = await getBackendToken(
+          this.options?.getToken ?? (async () => null),
+          getBackendTokenTemplate(),
+        );
         if (!token || !this.options) {
           this.opening = false;
           this.setStatus('disconnected');
