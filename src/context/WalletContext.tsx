@@ -5,7 +5,11 @@ import {
   fetchAccountState as fetchBackendAccountState,
 } from '../data/adapters/backend/accountState';
 import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
-import { subscribeSpacetimeDataChanges } from '../lib/spacetime';
+import {
+  getSpacetimeTelemetrySnapshot,
+  subscribeSpacetimeDataChanges,
+  subscribeSpacetimeTelemetry,
+} from '../lib/spacetime';
 import {
   fetchMyWalletBalance,
 } from '../data/adapters/backend/walletQueries';
@@ -13,6 +17,7 @@ import {
   hasAuthoritativeWalletForUser,
   resolveAuthoritativeWalletState,
   shouldRefreshWalletFromBackendEvent,
+  shouldRefreshWalletFromSubscriptionActivation,
   shouldRefreshWalletFromSpacetimeEvent,
 } from './walletHydration';
 
@@ -188,6 +193,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    let lastSubscriptionState = getSpacetimeTelemetrySnapshot().subscriptionState;
     const unsubscribeDataChanges = subscribeSpacetimeDataChanges((event) => {
       if (shouldRefreshWalletFromSpacetimeEvent(event, walletHydratedRef.current)) {
         setWalletRefreshNonce((value) => value + 1);
@@ -200,7 +206,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    const unsubscribeTelemetry = subscribeSpacetimeTelemetry((snapshot) => {
+      const shouldRefresh = shouldRefreshWalletFromSubscriptionActivation({
+        subscriptionState: snapshot.subscriptionState,
+        previousSubscriptionState: lastSubscriptionState,
+        walletHydrated: walletHydratedRef.current,
+        walletStateAvailable: walletStateAvailableRef.current,
+      });
+      lastSubscriptionState = snapshot.subscriptionState;
+
+      if (shouldRefresh) {
+        setWalletRefreshNonce((value) => value + 1);
+      }
+    });
+
     return () => {
+      unsubscribeTelemetry();
       unsubscribeBackendRefresh();
       unsubscribeDataChanges();
     };

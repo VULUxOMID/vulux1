@@ -113,3 +113,20 @@ export function shouldRefreshWalletFromBackendEvent(
 
   return hasRelevantWalletScope(event.scopes);
 }
+
+export function shouldRefreshWalletFromSubscriptionActivation(params: {
+  subscriptionState: 'idle' | 'subscribing' | 'active' | 'error';
+  previousSubscriptionState: 'idle' | 'subscribing' | 'active' | 'error';
+  walletHydrated: boolean;
+  walletStateAvailable: boolean;
+}): boolean {
+  const becameActive =
+    params.subscriptionState === 'active' &&
+    params.previousSubscriptionState !== 'active';
+
+  if (!becameActive) {
+    return false;
+  }
+
+  return !params.walletHydrated || !params.walletStateAvailable;
+}

@@ -41,6 +41,7 @@ import { toast } from '../src/components/Toast';
 import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
 import { useAppIsActive } from '../src/hooks/useAppIsActive';
 import { subscribeBootstrap } from '../src/lib/spacetime';
+import { requestBackendRefresh } from '../src/data/adapters/backend/refreshBus';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -84,6 +85,13 @@ export default function GoLiveScreen() {
       void unlockOrientationSafely();
     };
   }, []);
+
+  useEffect(() => {
+    if (!queriesEnabled) {
+      return;
+    }
+    requestBackendRefresh();
+  }, [queriesEnabled]);
 
   useEffect(() => {
     if (!queriesEnabled) {
