@@ -34,7 +34,7 @@ import { colors, radius, spacing } from '../../theme';
 import { hapticTap, hapticImpact, hapticWarn } from '../../utils/haptics';
 import { toast } from '../../components/Toast';
 import type { BoostMultiplier, FuelFillAmount, LiveUser } from '../liveroom/types';
-import { BOOST_COSTS, MAX_FUEL_MINUTES } from '../liveroom/types';
+import { BOOST_COSTS } from '../liveroom/types';
 import * as ImagePicker from 'expo-image-picker';
 import {
   LiveTopBar,
@@ -1103,11 +1103,6 @@ export default function LiveScreen() {
 
     if (!userId) {
       setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
-      return;
-    }
-
-    if (fuel >= MAX_FUEL_MINUTES) {
-      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
       return;
     }
 

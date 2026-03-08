@@ -34,7 +34,7 @@ import {
   runRefuelAction,
   type RefuelReceiptState,
 } from '../src/features/liveroom/refuelFlow';
-import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
+import { FUEL_COSTS, FuelFillAmount } from '../src/features/liveroom/types';
 import { buildFailureReceipt } from '../src/features/shop/shopReceipts';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
@@ -191,11 +191,6 @@ export default function GoLiveScreen() {
 
     if (!userId) {
       setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
-      return;
-    }
-
-    if (fuel >= MAX_FUEL_MINUTES) {
-      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
       return;
     }
 

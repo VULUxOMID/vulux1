@@ -75,8 +75,19 @@ export const FUEL_COSTS: Record<FuelFillAmount, { gems: number; cash: number }> 
   600: { gems: 150, cash: 1500 },
 };
 
-export const MAX_FUEL_MINUTES = 600; // max fuel units capacity
+// Server-authoritative fuel has no enforced hard cap today; keep 600 as the
+// baseline display capacity so legacy empty/low balances still render sanely.
+export const MAX_FUEL_MINUTES = 600;
 export const FUEL_DRAIN_RATE = 1; // 1 fuel unit per second while live
+
+export function getFuelDisplayCapacity(currentFuel: number): number {
+  const normalizedFuel = Math.max(0, Math.floor(currentFuel));
+  if (normalizedFuel <= MAX_FUEL_MINUTES) {
+    return MAX_FUEL_MINUTES;
+  }
+
+  return Math.ceil(normalizedFuel / 100) * 100;
+}
 
 // Profile Views Modal Types
 export type ProfileViewer = {

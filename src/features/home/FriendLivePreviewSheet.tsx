@@ -29,7 +29,7 @@ import {
   runRefuelAction,
   type RefuelReceiptState,
 } from '../liveroom/refuelFlow';
-import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../liveroom/types';
+import { FUEL_COSTS, FuelFillAmount, getFuelDisplayCapacity } from '../liveroom/types';
 import { hapticTap } from '../../utils/haptics';
 import { normalizeImageUri } from '../../utils/imageSource';
 import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
@@ -220,9 +220,10 @@ export function FriendLivePreviewSheet({
   ).current;
 
   // Memoized calculations
+  const fuelDisplayCapacity = useMemo(() => getFuelDisplayCapacity(fuel), [fuel]);
   const fuelPercentage = useMemo(() => {
-    return Math.min((fuel / MAX_FUEL_MINUTES) * 100, 100);
-  }, [fuel]);
+    return Math.min((fuel / fuelDisplayCapacity) * 100, 100);
+  }, [fuel, fuelDisplayCapacity]);
 
   const circleCircumference = 100;
   const strokeDashoffset = useMemo(() => {
@@ -366,13 +367,9 @@ export function FriendLivePreviewSheet({
   }, [live, switchLiveRoom, handleClose, router]);
 
   const handleAddFuel = useCallback(() => {
-    if (fuel >= MAX_FUEL_MINUTES) {
-      toast.info('Your fuel tank is already full.');
-      return;
-    }
     hapticTap();
     setIsRefuelSheetVisible(true);
-  }, [fuel]);
+  }, []);
 
   const handleDecreaseFuelPack = useCallback(() => {
     setSelectedFuelOptionIndex((currentIndex) => Math.max(0, currentIndex - 1));
@@ -400,11 +397,6 @@ export function FriendLivePreviewSheet({
       setRefuelReceipt(
         buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
       );
-      return;
-    }
-
-    if (fuel >= MAX_FUEL_MINUTES) {
-      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Your fuel tank is already full.'));
       return;
     }
 
@@ -825,7 +817,7 @@ export function FriendLivePreviewSheet({
                     Cost: {selectedFuelPrice} {fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}
                   </AppText>
                   <AppText style={styles.refuelTankText}>
-                    Tank after: {Math.min(fuel + selectedFuelAmount, MAX_FUEL_MINUTES)}m
+                    Tank after: {fuel + selectedFuelAmount}m
                   </AppText>
                 </View>
 

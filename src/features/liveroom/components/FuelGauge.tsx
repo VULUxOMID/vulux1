@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 import { hapticTap } from '../../../utils/haptics';
-import { MAX_FUEL_MINUTES } from '../types';
+import { getFuelDisplayCapacity, MAX_FUEL_MINUTES } from '../types';
 
 // Premium purple color
 const FUEL_PURPLE = colors.accentPremium;
@@ -21,7 +21,7 @@ type FuelGaugeProps = {
 
 export function FuelGauge({
   fuelMinutes,
-  maxFuel = MAX_FUEL_MINUTES,
+  maxFuel = getFuelDisplayCapacity(fuelMinutes),
   isDraining = false,
   labelOverride,
   onPress,
