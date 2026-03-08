@@ -6,6 +6,7 @@ import {
   hasAuthoritativeWalletForUser,
   hasRelevantWalletScope,
   resolveAuthoritativeWalletState,
+  shouldRefreshWalletFromSubscriptionActivation,
   shouldRefreshWalletFromBackendEvent,
   shouldRefreshWalletFromSpacetimeEvent,
 } from './walletHydration';
@@ -47,6 +48,45 @@ test('shouldRefreshWalletFromBackendEvent honors force-full and relevant scopes'
   );
   assert.equal(
     shouldRefreshWalletFromBackendEvent({ scopes: ['messages'] }, true),
+    false,
+  );
+});
+
+test('shouldRefreshWalletFromSubscriptionActivation retries unresolved wallets when scoped views become active', () => {
+  assert.equal(
+    shouldRefreshWalletFromSubscriptionActivation({
+      subscriptionState: 'active',
+      previousSubscriptionState: 'subscribing',
+      walletHydrated: false,
+      walletStateAvailable: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRefreshWalletFromSubscriptionActivation({
+      subscriptionState: 'active',
+      previousSubscriptionState: 'subscribing',
+      walletHydrated: true,
+      walletStateAvailable: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRefreshWalletFromSubscriptionActivation({
+      subscriptionState: 'active',
+      previousSubscriptionState: 'active',
+      walletHydrated: false,
+      walletStateAvailable: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRefreshWalletFromSubscriptionActivation({
+      subscriptionState: 'active',
+      previousSubscriptionState: 'subscribing',
+      walletHydrated: true,
+      walletStateAvailable: true,
+    }),
     false,
   );
 });
