@@ -14,6 +14,9 @@ type RankedEntry = {
   userId: string;
   score: number;
   cashAmount: number;
+  username: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
 };
 
 let lastKnownLeaderboardItems: LeaderboardItem[] = [];
@@ -120,6 +123,9 @@ function getAuthoritativeLeaderboardItems(
         userId,
         score,
         cashAmount,
+        username: asString(row?.username),
+        displayName: asString(row?.displayName ?? row?.display_name),
+        avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url),
       };
     })
     .filter((entry): entry is RankedEntry => Boolean(entry))
@@ -134,11 +140,11 @@ function getAuthoritativeLeaderboardItems(
     const snapshotItem = snapshotItemsById.get(entry.userId);
     const directoryEntry = directory.get(entry.userId);
     const username =
-      directoryEntry?.username || snapshotItem?.username || entry.userId;
+      entry.username || directoryEntry?.username || snapshotItem?.username || entry.userId;
     const displayName =
-      snapshotItem?.displayName || directoryEntry?.displayName || username;
+      entry.displayName || snapshotItem?.displayName || directoryEntry?.displayName || username;
     const avatarUrl =
-      directoryEntry?.avatarUrl || snapshotItem?.avatarUrl || '';
+      entry.avatarUrl || directoryEntry?.avatarUrl || snapshotItem?.avatarUrl || '';
 
     return {
       id: entry.userId,

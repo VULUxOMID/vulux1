@@ -110,3 +110,28 @@ test('snapshot rows remain the fallback until authoritative public_leaderboard h
   assert.deepEqual(items.map((item) => item.id), ['viewer-user']);
   assert.equal(items[0]?.username, 'viewer_beta');
 });
+
+
+test('authoritative public_leaderboard row identity fields override raw user-id fallback', () => {
+  const repo = createBackendLeaderboardRepository(EMPTY_BACKEND_SNAPSHOT, null);
+  const [row] = withMockSpacetime(
+    {
+      publicLeaderboard: makeIterTable([
+        {
+          userId: '835d631d-0abe-421d-a1a6-5c5e422d3b7b',
+          username: 'authqa+1772725966866.83b2525a',
+          displayName: 'authqa+1772725966866.83b2525a',
+          avatarUrl: '',
+          score: 5500,
+          gold: 5500,
+          gems: 0,
+        },
+      ]),
+      publicProfileSummary: makeIterTable([]),
+    },
+    () => repo.listLeaderboardItems(),
+  );
+
+  assert.equal(row?.username, 'authqa+1772725966866.83b2525a');
+  assert.equal(row?.displayName, 'authqa+1772725966866.83b2525a');
+});

@@ -16,6 +16,7 @@ import {
   normalizeProfileViewDedupeWindowMs,
 } from './profileViewMetrics';
 import { mergeAccountStateProfileIdentity, resolveProfileIdentityFields } from './profileIdentity';
+import { resolvePublicIdentityFields } from './publicIdentity';
 import {
   buildReportDedupeKey,
   evaluateReportSubmissionPolicy,
@@ -1602,6 +1603,7 @@ function writeUserProfileItem(ctx: any, userId: string, profile: JsonRecord): vo
 function refreshPublicProfileSummaryItem(ctx: any, userId: string): void {
   const profile = readUserProfileItem(ctx, userId);
   const social = readSocialUserItem(ctx, userId);
+  const userRow = readUserRow(ctx, userId);
   const status = resolveSocialPresenceStatus([
     {
       status: social.status,
@@ -1610,20 +1612,17 @@ function refreshPublicProfileSummaryItem(ctx: any, userId: string): void {
     },
   ]);
 
-  const username =
-    resolveFriendlyUserLabel(userId, [
-      readString(profile.username),
-      readString(profile.displayName),
-      readString(profile.name),
-      readString(social.username),
-      readString(social.name),
-    ]);
+  const identity = resolvePublicIdentityFields(userId, profile, social, {
+    userDisplayName: userRow?.displayName,
+    userAvatarUrl: userRow?.avatar,
+  });
 
-  const avatarUrl =
-    readString(profile.avatarUrl) ??
-    readString(social.avatarUrl) ??
-    readString(social.avatar) ??
-    '';
+  const username = resolveFriendlyUserLabel(userId, [
+    identity.username,
+    identity.displayName,
+  ]);
+
+  const avatarUrl = identity.avatarUrl;
 
   const badge = readString(profile.badge) ?? readString(social.badge);
   const spotlightStatus =
@@ -1859,6 +1858,7 @@ function writeAccountStateItem(ctx: any, userId: string, state: JsonRecord): voi
   });
 
   upsertPublicLeaderboardItemFromState(ctx, userId, state);
+  refreshPublicProfileSummaryItem(ctx, userId);
 }
 
 function upsertPublicLeaderboardItemFromState(

@@ -1,5 +1,6 @@
 import { schema, table, t } from 'spacetimedb/server';
 import { readViewCallerIdentity, selectLegacyCallerUserId } from './viewIdentityResolver';
+import { resolvePublicIdentityFields } from './publicIdentity';
 
 type PublicProfileSummaryViewRow = {
     userId: string;
@@ -11,6 +12,9 @@ type PublicProfileSummaryViewRow = {
 
 type PublicLeaderboardViewRow = {
     userId: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string;
     score: number;
     gold: number;
     gems: number;
@@ -58,6 +62,30 @@ function readIdentityString(value: unknown): string | null {
     }
 
     return null;
+}
+
+function readUserProfileSnapshot(ctx: any, userId: string): Record<string, unknown> {
+    const row = ctx.db.userProfileItem.userId.find(userId);
+    return row ? parseJsonRecord(row.profile) : {};
+}
+
+function readSocialUserSnapshot(ctx: any, userId: string): Record<string, unknown> {
+    const row = ctx.db.socialUserItem.userId.find(userId);
+    return row ? parseJsonRecord(row.item) : {};
+}
+
+function resolvePublicLeaderboardIdentity(ctx: any, userId: string) {
+    const profile = readUserProfileSnapshot(ctx, userId);
+    const social = readSocialUserSnapshot(ctx, userId);
+    const summary = ctx.db.publicProfileSummaryItem.userId.find(userId);
+    const userRow = ctx.db.users.vuluUserId.find(userId);
+
+    return resolvePublicIdentityFields(userId, profile, social, {
+        summaryUsername: summary?.username,
+        summaryAvatarUrl: summary?.avatarUrl,
+        userDisplayName: userRow?.displayName,
+        userAvatarUrl: userRow?.avatar,
+    });
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> {
@@ -748,6 +776,9 @@ const publicProfileSummaryRow = t.row('PublicProfileSummaryRow', {
 
 const publicLeaderboardRow = t.row('PublicLeaderboardRow', {
     userId: t.string(),
+    username: t.string(),
+    displayName: t.string(),
+    avatarUrl: t.string(),
     score: t.u32(),
     gold: t.u32(),
     gems: t.u32(),
@@ -902,7 +933,18 @@ export const publicProfileSummary = spacetimedb.anonymousView(
 export const publicLeaderboard = spacetimedb.anonymousView(
     { name: 'public_leaderboard', public: true },
     t.array(publicLeaderboardRow),
-    (ctx) => ctx.from.publicLeaderboardItem.build(),
+    (ctx) => Array.from(ctx.db.publicLeaderboardItem.iter()).map((row) => {
+        const identity = resolvePublicLeaderboardIdentity(ctx, row.userId);
+        return {
+            userId: row.userId,
+            username: identity.username,
+            displayName: identity.displayName,
+            avatarUrl: identity.avatarUrl,
+            score: row.score,
+            gold: row.gold,
+            gems: row.gems,
+        };
+    }),
 );
 
 export const publicLiveDiscovery = spacetimedb.anonymousView(
