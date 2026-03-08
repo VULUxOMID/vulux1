@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const API_BASE = 'https://api.clerk.com/v1';
+const SHOULD_PRINT_SECRETS = process.env.QA_PRINT_SECRETS === '1';
 
 function fail(message) {
   console.error(message);
@@ -63,7 +64,11 @@ async function main() {
   console.log(`username=${created.username}`);
   console.log(`email=${created.email_addresses?.[0]?.email_address ?? email}`);
   console.log(`phone=${created.phone_numbers?.[0]?.phone_number ?? phone}`);
-  console.log(`password=${password}`);
+  if (SHOULD_PRINT_SECRETS) {
+    console.log(`password=${password}`);
+  } else {
+    console.log('password=<redacted>');
+  }
   console.log('otp_test_code=424242');
   console.log('note=Use this account for deterministic web smoke login.');
 }
