@@ -18,11 +18,12 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
 
   const rankColors = useMemo(
     () => ({
-      background: getRankColor(item.rank),
-      text: getRankTextColor(item.rank),
+      background: getRankColor(item.rank > 0 ? item.rank : 4),
+      text: getRankTextColor(item.rank > 0 ? item.rank : 4),
     }),
     [item.rank],
   );
+  const rankLabel = item.rank > 0 ? String(item.rank) : '--';
 
   const formattedCash = useMemo(() => formatCash(item.cashAmount), [item.cashAmount]);
   const avatarUri = normalizeImageUri(item.avatarUrl);
@@ -37,7 +38,7 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
     >
       <View style={[styles.rankBadge, { backgroundColor: rankColors.background }]}>
         <AppText variant="smallBold" style={{ color: rankColors.text }}>
-          {item.rank}
+          {rankLabel}
         </AppText>
       </View>
 

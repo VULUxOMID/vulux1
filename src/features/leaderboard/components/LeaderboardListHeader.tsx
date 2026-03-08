@@ -3,10 +3,13 @@ import { StyleSheet, View } from 'react-native';
 
 import { AppText, PillTabs, type PillTabItem } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
+import { PrivacyToggleCard } from './PrivacyToggleCard';
 import { LeaderboardSearchBar } from './LeaderboardSearchBar';
 import { LeaderboardTitle } from './LeaderboardTitle';
 
 type LeaderboardListHeaderProps = {
+  isPublic: boolean;
+  onToggle: (value: boolean) => void;
   scopeValue: string;
   onScopeChange: (value: string) => void;
   searchValue: string;
@@ -23,6 +26,8 @@ const SCOPE_ITEMS: PillTabItem[] = [
 ];
 
 function LeaderboardListHeaderComponent({
+  isPublic,
+  onToggle,
   scopeValue,
   onScopeChange,
   searchValue,
@@ -42,6 +47,7 @@ function LeaderboardListHeaderComponent({
       <AppText variant="small" secondary style={styles.summary}>
         {summary}
       </AppText>
+      <PrivacyToggleCard isPublic={isPublic} onToggle={onToggle} />
       <PillTabs
         items={SCOPE_ITEMS}
         value={scopeValue}
@@ -74,7 +80,7 @@ const styles = StyleSheet.create({
   },
   summary: {
     textAlign: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   scopeTabs: {
     marginBottom: spacing.md,
