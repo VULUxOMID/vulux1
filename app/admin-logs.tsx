@@ -19,7 +19,7 @@ const ALL_LOGS = [
   { id: '4', time: '14.04.11', type: 'economy', message: 'User 61 reversed payout request #A91', tone: 'down' as LogTone },
   { id: '5', time: '14.05.02', type: 'economy', message: 'User 205 sent 75 gems to User 17', tone: 'up' as LogTone },
   { id: '6', time: '14.05.31', type: 'system', message: 'Global incident broadcast sent (tier-2)', tone: 'flat' as LogTone },
-  { id: '7', time: '14.06.15', type: 'auth', message: 'Failed TOTP attempt for admin account Omid', tone: 'down' as LogTone },
+  { id: '7', time: '14.06.15', type: 'auth', message: 'Failed admin session unlock for admin account Omid', tone: 'down' as LogTone },
   { id: '8', time: '14.08.22', type: 'moderation', message: 'User 402 banned from live streams', tone: 'down' as LogTone },
   { id: '9', time: '14.10.05', type: 'system', message: 'Database backup snapshot completed', tone: 'up' as LogTone },
   { id: '10', time: '14.12.30', type: 'auth', message: 'New device login for User 11', tone: 'flat' as LogTone },
