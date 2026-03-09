@@ -5,7 +5,6 @@ export type MenuKey =
   | 'leaderboard'
   | 'shop'
   | 'videos'
-  | 'admin'
   | 'admin-v2';
 
 export type FloatingMenuItemConfig = {
@@ -70,19 +69,11 @@ export const MENU_ITEMS: FloatingMenuItemConfig[] = [
 
 export const ADMIN_MENU_ITEMS: FloatingMenuItemConfig[] = [
   {
-    id: 'admin',
+    id: 'admin-v2',
     icon: 'shield',
     label: 'Admin',
     accessibilityLabel: 'Open Admin',
-    route: '/admin',
-    matchRoutes: ['/admin'],
-  },
-  {
-    id: 'admin-v2',
-    icon: 'grid',
-    label: 'Admin Ops',
-    accessibilityLabel: 'Open Admin Ops',
     route: '/admin-v2',
-    matchRoutes: ['/admin-v2'],
+    matchRoutes: ['/admin', '/admin-v2'],
   },
 ];
