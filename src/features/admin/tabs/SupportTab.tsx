@@ -409,7 +409,7 @@ export function SupportTab() {
                     label="Open detail"
                     onPress={() =>
                       router.push({
-                        pathname: '/admin/tickets/[ticketId]' as any,
+                        pathname: '/admin-v2/tickets/[ticketId]' as any,
                         params: { ticketId: ticket.id },
                       })
                     }
