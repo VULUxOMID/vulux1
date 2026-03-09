@@ -106,8 +106,8 @@ export function AdminOperationsScreen() {
         ]}
       >
         <AdminPageHeader
-          title="Admin Operations"
-          description={`Reliable moderation, system health, and incident response for Vulu. Current tier: ${adminRole ?? 'NONE'}.`}
+          title="Admin"
+          description={`Moderation, system health, and incident response for Vulu. Current tier: ${adminRole ?? 'NONE'}.`}
           actions={
             <AdminButton
               label="Exit Admin"
