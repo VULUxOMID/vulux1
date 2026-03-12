@@ -61,7 +61,7 @@ jobs:
           node-version: 22
 
       - name: Install Codex CLI
-        run: npm install -g @openai/codex@0.115.0-alpha.9
+        run: npm install -g @openai/codex@0.115.0-alpha.9-linux-x64
 
       - name: Prepare branch
         env:
