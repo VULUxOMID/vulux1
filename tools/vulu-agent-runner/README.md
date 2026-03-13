@@ -90,6 +90,11 @@ Manual task execution defaults to `local` and runs `codex exec` on the local
 machine inside a dedicated git worktree under `tools/vulu-agent-runner/.data/runs`.
 Each run writes `run.json`, `prompt.md`, `codex.log`, and `codex-last-message.txt`.
 
+The runner now appends a strict close-out contract to each Codex prompt. A
+follow-up Linear issue is only auto-created when Codex ends with an explicit
+`FOLLOW_UP_*` block that declares real remaining product work. Plain prose,
+optional ideas, or missing acceptance criteria do not create new issues.
+
 ## Local autonomous loop
 
 With the default config, the runner starts a small local poll loop:
@@ -101,6 +106,22 @@ With the default config, the runner starts a small local poll loop:
 When a local Linear-backed Codex run finishes successfully, the runner now also
 immediately queries Linear and starts the next eligible Vulu issue without
 waiting for the next poll tick.
+
+If the final Codex message contains a valid `FOLLOW_UP_*` block, the runner
+creates exactly one Linear sub-issue through the GraphQL API instead of
+dispatching an ad hoc continuation. The created issue:
+
+- uses the completed Linear issue as `parentId`
+- includes the parent issue link/id, remaining work summary, and acceptance criteria
+- applies `agent-ready` and `codex-generated`
+- targets the normal unstarted queue state so the standard Linear webhook path can retrigger it
+
+Infinite loop guards for follow-up creation:
+
+- no follow-up for smoke/setup/runner/MCP/auth/automation issues
+- no follow-up unless Codex explicitly emitted the structured block
+- no second auto-created child once the parent already has a `codex-generated` child
+- no duplicate child when an existing sub-issue already has the same title
 
 Continuation selection is intentionally narrower than a raw “next updated issue”
 scan:

@@ -1,3 +1,4 @@
+import { buildFollowUpInstructions } from "./followUpIssue.js";
 import type { PromptRoute, RunnerConfig, RunnerIssue } from "./types.js";
 
 function matchesRoute(route: PromptRoute, issue: RunnerIssue): boolean {
@@ -43,8 +44,9 @@ export function routePrompt(issue: RunnerIssue, config: RunnerConfig): {
   const selectedRoute = config.routes.find((route) => matchesRoute(route, issue));
   const templateKey = selectedRoute?.templateKey ?? "default";
   const template = config.promptTemplates[templateKey] ?? config.promptTemplates.default;
+  const rendered = renderTemplate(template, issue).trim();
   return {
     templateKey,
-    prompt: renderTemplate(template, issue),
+    prompt: `${rendered}\n\n${buildFollowUpInstructions()}`,
   };
 }

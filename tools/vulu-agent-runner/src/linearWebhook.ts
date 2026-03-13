@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 
+import { maybeCreateFollowUpIssue } from "./followUpIssue.js";
 import { getRequiredEnv } from "./config.js";
 import { dispatchTask, type LocalDispatchHooks } from "./dispatchTask.js";
 import { evaluateIssueEligibility } from "./eligibility.js";
+import { getExcludedFollowUpKeywordHit, normalizeClassifierValue } from "./issueClassifiers.js";
 import { logInfo, logWarn } from "./logger.js";
 import { routePrompt } from "./promptRouter.js";
 import type { DispatchPayload, RunnerConfig, RunnerIssue } from "./types.js";
@@ -23,7 +25,6 @@ interface LinearIssueResponse {
       state?: { name?: string | null } | null;
       labels?: { nodes: Array<{ name: string }> } | null;
       team?: { id?: string | null; key?: string | null } | null;
-      type?: { name?: string | null } | null;
       relations?: { nodes: Array<{ type?: string | null; relatedIssue?: { identifier?: string | null } | null }> } | null;
     } | null;
   };
@@ -44,7 +45,6 @@ const ISSUE_BY_ID_QUERY = `
       state { name }
       labels { nodes { name } }
       team { id key }
-      type { name }
       relations(first: 20) {
         nodes {
           type
@@ -71,7 +71,6 @@ const ISSUE_LIST_QUERY = `
         state { name }
         labels { nodes { name } }
         team { id key }
-        type { name }
         relations(first: 20) {
           nodes {
             type
@@ -99,7 +98,6 @@ const RECENT_ISSUES_QUERY = `
         state { name }
         labels { nodes { name } }
         team { id key }
-        type { name }
         relations(first: 20) {
           nodes {
             type
@@ -110,17 +108,6 @@ const RECENT_ISSUES_QUERY = `
     }
   }
 `;
-
-const CONTINUATION_EXCLUDED_KEYWORDS = [
-  "smoke test",
-  "smoke-test",
-  "setup",
-  "runner",
-  "mcp",
-  "auth",
-  "automation maintenance",
-  "automation-maintenance",
-];
 
 interface CandidateIssue extends RunnerIssue {
   relationTypes: string[];
@@ -168,7 +155,6 @@ function buildIssue(graphqlIssue: NonNullable<NonNullable<LinearIssueResponse["d
     priority: graphqlIssue.priority ?? undefined,
     stateName: graphqlIssue.state?.name ?? "",
     labels: graphqlIssue.labels?.nodes.map((entry) => entry.name) ?? [],
-    issueType: graphqlIssue.type?.name ?? undefined,
     teamId: graphqlIssue.team?.id ?? undefined,
     teamKey: graphqlIssue.team?.key ?? undefined,
   };
@@ -184,26 +170,8 @@ function buildCandidateIssue(
   };
 }
 
-function normalizeValue(value: string | undefined | null): string {
-  return (value ?? "").trim().toLowerCase();
-}
-
 function getContinuationKeywordHit(issue: RunnerIssue): string | undefined {
-  const haystacks = [
-    issue.identifier,
-    issue.title,
-    issue.description ?? "",
-    issue.issueType ?? "",
-    ...issue.labels,
-  ].map((value) => normalizeValue(value));
-
-  for (const keyword of CONTINUATION_EXCLUDED_KEYWORDS) {
-    const normalizedKeyword = normalizeValue(keyword);
-    if (haystacks.some((value) => value.includes(normalizedKeyword))) {
-      return normalizedKeyword;
-    }
-  }
-  return undefined;
+  return getExcludedFollowUpKeywordHit(issue);
 }
 
 function priorityRank(issue: RunnerIssue): number {
@@ -288,7 +256,7 @@ function selectNextEligibleIssue(
       continue;
     }
 
-    const stateName = normalizeValue(issue.stateName);
+    const stateName = normalizeClassifierValue(issue.stateName);
     if (stateName === "done" || stateName === "cancelled" || stateName === "canceled") {
       incrementCounter(skipped, "terminal_state");
       continue;
@@ -395,7 +363,7 @@ export function createLinearAutoContinueHook(
   config: RunnerConfig,
   stateStore: StateStore,
 ): NonNullable<LocalDispatchHooks["onCompleted"]> {
-  return async ({ payload, success }) => {
+  return async ({ payload, success, lastMessage }) => {
     if (!success) {
       logInfo("Auto-continue stopped because current run did not complete successfully", {
         issue: payload.issue.identifier,
@@ -410,6 +378,43 @@ export function createLinearAutoContinueHook(
         branchName: payload.branchName,
       });
       return;
+    }
+
+    try {
+      const followUp = await maybeCreateFollowUpIssue({
+        issue: payload.issue,
+        lastMessage,
+        linearConfig: config.linear,
+      });
+
+      if (followUp.created) {
+        logInfo("Auto-continue stopped after creating follow-up issue", {
+          issue: payload.issue.identifier,
+          followUpIssue: followUp.issueIdentifier,
+        });
+        return;
+      }
+
+      if (
+        followUp.skippedReason === "existing_generated_child" ||
+        followUp.skippedReason === "duplicate_child_title"
+      ) {
+        logInfo("Auto-continue stopped because follow-up issue already exists", {
+          issue: payload.issue.identifier,
+          reason: followUp.skippedReason,
+        });
+        return;
+      }
+
+      logInfo("No follow-up issue created from Codex output", {
+        issue: payload.issue.identifier,
+        reason: followUp.skippedReason,
+      });
+    } catch (error) {
+      logWarn("Failed to evaluate Codex follow-up issue creation", {
+        issue: payload.issue.identifier,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     const selection = selectNextEligibleIssue(await fetchSweepIssues(250), config, stateStore, {
