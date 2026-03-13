@@ -8,8 +8,14 @@ V1 automation runner for safe Codex work on the Vulu repo.
 - Verifies `Linear-Signature`
 - Filters to safe issues only
 - Routes issues to prompt templates
-- Triggers GitHub `repository_dispatch`
-- Provides a 10-minute fallback sweep
+- Can run manual Codex tasks locally in an isolated git worktree
+- Can chain the next eligible Linear issue locally when the runner is idle
+
+Deprecated/disabled:
+
+- GitHub Actions `repository_dispatch` Codex execution
+- GitHub scheduled fallback sweep
+- GitHub webhook completion loop
 
 ## Supported V1 scope
 
@@ -48,11 +54,10 @@ export VULU_AGENT_RUNNER_CONFIG=/Users/omid/vulux1/tools/vulu-agent-runner/confi
 export LINEAR_WEBHOOK_SECRET=...
 export LINEAR_API_KEY=...
 export LINEAR_TEAM_ID=...
-export GITHUB_DISPATCH_TOKEN=...
-export VULU_AGENT_INTERNAL_TOKEN=...
 export VULU_AGENT_TASK_TOKEN=...
 export OPENCLAW_GATEWAY_URL=http://localhost:8080
 export OPENCLAW_TOKEN=...
+export OPENAI_API_KEY=...
 ```
 
 4. Run the server:
@@ -67,53 +72,45 @@ The server exposes:
 - `GET /health`
 - `POST /webhooks/linear`
 - `POST /webhooks/task`
-- `POST /webhooks/github`
-- `POST /internal/fallback-sweep`
 
 `POST /webhooks/task` accepts:
 
 - `Authorization: Bearer <token>`
 - JSON body with `text` or `task`
 
-`POST /webhooks/github` accepts GitHub webhook payloads. When it receives a
-`workflow_run` event with `action=completed`, it posts a completion callback to
-OpenClaw using `OPENCLAW_GATEWAY_URL` and `OPENCLAW_TOKEN`.
+Manual task execution defaults to `local` and runs `codex exec` on the local
+machine inside a dedicated git worktree under `tools/vulu-agent-runner/.data/runs`.
+Each run writes `run.json`, `prompt.md`, `codex.log`, and `codex-last-message.txt`.
 
-## GitHub Actions setup
+## Local autonomous loop
 
-Repository secrets required:
+With the default config, the runner starts a small local poll loop:
 
-- `OPENAI_API_KEY`
-- `LINEAR_API_KEY`
-- `VULU_AGENT_INTERNAL_TOKEN`
+- every 60 seconds
+- only when there are no active local Codex runs
+- dispatches at most one next eligible Linear issue
 
-Optional repository variables:
+Eligibility still respects the same guardrails as the webhook/sweep path:
 
-- `VULU_AGENT_RUNNER_URL`
-- `VULU_AGENT_CONFIG`
+- allowed labels
+- allowed states
+- blocked labels
+- safe issue types
 
-`VULU_AGENT_RUNNER_URL` should point to the running webhook receiver if you want the scheduled fallback workflow to call the live runner.
+This means the overnight chain no longer depends on the OpenClaw completion
+callback succeeding.
 
-## Primary trigger model
+## Official path
 
-- `pull_request.ready_for_review`
-- `pull_request.synchronize`
-- `push`
-- Linear issue moved to `In Review`
+Official automation path:
 
-GitHub completion signals are normalized into `repository_dispatch`.
-
-Linear webhooks are handled by the runner service and also dispatched into `repository_dispatch`.
-
-## 10-minute fallback
-
-The fallback workflow runs every 10 minutes and calls the runner's `/internal/fallback-sweep` endpoint.
-
-If you prefer GitHub-hosted sweeping later, the same runner can also be invoked with:
-
-```bash
-npm run fallback-sweep
+```text
+Linear -> local runner -> codex exec
 ```
+
+The GitHub-hosted fallback path has been disabled and removed from
+`.github/workflows` to avoid red status noise and confusion. If GitHub still
+shows old failed runs, they are historical only.
 
 ## Prompt routing
 
@@ -129,6 +126,6 @@ All prompts are designed to stay compatible with `/Users/omid/vulux1/AGENTS.md`.
 
 ## Notes
 
-- The workflow creates or updates a codex branch and PR when Codex produces changes.
-- The workflow posts a status comment back to Linear when `LINEAR_API_KEY` and the issue id are available.
-- The fallback sweep uses cooldown and lock state via the configured state file.
+- Local runs create commits inside their isolated worktrees when Codex makes changes.
+- The local autonomous loop uses cooldown and lock state via the configured state file.
+- `POST /webhooks/github` and `/internal/fallback-sweep` are deprecated compatibility paths and are no longer part of the official flow.
