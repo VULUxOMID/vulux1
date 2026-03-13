@@ -6,38 +6,17 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  AFTER_LOG_FILE,
+  DEFAULT_EVIDENCE_DIR,
+  DEFAULT_SIGN_IN_CODE,
+  ensurePlaywrightChromiumReady,
+  fail,
+  pickBaseUrl,
+  readRequiredEnv,
+} from './authenticated-web-smoke-helpers.mjs';
 
 const API_BASE = 'https://api.clerk.com/v1';
-const DEFAULT_SIGN_IN_CODE = '424242';
-const DEFAULT_EVIDENCE_DIR = 'docs/qa';
-const AFTER_LOG_FILE = 'vul-72-smoke-after.log';
-const DEFAULT_SMOKE_PORT = '19081';
-
-function fail(message) {
-  throw new Error(message);
-}
-
-function isPlaceholderValue(value) {
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized.length === 0 ||
-    normalized.includes('placeholder') ||
-    normalized.includes('your_') ||
-    normalized.includes('<') ||
-    normalized.includes('example')
-  );
-}
-
-function readRequiredEnv(name, { allowPlaceholder = false } = {}) {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    fail(`Missing required env: ${name}`);
-  }
-  if (!allowPlaceholder && isPlaceholderValue(value)) {
-    fail(`Invalid ${name}: placeholder value is not allowed for authenticated smoke.`);
-  }
-  return value;
-}
 
 async function clerkRequest(pathname, init, secretKey) {
   const response = await fetch(`${API_BASE}${pathname}`, {
@@ -208,14 +187,6 @@ async function waitForUrl(baseUrl, timeoutMs, logger) {
   fail(`Timed out waiting for ${target}`);
 }
 
-function pickBaseUrl() {
-  const explicit = process.env.QA_BASE_URL?.trim();
-  if (explicit) {
-    return explicit.replace(/\/$/, '');
-  }
-  return `http://127.0.0.1:${DEFAULT_SMOKE_PORT}`;
-}
-
 async function stopProcess(child) {
   if (!child || child.killed) return;
   child.kill('SIGTERM');
@@ -232,14 +203,7 @@ async function stopProcess(child) {
 }
 
 async function runSmokeFlow({ baseUrl, email, password, signInCode, evidenceDir, logger }) {
-  let chromium;
-  try {
-    ({ chromium } = await import('playwright'));
-  } catch {
-    fail(
-      'Missing playwright dependency. Install with `npm install -D @playwright/test` before running smoke.',
-    );
-  }
+  const chromium = await ensurePlaywrightChromiumReady();
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -326,7 +290,7 @@ async function runSmokeFlow({ baseUrl, email, password, signInCode, evidenceDir,
 
 async function main() {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-  const baseUrl = pickBaseUrl();
+  const baseUrl = pickBaseUrl(process.env);
   const evidenceDir = path.resolve(projectRoot, process.env.QA_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_DIR);
   const signInCode = (process.env.QA_SIGNIN_CODE ?? DEFAULT_SIGN_IN_CODE).trim();
   const logPath = path.join(evidenceDir, AFTER_LOG_FILE);
@@ -350,9 +314,9 @@ async function main() {
   await mkdir(evidenceDir, { recursive: true });
   await writeFile(logPath, '', 'utf8');
 
-  const secretKey = readRequiredEnv('CLERK_SECRET_KEY');
+  const secretKey = readRequiredEnv(process.env, 'CLERK_SECRET_KEY');
   redactedSecretKey = secretKey;
-  readRequiredEnv('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY');
+  readRequiredEnv(process.env, 'EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY');
 
   const qaUser = await provisionQaUser(secretKey, logger);
   const qaTicket = await createSignInTicket(secretKey, qaUser.userId, logger);

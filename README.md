@@ -39,3 +39,14 @@ npx expo start
 No `DATABASE_URL` is required for the signer or the app runtime.
 
 If you enforce `AUTH_JWT_AUDIENCE` in the signer, make sure your Clerk JWT template emits a matching `aud` claim.
+
+### Local Smoke
+
+For the authenticated local web smoke runner:
+
+```bash
+cd /Users/omid/vulux1
+npm run smoke:web:auth:local
+```
+
+Preflight-only and artifact details are documented in [/Users/omid/vulux1/docs/qa/VUL-114-local-runner-smoke.md](/Users/omid/vulux1/docs/qa/VUL-114-local-runner-smoke.md).

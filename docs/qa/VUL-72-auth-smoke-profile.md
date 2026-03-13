@@ -21,12 +21,15 @@ The command will fail fast if either value is missing or still a placeholder.
 
 ```bash
 cd /Users/omid/vulux1
-npm run smoke:web:auth
+npm run smoke:web:auth:local
 ```
 
 ## What This Command Does
 
-1. Validates Clerk env keys (no placeholder values).
+1. Runs the authenticated smoke preflight:
+   - validates Clerk env keys
+   - validates the `QA_BASE_URL` override if present
+   - verifies local Playwright Chromium availability
 2. Provisions an ephemeral Clerk QA user profile for this run.
 3. Creates a short-lived Clerk sign-in ticket (fallback path only).
 4. Starts Expo web locally on `http://127.0.0.1:19081` (or `QA_BASE_URL` if set).

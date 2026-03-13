@@ -11,10 +11,13 @@
     "dev": "CI=1 npx expo start --web --port 5000",
     "test:live-regression": "tsx --test src/data/adapters/backend/liveRepository.regression.test.ts src/features/home/liveNowList.regression.test.ts src/features/live/liveControlEvents.regression.test.ts src/lib/spacetimeSubscriptionLifecycle.test.ts",
     "test:event-runtime": "tsx --test src/features/home/widgets/eventRuntimeConfig.test.ts",
+    "test:smoke:web:auth": "node --test scripts/qa/authenticated-web-smoke-helpers.test.mjs",
     "env:check": "bash ./scripts/env-check.sh",
     "env:check:legacy-api": "bash ./scripts/env-check.sh --legacy-api",
     "spacetime:watch": "bash ./scripts/spacetime-watch.sh",
-    "smoke:web:auth": "node --env-file=.env.local scripts/qa/run-authenticated-web-smoke.mjs"
+    "smoke:web:auth": "node --env-file=.env.local scripts/qa/run-authenticated-web-smoke.mjs",
+    "smoke:web:auth:check": "node --env-file=.env.local scripts/qa/check-authenticated-web-smoke.mjs",
+    "smoke:web:auth:local": "npm run smoke:web:auth:check && npm run smoke:web:auth"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.19.29",
