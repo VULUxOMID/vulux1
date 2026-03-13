@@ -39,6 +39,7 @@ Use this checklist after applying GL-00 split commits to validate baseline stabi
 2. Go Live with zero fuel is blocked with clear hint.
 3. Simulate reducer/start failure and verify visible retry-friendly error text.
 4. Attempt presence/chat after live end and verify graceful handling.
+5. Re-open an ended live via explicit `/live?id=<ended-live-id>` navigation or app relaunch and verify the room stays closed instead of rehydrating a ghost live.
 
 ## Remaining Risks
 
