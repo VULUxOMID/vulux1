@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Modal,
@@ -23,6 +24,10 @@ import { useFriendshipsRepo, useNotificationsRepo } from '../data/provider';
 import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
 import { useUserProfile } from '../context/UserProfileContext';
 import { trackSpacetimeProfileView } from '../lib/spacetime';
+import {
+  PROFILE_VIEW_CLIENT_DEDUPE_WINDOW_MS,
+  trackProfileViewWithCooldown,
+} from '../features/profile/profileViewTracking';
 import { colors, radius, spacing } from '../theme';
 import { hapticConfirm, hapticTap } from '../utils/haptics';
 import { UserRole } from '../features/liveroom/types';
@@ -190,11 +195,20 @@ export function ProfileModal() {
     }
 
     const openedAtMs = Date.now();
-    void trackSpacetimeProfileView({
+    void trackProfileViewWithCooldown({
       viewerUserId,
       profileUserId: selectedUser.id,
-      openedAtMs,
-      source: 'profile_modal_open',
+      occurredAtMs: openedAtMs,
+      dedupeWindowMs: PROFILE_VIEW_CLIENT_DEDUPE_WINDOW_MS,
+      storage: AsyncStorage,
+      emit: async () =>
+        trackSpacetimeProfileView({
+          viewerUserId,
+          profileUserId: selectedUser.id,
+          openedAtMs,
+          source: 'profile_modal_open',
+          dedupeWindowMs: PROFILE_VIEW_CLIENT_DEDUPE_WINDOW_MS,
+        }),
     }).catch((error) => {
       if (__DEV__) {
         console.warn('[profile] Failed to track profile view', error);

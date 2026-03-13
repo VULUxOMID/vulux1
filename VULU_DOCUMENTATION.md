@@ -52,6 +52,14 @@ VuluGO uses SpacetimeDB-native authentication. Client identity and auth token ar
 
 ## 4. QA & Deployment Workflow
 
+## 4.1 Profile View Tracking Safe V1
+
+- Client UI now treats profile view tracking as a deduped frontend event before calling the existing Spacetime reducer.
+- Self-profile previews are suppressed client-side and never emit a profile-view event.
+- Reopening the same profile from the same viewer is limited to one emitted event per 30-minute cooldown window.
+- The cooldown snapshot is persisted in local storage so app relaunches/reconnects do not immediately re-count the same viewer/profile pair.
+- This safe V1 change intentionally avoids backend migrations, reducer changes, auth cutovers, or wallet/live widget logic edits.
+
 ### Go Live Regression Checklist
 - GL-07 QA matrix: [docs/qa/GL-07-go-live-qa-matrix.md](docs/qa/GL-07-go-live-qa-matrix.md)
 
