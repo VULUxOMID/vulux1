@@ -6,7 +6,6 @@ import {
   Pressable,
   Switch,
   KeyboardAvoidingView,
-  Keyboard,
   Platform,
   ScrollView,
   ActivityIndicator,
@@ -20,7 +19,7 @@ import { AppText } from '../src/components';
 import { colors, radius, spacing } from '../src/theme';
 import { hapticTap } from '../src/utils/haptics';
 import {
-  blurActiveWebElement,
+  dismissKeyboardAndBlurActiveWebElement,
   lockPortraitOrientationSafely,
   unlockOrientationSafely,
 } from '../src/utils/webRuntimeCompat';
@@ -71,8 +70,7 @@ export default function GoLiveScreen() {
   }, []);
 
   const openFuelSheet = () => {
-    Keyboard.dismiss();
-    blurActiveWebElement();
+    dismissKeyboardAndBlurActiveWebElement();
     setShowFuelSheet(true);
   };
 
