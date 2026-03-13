@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 
 import { getRequiredEnv } from "./config.js";
+import { dispatchTask, type LocalDispatchHooks } from "./dispatchTask.js";
 import { evaluateIssueEligibility } from "./eligibility.js";
-import { triggerRepositoryDispatch } from "./githubDispatch.js";
-import { logInfo } from "./logger.js";
+import { logInfo, logWarn } from "./logger.js";
 import { routePrompt } from "./promptRouter.js";
 import type { DispatchPayload, RunnerConfig, RunnerIssue } from "./types.js";
 import type { StateStore } from "./stateStore.js";
@@ -16,13 +16,15 @@ interface LinearIssueResponse {
       title: string;
       description?: string | null;
       url?: string | null;
-      priorityLabel?: string | null;
+      updatedAt?: string | null;
+      completedAt?: string | null;
+      canceledAt?: string | null;
+      priority?: number | null;
       state?: { name?: string | null } | null;
       labels?: { nodes: Array<{ name: string }> } | null;
-      team?: { key?: string | null } | null;
-      assignee?: { name?: string | null } | null;
-      project?: { name?: string | null } | null;
+      team?: { id?: string | null; key?: string | null } | null;
       type?: { name?: string | null } | null;
+      relations?: { nodes: Array<{ type?: string | null; relatedIssue?: { identifier?: string | null } | null }> } | null;
     } | null;
   };
 }
@@ -35,16 +37,27 @@ const ISSUE_BY_ID_QUERY = `
       title
       description
       url
+      updatedAt
+      completedAt
+      canceledAt
+      priority
       state { name }
       labels { nodes { name } }
+      team { id key }
       type { name }
+      relations(first: 20) {
+        nodes {
+          type
+          relatedIssue { identifier }
+        }
+      }
     }
   }
 `;
 
 const ISSUE_LIST_QUERY = `
   query IssuesForSweep($first: Int!) {
-    issues(first: $first, orderBy: updatedAt) {
+    issues(first: $first) {
       nodes {
         id
         identifier
@@ -52,9 +65,19 @@ const ISSUE_LIST_QUERY = `
         description
         url
         updatedAt
+        completedAt
+        canceledAt
+        priority
         state { name }
         labels { nodes { name } }
+        team { id key }
         type { name }
+        relations(first: 20) {
+          nodes {
+            type
+            relatedIssue { identifier }
+          }
+        }
       }
     }
   }
@@ -62,7 +85,7 @@ const ISSUE_LIST_QUERY = `
 
 const RECENT_ISSUES_QUERY = `
   query RecentIssues($first: Int!) {
-    issues(first: $first, orderBy: updatedAt) {
+    issues(first: $first) {
       nodes {
         id
         identifier
@@ -70,13 +93,45 @@ const RECENT_ISSUES_QUERY = `
         description
         url
         updatedAt
+        completedAt
+        canceledAt
+        priority
         state { name }
         labels { nodes { name } }
+        team { id key }
         type { name }
+        relations(first: 20) {
+          nodes {
+            type
+            relatedIssue { identifier }
+          }
+        }
       }
     }
   }
 `;
+
+const CONTINUATION_EXCLUDED_KEYWORDS = [
+  "smoke test",
+  "smoke-test",
+  "setup",
+  "runner",
+  "mcp",
+  "auth",
+  "automation maintenance",
+  "automation-maintenance",
+];
+
+interface CandidateIssue extends RunnerIssue {
+  relationTypes: string[];
+}
+
+interface SelectionResult {
+  issue?: CandidateIssue;
+  stopReason?: string;
+  inspected: number;
+  skipped: Record<string, number>;
+}
 
 async function linearGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const token = getRequiredEnv("LINEAR_API_KEY");
@@ -107,9 +162,292 @@ function buildIssue(graphqlIssue: NonNullable<NonNullable<LinearIssueResponse["d
     title: graphqlIssue.title,
     description: graphqlIssue.description ?? "",
     url: graphqlIssue.url ?? "",
+    updatedAt: graphqlIssue.updatedAt ?? undefined,
+    completedAt: graphqlIssue.completedAt ?? null,
+    canceledAt: graphqlIssue.canceledAt ?? null,
+    priority: graphqlIssue.priority ?? undefined,
     stateName: graphqlIssue.state?.name ?? "",
     labels: graphqlIssue.labels?.nodes.map((entry) => entry.name) ?? [],
-    issueType: graphqlIssue.type?.name ?? "",
+    issueType: graphqlIssue.type?.name ?? undefined,
+    teamId: graphqlIssue.team?.id ?? undefined,
+    teamKey: graphqlIssue.team?.key ?? undefined,
+  };
+}
+
+function buildCandidateIssue(
+  graphqlIssue: NonNullable<NonNullable<LinearIssueResponse["data"]>["issue"]>,
+): CandidateIssue {
+  const issue = buildIssue(graphqlIssue);
+  return {
+    ...issue,
+    relationTypes: graphqlIssue.relations?.nodes.map((entry) => (entry.type ?? "").toLowerCase()).filter(Boolean) ?? [],
+  };
+}
+
+function normalizeValue(value: string | undefined | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function getContinuationKeywordHit(issue: RunnerIssue): string | undefined {
+  const haystacks = [
+    issue.identifier,
+    issue.title,
+    issue.description ?? "",
+    issue.issueType ?? "",
+    ...issue.labels,
+  ].map((value) => normalizeValue(value));
+
+  for (const keyword of CONTINUATION_EXCLUDED_KEYWORDS) {
+    const normalizedKeyword = normalizeValue(keyword);
+    if (haystacks.some((value) => value.includes(normalizedKeyword))) {
+      return normalizedKeyword;
+    }
+  }
+  return undefined;
+}
+
+function priorityRank(issue: RunnerIssue): number {
+  const priority = issue.priority ?? 0;
+  return priority > 0 ? priority : 5;
+}
+
+function compareIssuesForContinuation(left: RunnerIssue, right: RunnerIssue): number {
+  const priorityDelta = priorityRank(left) - priorityRank(right);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const leftUpdatedAt = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+  const rightUpdatedAt = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+  if (leftUpdatedAt !== rightUpdatedAt) {
+    return rightUpdatedAt - leftUpdatedAt;
+  }
+
+  return left.identifier.localeCompare(right.identifier);
+}
+
+function hasBlockingRelation(issue: CandidateIssue): boolean {
+  return issue.relationTypes.some((type) => type.includes("block"));
+}
+
+function incrementCounter(counters: Record<string, number>, key: string): void {
+  counters[key] = (counters[key] ?? 0) + 1;
+}
+
+async function fetchSweepIssues(first: number): Promise<CandidateIssue[]> {
+  const response = await linearGraphql<{
+    data?: {
+      issues?: {
+        nodes: Array<
+          NonNullable<NonNullable<LinearIssueResponse["data"]>["issue"]>
+        >;
+      };
+    };
+  }>(ISSUE_LIST_QUERY, { first });
+
+  return (response.data?.issues?.nodes ?? []).map((rawIssue) => buildCandidateIssue(rawIssue));
+}
+
+function selectNextEligibleIssue(
+  issues: CandidateIssue[],
+  config: RunnerConfig,
+  stateStore: StateStore,
+  options?: {
+    excludeIssueId?: string;
+    source?: string;
+  },
+): SelectionResult {
+  const cooldownMs = config.runner.cooldownMinutes * 60_000;
+  const expectedTeamId = process.env.LINEAR_TEAM_ID;
+  const skipped: Record<string, number> = {};
+  const candidates = [...issues].sort(compareIssuesForContinuation);
+
+  for (const issue of candidates) {
+    if (options?.excludeIssueId && issue.id === options.excludeIssueId) {
+      incrementCounter(skipped, "current_issue");
+      continue;
+    }
+
+    if (expectedTeamId && issue.teamId && issue.teamId !== expectedTeamId) {
+      incrementCounter(skipped, "wrong_team");
+      continue;
+    }
+
+    if (!issue.identifier.startsWith("VUL-")) {
+      incrementCounter(skipped, "non_product_issue");
+      continue;
+    }
+
+    if (issue.completedAt) {
+      incrementCounter(skipped, "completed");
+      continue;
+    }
+
+    if (issue.canceledAt) {
+      incrementCounter(skipped, "canceled");
+      continue;
+    }
+
+    const stateName = normalizeValue(issue.stateName);
+    if (stateName === "done" || stateName === "cancelled" || stateName === "canceled") {
+      incrementCounter(skipped, "terminal_state");
+      continue;
+    }
+
+    if (stateName.includes("blocked")) {
+      incrementCounter(skipped, "blocked_state");
+      continue;
+    }
+
+    if (hasBlockingRelation(issue)) {
+      incrementCounter(skipped, "blocked_relation");
+      continue;
+    }
+
+    const excludedKeyword = getContinuationKeywordHit(issue);
+    if (excludedKeyword) {
+      incrementCounter(skipped, `excluded_keyword:${excludedKeyword}`);
+      continue;
+    }
+
+    const eligibility = evaluateIssueEligibility(issue, {
+      ...config.linear,
+      allowedLabels: config.linear.allowedLabels.length > 0 ? config.linear.allowedLabels : issue.labels,
+      allowedStates:
+        config.linear.allowedStates.length > 0
+          ? config.linear.allowedStates
+          : issue.stateName
+            ? [issue.stateName]
+            : [],
+    });
+    if (!eligibility.eligible && eligibility.reason !== "missing_allowed_label" && eligibility.reason !== "state_not_allowed") {
+      incrementCounter(skipped, eligibility.reason);
+      continue;
+    }
+
+    const processedKey = `linear:${issue.id}`;
+    const fingerprint = `continuation:${issue.id}:${issue.updatedAt ?? ""}`;
+    if (!stateStore.shouldProcess(processedKey, fingerprint, cooldownMs)) {
+      incrementCounter(skipped, "cooldown");
+      continue;
+    }
+
+    const lockKey = `issue:${issue.identifier}`;
+    if (!stateStore.acquireLock(lockKey, options?.source ?? "linear-continuation", config.runner.lockTtlMinutes * 60_000)) {
+      incrementCounter(skipped, "active_lock");
+      continue;
+    }
+    stateStore.releaseLock(lockKey);
+
+    return {
+      issue,
+      inspected: candidates.length,
+      skipped,
+    };
+  }
+
+  return {
+    stopReason: "no_eligible_issue",
+    inspected: candidates.length,
+    skipped,
+  };
+}
+
+async function dispatchIssueCandidate(
+  issue: CandidateIssue,
+  config: RunnerConfig,
+  stateStore: StateStore,
+  source: DispatchPayload["source"],
+  eventId: string,
+  hooks?: LocalDispatchHooks,
+): Promise<void> {
+  const processedKey = `linear:${issue.id}`;
+  const lockKey = `issue:${issue.identifier}`;
+  const fingerprint = `${source}:${issue.id}:${issue.updatedAt ?? new Date().toISOString()}`;
+
+  if (!stateStore.acquireLock(lockKey, source, config.runner.lockTtlMinutes * 60_000)) {
+    throw new Error(`Unable to acquire lock for ${issue.identifier}`);
+  }
+
+  try {
+    const routed = routePrompt(issue, config);
+    const payload: DispatchPayload = {
+      source,
+      eventId,
+      lockKey,
+      branchName: `${config.github.branchPrefix}${issue.identifier.toLowerCase()}`,
+      issue,
+      prompt: routed.prompt,
+      templateKey: routed.templateKey,
+      repoOwner: config.github.owner,
+      repoName: config.github.repo,
+      branchPrefix: config.github.branchPrefix,
+      baseBranch: config.github.baseBranch,
+    };
+    await dispatchTask(payload, config, hooks);
+    stateStore.markProcessed(processedKey, fingerprint);
+  } finally {
+    stateStore.releaseLock(lockKey);
+  }
+}
+
+export function createLinearAutoContinueHook(
+  config: RunnerConfig,
+  stateStore: StateStore,
+): NonNullable<LocalDispatchHooks["onCompleted"]> {
+  return async ({ payload, success }) => {
+    if (!success) {
+      logInfo("Auto-continue stopped because current run did not complete successfully", {
+        issue: payload.issue.identifier,
+        branchName: payload.branchName,
+      });
+      return;
+    }
+
+    if (!payload.issue.id || payload.issue.identifier === "MANUAL-TASK") {
+      logInfo("Auto-continue stopped because completed run was not a Linear issue", {
+        issue: payload.issue.identifier,
+        branchName: payload.branchName,
+      });
+      return;
+    }
+
+    const selection = selectNextEligibleIssue(await fetchSweepIssues(250), config, stateStore, {
+      excludeIssueId: payload.issue.id,
+      source: "linear-auto-continue",
+    });
+
+    if (!selection.issue) {
+      logInfo("Auto-continue stopped after completed Linear issue", {
+        issue: payload.issue.identifier,
+        stopReason: selection.stopReason,
+        inspected: selection.inspected,
+        skipped: selection.skipped,
+      });
+      return;
+    }
+
+    logInfo("Auto-continue selected next Linear issue", {
+      completedIssue: payload.issue.identifier,
+      nextIssue: selection.issue.identifier,
+      nextPriority: selection.issue.priority ?? 0,
+      nextState: selection.issue.stateName,
+      skipped: selection.skipped,
+    });
+
+    await dispatchIssueCandidate(
+      selection.issue,
+      config,
+      stateStore,
+      "linear-fallback",
+      `continuation:${payload.issue.id}:${selection.issue.id}:${Date.now()}`,
+      { onCompleted: createLinearAutoContinueHook(config, stateStore) },
+    );
+
+    logInfo("Auto-continue dispatched next Linear issue", {
+      completedIssue: payload.issue.identifier,
+      nextIssue: selection.issue.identifier,
+    });
   };
 }
 
@@ -139,7 +477,7 @@ export async function fetchIssueByIdentifier(identifier: string): Promise<Runner
   const response = await linearGraphql<{
     data?: {
       issues?: {
-        nodes: Array<NonNullable<NonNullable<LinearIssueResponse["data"]>["issue"]> & { updatedAt?: string | null }>;
+        nodes: Array<NonNullable<NonNullable<LinearIssueResponse["data"]>["issue"]>>;
       };
     };
   }>(RECENT_ISSUES_QUERY, { first: 250 });
@@ -151,61 +489,54 @@ export async function fetchIssueByIdentifier(identifier: string): Promise<Runner
 }
 
 export async function runFallbackSweep(config: RunnerConfig, stateStore: StateStore): Promise<number> {
-  const response = await linearGraphql<{
-    data?: {
-      issues?: {
-        nodes: Array<
-          NonNullable<NonNullable<LinearIssueResponse["data"]>["issue"]> & { updatedAt?: string | null }
-        >;
-      };
-    };
-  }>(ISSUE_LIST_QUERY, { first: 100 });
+  return dispatchEligibleIssues(config, stateStore);
+}
 
-  const cooldownMs = config.runner.cooldownMinutes * 60_000;
-  const lookbackMs = config.runner.fallbackLookbackMinutes * 60_000;
-  const now = Date.now();
+export async function dispatchNextEligibleIssue(
+  config: RunnerConfig,
+  stateStore: StateStore,
+): Promise<boolean> {
+  return (await dispatchEligibleIssues(config, stateStore, 1)) > 0;
+}
+
+async function dispatchEligibleIssues(
+  config: RunnerConfig,
+  stateStore: StateStore,
+  limit = Number.POSITIVE_INFINITY,
+): Promise<number> {
+  const issues = await fetchSweepIssues(250);
   let dispatched = 0;
 
-  for (const rawIssue of response.data?.issues?.nodes ?? []) {
-    const issue = buildIssue(rawIssue);
-    const updatedAt = rawIssue.updatedAt ? Date.parse(rawIssue.updatedAt) : 0;
-    if (!updatedAt || now - updatedAt > lookbackMs) {
-      continue;
+  while (dispatched < limit) {
+    const selection = selectNextEligibleIssue(issues, config, stateStore, {
+      source: "fallback-sweep",
+    });
+    if (!selection.issue) {
+      logInfo("No eligible Linear issue available for dispatch", {
+        source: "fallback-sweep",
+        inspected: selection.inspected,
+        skipped: selection.skipped,
+        stopReason: selection.stopReason,
+      });
+      return dispatched;
     }
-    const eligibility = evaluateIssueEligibility(issue, config.linear);
-    if (!eligibility.eligible) {
-      continue;
-    }
-    const fingerprint = `fallback:${issue.id}:${rawIssue.updatedAt ?? ""}`;
-    const processedKey = `linear:${issue.id}`;
-    const lockKey = `issue:${issue.identifier}`;
-    if (!stateStore.shouldProcess(processedKey, fingerprint, cooldownMs)) {
-      continue;
-    }
-    if (!stateStore.acquireLock(lockKey, "fallback-sweep", config.runner.lockTtlMinutes * 60_000)) {
-      continue;
-    }
-    try {
-      const routed = routePrompt(issue, config);
-      const payload: DispatchPayload = {
-        source: "linear-fallback",
-        eventId: fingerprint,
-        lockKey,
-        branchName: `${config.github.branchPrefix}${issue.identifier.toLowerCase()}`,
-        issue,
-        prompt: routed.prompt,
-        templateKey: routed.templateKey,
-        repoOwner: config.github.owner,
-        repoName: config.github.repo,
-        branchPrefix: config.github.branchPrefix,
-        baseBranch: config.github.baseBranch,
-      };
-      await triggerRepositoryDispatch(payload, config);
-      stateStore.markProcessed(processedKey, fingerprint);
-      dispatched += 1;
-    } finally {
-      stateStore.releaseLock(lockKey);
-    }
+
+    await dispatchIssueCandidate(
+      selection.issue,
+      config,
+      stateStore,
+      "linear-fallback",
+      `fallback:${selection.issue.id}:${selection.issue.updatedAt ?? Date.now().toString()}`,
+      { onCompleted: createLinearAutoContinueHook(config, stateStore) },
+    );
+    dispatched += 1;
+
+    logInfo("Dispatched next eligible Linear issue", {
+      issue: selection.issue.identifier,
+      priority: selection.issue.priority ?? 0,
+      state: selection.issue.stateName,
+      source: "fallback-sweep",
+    });
   }
 
   return dispatched;
@@ -277,7 +608,9 @@ export async function handleLinearWebhook(
       branchPrefix: config.github.branchPrefix,
       baseBranch: config.github.baseBranch,
     };
-    await triggerRepositoryDispatch(payloadToDispatch, config);
+    await dispatchTask(payloadToDispatch, config, {
+      onCompleted: createLinearAutoContinueHook(config, stateStore),
+    });
     stateStore.markProcessed(processedKey, fingerprint);
     logInfo("Linear webhook dispatched task", {
       issue: issue.identifier,

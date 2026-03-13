@@ -20,6 +20,16 @@ export interface RunnerSettings {
   fallbackLookbackMinutes: number;
   stateFile: string;
   listenPort: number;
+  taskExecutionMode?: "local" | "github";
+  repoPath?: string;
+  runsDir?: string;
+  autonomousLoop?: RunnerAutonomousLoopSettings;
+}
+
+export interface RunnerAutonomousLoopSettings {
+  enabled?: boolean;
+  pollSeconds?: number;
+  maxConcurrentRuns?: number;
 }
 
 export interface LinearConfig {
@@ -45,6 +55,12 @@ export interface RunnerIssue {
   stateName?: string;
   labels: string[];
   issueType?: string;
+  priority?: number;
+  updatedAt?: string;
+  completedAt?: string | null;
+  canceledAt?: string | null;
+  teamId?: string;
+  teamKey?: string;
   branchName?: string;
   prNumber?: number;
 }
@@ -61,6 +77,38 @@ export interface DispatchPayload {
   repoName: string;
   branchPrefix: string;
   baseBranch: string;
+}
+
+export interface LocalRunHandle {
+  mode: "local";
+  taskId: string;
+  branchName: string;
+  worktreePath: string;
+  promptPath: string;
+  logPath: string;
+  outputPath: string;
+  pid?: number;
+}
+
+export interface LocalRunRecord {
+  eventId: string;
+  issue: RunnerIssue;
+  branchName: string;
+  repoRoot: string;
+  createdAt: string;
+  mode?: "local";
+  status?: "running" | "completed" | "failed" | "orphaned";
+  pid?: number | null;
+  startedAt?: string;
+  completedAt?: string;
+  changed?: boolean;
+  commitSha?: string;
+  logPath?: string;
+  outputPath?: string;
+  worktreePath?: string;
+  lastMessage?: string;
+  error?: string;
+  exitCode?: number;
 }
 
 export interface StateSnapshot {

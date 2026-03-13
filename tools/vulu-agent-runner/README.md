@@ -60,6 +60,14 @@ export OPENCLAW_TOKEN=...
 export OPENAI_API_KEY=...
 ```
 
+Runner-launched `codex exec` now also reuses the Codex env file at
+`~/.codex/environments/environment.toml` for MCP auth values such as
+`MCP_BEARER_TOKEN`. If your Codex env file lives somewhere else, set:
+
+```bash
+export VULU_AGENT_CODEX_ENV_FILE=/absolute/path/to/environment.toml
+```
+
 4. Run the server:
 
 ```bash
@@ -90,15 +98,22 @@ With the default config, the runner starts a small local poll loop:
 - only when there are no active local Codex runs
 - dispatches at most one next eligible Linear issue
 
-Eligibility still respects the same guardrails as the webhook/sweep path:
+When a local Linear-backed Codex run finishes successfully, the runner now also
+immediately queries Linear and starts the next eligible Vulu issue without
+waiting for the next poll tick.
 
-- allowed labels
-- allowed states
+Continuation selection is intentionally narrower than a raw “next updated issue”
+scan:
+
+- same Vulu Linear team
+- real product issues only (`VUL-*`)
+- skip `Done`, `Cancelled`, and blocked issues
+- skip smoke-test, setup, runner, MCP, auth, and automation-maintenance issues
 - blocked labels
 - safe issue types
 
-This means the overnight chain no longer depends on the OpenClaw completion
-callback succeeding.
+The idle poll loop still exists as a recovery path, but it no longer depends on
+an issue being updated in the last lookback window to continue the chain.
 
 ## Official path
 
