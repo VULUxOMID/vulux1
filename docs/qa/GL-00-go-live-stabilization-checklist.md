@@ -2,6 +2,8 @@
 
 Use this checklist after applying GL-00 split commits to validate baseline stability before follow-up tasks.
 
+For release sign-off and two-device go-live coverage, use [GL-07](./GL-07-go-live-qa-matrix.md) as the primary runbook.
+
 ## Scope
 
 - Typed live lifecycle reducers are used by the client.
