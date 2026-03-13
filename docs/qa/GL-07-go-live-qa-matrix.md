@@ -8,31 +8,28 @@ Living doc for Go Live validation. Keep this file updated as behavior evolves.
 - Device B = Viewer account.
 - Reuse one session where possible and mark multiple rows from one action.
 
+## Quick Regression Run (<10 minutes)
+Use this order for a fast go/no-go check. Mark the matching matrix IDs as you go.
+
+1. Preflight both devices, then on Device A validate `GL07-H2` and `GL07-H3` before starting a real live.
+2. Start one public live and pass `GL07-H1`.
+3. From the same session, cover all primary viewer entry points:
+   - Device B joins from Home for `GL07-J1`, leaves for `GL07-P2`.
+   - Device B rejoins from Search for `GL07-J2` and confirms `GL07-P1`.
+   - Device B opens the same live from Notifications for `GL07-J3`.
+4. While both users are in-room, run `GL07-C1` and `GL07-C2`.
+5. Set Device B fuel to `0`, then repeat one successful viewer entry path and pass `GL07-J6`.
+6. Validate exit behavior in the same room: `GL07-E3`, then either `GL07-E1` or `GL07-E2`.
+7. Run access control coverage with one invite-only room: `GL07-IB1`, `GL07-IB2`, and `GL07-IB3`.
+
+If any row above fails, stop the go-live sign-off and file the bug before continuing.
+
 ## Preflight (30-60s)
 - [ ] Both devices are signed in to different accounts in the same environment.
 - [ ] Notifications are enabled on Device B.
 - [ ] Device A has enough fuel for start/join flows except explicit `fuel = 0` test.
 - [ ] Clear stale live state (both users not currently in a live room).
-
-## Quick Regression Run (<10 minutes, 2 devices)
-Use this sequence for Go Live sign-off. Mark the matching matrix IDs as you go so the quick run and full matrix stay aligned.
-
-| Step | Covers IDs | Action | Expected result |
-| --- | --- | --- | --- |
-| 1 | GL07-H1, GL07-H2, GL07-H3, GL07-H4, GL07-H5 | On Device A, verify valid start, invalid short title, `fuel = 0`, one forced start failure, and a rapid double-tap retry. | Invalid starts are blocked safely, forced failure leaves no orphan live, and a valid retry creates exactly one live. |
-| 2 | GL07-J1, GL07-J2, GL07-J3, GL07-J4, GL07-J5 | On Device B, join the active live from Home, Search, and Notification; then open one invalid/stale link and one ended-live entry. | Valid entry points land in the correct live. Invalid or ended targets fail safely with no crash and a clear fallback path. |
-| 3 | GL07-P1, GL07-P2, GL07-P3 | While both devices are in the same live, verify join presence, normal viewer leave, and one stale-presence cleanup case via network/app kill. | Host watcher state reflects join/leave, and stale viewer presence expires without manual cleanup. |
-| 4 | GL07-C1, GL07-C2, GL07-C3 | Exchange one host->viewer and one viewer->host message, then switch both users to another live and confirm chat isolation. | Messages deliver once, with correct sender identity, and do not leak between lives. |
-| 5 | GL07-E1, GL07-E2, GL07-E3, GL07-E4 | Verify host end from full-screen, host end from PiP/overlay, and a viewer leave that does not end the live. | Host end closes the room for everyone from both surfaces; viewer leave only removes the viewer. |
-| 6 | GL07-IB1, GL07-IB2, GL07-IB3, GL07-IB4, GL07-C4, GL07-C5 | Run one invite-only live: invited viewer joins, uninvited user is blocked, banned user is blocked from rejoin and chat. | Invite/banned enforcement is consistent for both join and chat paths. |
-
-## Automation / Read-Only Audit
-Use these checks to front-load regressions before the 2-device run. They do not replace the manual matrix because notification, PiP, and multi-device presence still require UI validation.
-
-- `npm run test:live-regression`
-  - Covers existing automated live regressions including discovery ghost filtering, invite-only filtering stability, live control events, and Spacetime subscription lifecycle behavior.
-- `npm run smoke:web:auth`
-  - Optional authenticated web smoke for `/ -> /go-live -> /live -> /` path validation when web QA is part of the release lane.
+- [ ] If you will run `GL07-J4` or `GL07-J5`, prepare the stale/invalid deep link before starting the timed run.
 
 ## 1) Host Start Live
 | Done | ID | Setup | Action | Expected result |
@@ -51,6 +48,7 @@ Use these checks to front-load regressions before the 2-device run. They do not 
 | [ ] | GL07-J3 | Host sends/causes live notification to viewer. | Viewer opens live from Notification CTA. | Viewer opens matching `liveId`; host sees viewer present. |
 | [ ] | GL07-J4 | Prepare invalid/stale live deep link/notification (`liveId` not found). | Viewer opens the invalid link. | App does not crash; viewer sees safe fallback (no live selected / return home path). |
 | [ ] | GL07-J5 | Use a real live that has already ended. | Viewer attempts to open ended live from stale entry. | Viewer cannot rejoin ended room; ended/fallback state is shown clearly. |
+| [ ] | GL07-J6 | Host live is running. Viewer fuel is `0`. | Viewer joins from any standard entry path (Home, Search, or Notification). | Viewer still joins successfully; no refuel gate blocks viewer-only entry; host sees presence update. |
 
 ## 3) Presence
 | Done | ID | Setup | Action | Expected result |
@@ -92,3 +90,7 @@ Use these checks to front-load regressions before the 2-device run. They do not 
 ## Regression Use
 - Run this checklist after any change touching live start/join/presence/chat/moderation/end flows.
 - Keep IDs stable (`GL07-*`) so results remain comparable across releases.
+
+## Read-only Audit Notes
+- Current UI behavior on 2026-03-13 only fuel-gates hosts. Viewer joins are still expected to work with `fuel = 0`, so `GL07-J6` should pass unless product behavior changes intentionally.
+- `GL07-J4` and `GL07-J5` are route/deep-link safety checks. They can be prepared ahead of time, then executed quickly during the same regression session.
