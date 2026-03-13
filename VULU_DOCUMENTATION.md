@@ -53,7 +53,7 @@ VuluGO uses SpacetimeDB-native authentication. Client identity and auth token ar
 ## 4. QA & Deployment Workflow
 
 ### Go Live Regression Checklist
-- GL-07 QA matrix: [docs/qa/GL-07-go-live-qa-matrix.md](docs/qa/GL-07-go-live-qa-matrix.md)
+- GL-07 QA matrix + quick regression runbook: [docs/qa/GL-07-go-live-qa-matrix.md](docs/qa/GL-07-go-live-qa-matrix.md)
 
 ### Freshness Checklist
 1. Commit and push changes.

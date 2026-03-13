@@ -14,6 +14,26 @@ Living doc for Go Live validation. Keep this file updated as behavior evolves.
 - [ ] Device A has enough fuel for start/join flows except explicit `fuel = 0` test.
 - [ ] Clear stale live state (both users not currently in a live room).
 
+## Quick Regression Run (<10 minutes, 2 devices)
+Use this sequence for Go Live sign-off. Mark the matching matrix IDs as you go so the quick run and full matrix stay aligned.
+
+| Step | Covers IDs | Action | Expected result |
+| --- | --- | --- | --- |
+| 1 | GL07-H1, GL07-H2, GL07-H3, GL07-H4, GL07-H5 | On Device A, verify valid start, invalid short title, `fuel = 0`, one forced start failure, and a rapid double-tap retry. | Invalid starts are blocked safely, forced failure leaves no orphan live, and a valid retry creates exactly one live. |
+| 2 | GL07-J1, GL07-J2, GL07-J3, GL07-J4, GL07-J5 | On Device B, join the active live from Home, Search, and Notification; then open one invalid/stale link and one ended-live entry. | Valid entry points land in the correct live. Invalid or ended targets fail safely with no crash and a clear fallback path. |
+| 3 | GL07-P1, GL07-P2, GL07-P3 | While both devices are in the same live, verify join presence, normal viewer leave, and one stale-presence cleanup case via network/app kill. | Host watcher state reflects join/leave, and stale viewer presence expires without manual cleanup. |
+| 4 | GL07-C1, GL07-C2, GL07-C3 | Exchange one host->viewer and one viewer->host message, then switch both users to another live and confirm chat isolation. | Messages deliver once, with correct sender identity, and do not leak between lives. |
+| 5 | GL07-E1, GL07-E2, GL07-E3, GL07-E4 | Verify host end from full-screen, host end from PiP/overlay, and a viewer leave that does not end the live. | Host end closes the room for everyone from both surfaces; viewer leave only removes the viewer. |
+| 6 | GL07-IB1, GL07-IB2, GL07-IB3, GL07-IB4, GL07-C4, GL07-C5 | Run one invite-only live: invited viewer joins, uninvited user is blocked, banned user is blocked from rejoin and chat. | Invite/banned enforcement is consistent for both join and chat paths. |
+
+## Automation / Read-Only Audit
+Use these checks to front-load regressions before the 2-device run. They do not replace the manual matrix because notification, PiP, and multi-device presence still require UI validation.
+
+- `npm run test:live-regression`
+  - Covers existing automated live regressions including discovery ghost filtering, invite-only filtering stability, live control events, and Spacetime subscription lifecycle behavior.
+- `npm run smoke:web:auth`
+  - Optional authenticated web smoke for `/ -> /go-live -> /live -> /` path validation when web QA is part of the release lane.
+
 ## 1) Host Start Live
 | Done | ID | Setup | Action | Expected result |
 | --- | --- | --- | --- | --- |
