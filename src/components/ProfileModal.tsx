@@ -96,7 +96,7 @@ function getRelationshipStatus(
 }
 
 export function ProfileModal() {
-  const { selectedUser, hideProfile } = useProfile();
+  const { selectedUser, selectedUserOpenedAtMs, hideProfile } = useProfile();
   const {
     userId: viewerUserId,
     hasSession,
@@ -197,22 +197,21 @@ export function ProfileModal() {
   ]);
 
   useEffect(() => {
-    if (!selectedUser?.id || !viewerUserId) {
+    if (!selectedUser?.id || !viewerUserId || !selectedUserOpenedAtMs) {
       return;
     }
 
-    const openedAtMs = Date.now();
     void trackSpacetimeProfileView({
       viewerUserId,
       profileUserId: selectedUser.id,
-      openedAtMs,
+      openedAtMs: selectedUserOpenedAtMs,
       source: 'profile_modal_open',
     }).catch((error) => {
       if (__DEV__) {
         console.warn('[profile] Failed to track profile view', error);
       }
     });
-  }, [selectedUser?.id, viewerUserId]);
+  }, [selectedUser?.id, selectedUserOpenedAtMs, viewerUserId]);
 
   useEffect(() => {
     if (optimisticRequestUntil <= 0) return;

@@ -328,6 +328,30 @@ function filterLivesWithFreshHostingPresence(
   return lives.filter((live) => activeHostingLiveIds.has(live.id));
 }
 
+function resolveAuthoritativeLives(
+  dbView: any,
+  isViewRequested: (viewName: string) => boolean,
+  isViewActive: (viewName: string) => boolean,
+) {
+  const spacetimeLives = getSpacetimeLives(dbView);
+  const freshPresence = applyFreshPresenceFilter(getSpacetimePresence(dbView));
+  const liveDiscoveryRequested = isViewRequested('public_live_discovery');
+  const liveDiscoveryActive = isViewActive('public_live_discovery');
+  const shouldUseSnapshotFallback =
+    spacetimeLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
+  const authoritativeLives =
+    shouldUseSnapshotFallback
+      ? []
+      : liveDiscoveryRequested || liveDiscoveryActive
+        ? filterLivesWithFreshHostingPresence(spacetimeLives, freshPresence)
+        : spacetimeLives;
+
+  return {
+    authoritativeLives,
+    shouldUseSnapshotFallback,
+  };
+}
+
 export function createBackendLiveRepository(
   snapshot: BackendSnapshot,
   runtime: LiveRepositoryRuntime = {},
@@ -337,19 +361,14 @@ export function createBackendLiveRepository(
   const isViewActive = runtime.isViewActive ?? isSpacetimeViewActive;
   return {
     listLives(request) {
-      const spacetimeLives = getSpacetimeLives(dbView);
-      const freshPresence = applyFreshPresenceFilter(getSpacetimePresence(dbView));
-      const liveDiscoveryRequested = isViewRequested('public_live_discovery');
-      const liveDiscoveryActive = isViewActive('public_live_discovery');
-      const shouldUseSnapshotFallback =
-        spacetimeLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
+      const { authoritativeLives, shouldUseSnapshotFallback } = resolveAuthoritativeLives(
+        dbView,
+        isViewRequested,
+        isViewActive,
+      );
       const byId = new Map<string, ExtendedLiveItem>();
 
       if (!shouldUseSnapshotFallback) {
-        const authoritativeLives =
-          liveDiscoveryRequested || liveDiscoveryActive
-            ? filterLivesWithFreshHostingPresence(spacetimeLives, freshPresence)
-            : spacetimeLives;
         for (const live of authoritativeLives) {
           byId.set(live.id, live);
         }
@@ -383,6 +402,27 @@ export function createBackendLiveRepository(
       if (!liveId) return undefined;
       const normalized = liveId.trim();
       if (!normalized) return undefined;
+
+      const { authoritativeLives, shouldUseSnapshotFallback } = resolveAuthoritativeLives(
+        dbView,
+        isViewRequested,
+        isViewActive,
+      );
+
+      if (!shouldUseSnapshotFallback) {
+        const authoritativeLive = authoritativeLives.find((live) => live.id === normalized);
+        if (!authoritativeLive) {
+          return undefined;
+        }
+
+        const fromSnapshot = snapshot.lives.find((live) => live.id === normalized);
+        const fromLiveItem = getSpacetimeLiveById(normalized, dbView);
+        return {
+          ...(fromSnapshot ?? {}),
+          ...authoritativeLive,
+          ...(fromLiveItem ?? {}),
+        } as ExtendedLiveItem;
+      }
 
       const fromLiveItem = getSpacetimeLiveById(normalized, dbView);
       if (fromLiveItem) return fromLiveItem;
