@@ -82,6 +82,12 @@ If any row above fails, stop the go-live sign-off and file the bug before contin
 | [ ] | GL07-IB3 | Host bans user C for that live. | User C attempts to join again. | Banned user is blocked from join regardless of invite-only state. |
 | [ ] | GL07-IB4 | User C is banned for that live. | User C attempts to send chat to that live. | Banned user cannot deliver chat messages into the live room. |
 
+## 7) Web Compatibility
+| Done | ID | Setup | Action | Expected result |
+| --- | --- | --- | --- | --- |
+| [ ] | GL07-W1 | Open web app in browser devtools console. Focus the Go Live title input, then open and close Live Fuel. | Repeat open/close once with the title input previously focused. | No `NotSupportedError` or `AbortError` from ScreenOrientation; no `aria-hidden` focused-descendant warning on open/close. |
+| [ ] | GL07-W2 | Join a live on web, open `Profile Views` or `Settings/Report/Invite`, focus a search/details input, then dismiss the sheet. | Close the overlay with backdrop tap, swipe, and explicit close path. | Focus leaves the hidden sheet before teardown; no browser console warning about `aria-hidden` retaining focus. |
+
 ## Pass Criteria
 - [ ] All rows executed (or explicitly marked `N/A` with reason).
 - [ ] Total runtime is <= 10 minutes for 2 people / 2 devices.

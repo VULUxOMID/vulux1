@@ -72,6 +72,7 @@ import {
 } from '../../utils/spacetimePersistence';
 import {
   blurActiveWebElement,
+  dismissKeyboardAndBlurActiveWebElement,
   lockPortraitOrientationSafely,
   unlockOrientationSafely,
 } from '../../utils/webRuntimeCompat';
@@ -244,8 +245,7 @@ export default function LiveScreen() {
   useEffect(() => {
     isProfileOpen.current = !!selectedUser;
     if (selectedUser) {
-      Keyboard.dismiss();
-      blurActiveWebElement();
+      dismissKeyboardAndBlurActiveWebElement();
     }
   }, [selectedUser]);
 
@@ -363,12 +363,13 @@ export default function LiveScreen() {
   // UI State — single sheet controller replaces ~10 booleans
   const [activeSheet, setActiveSheetState] = useState<ActiveSheet>(null);
   const setActiveSheet = useCallback((nextSheet: ActiveSheet) => {
-    if (nextSheet !== null) {
-      Keyboard.dismiss();
+    if (nextSheet !== activeSheet) {
+      dismissKeyboardAndBlurActiveWebElement();
+    } else if (nextSheet !== null) {
       blurActiveWebElement();
     }
     setActiveSheetState(nextSheet);
-  }, []);
+  }, [activeSheet]);
   const [boostSheetTab, setBoostSheetTab] = useState<'boost' | 'league'>('boost');
   const [hostOptionsTab, setHostOptionsTab] = useState<HostOptionsTab>('settings');
   const [inviteQuery, setInviteQuery] = useState('');
@@ -2071,6 +2072,10 @@ function ActionSheet({
   useEffect(() => { hiddenYRef.current = hiddenY; }, [hiddenY]);
 
   const isVisibleRef = useRef(false);
+  const requestClose = useCallback(() => {
+    dismissKeyboardAndBlurActiveWebElement();
+    onCloseRef.current();
+  }, []);
 
   useEffect(() => {
     if (visible) {
@@ -2086,6 +2091,7 @@ function ActionSheet({
     }
 
     if (isVisibleRef.current) {
+      dismissKeyboardAndBlurActiveWebElement();
       Animated.spring(translateY, {
         toValue: hiddenYRef.current,
         ...springConfig,
@@ -2118,7 +2124,7 @@ function ActionSheet({
           gestureState.dy > snapThresholdRef.current ||
           (gestureState.vy > 1.2 && gestureState.dy > 24);
         if (shouldClose) {
-          onCloseRef.current();
+          requestClose();
           return;
         }
         Animated.spring(translateY, {
@@ -2135,10 +2141,10 @@ function ActionSheet({
   if (!isVisible) return null;
 
   return (
-    <Modal visible={isVisible} transparent animationType={animationType} onRequestClose={onClose}>
+    <Modal visible={isVisible} transparent animationType={animationType} onRequestClose={requestClose}>
       <View style={styles.sheetOverlay}>
         <Animated.View style={[styles.sheetBackdrop, { opacity: backdropOpacity }]} />
-        <Pressable style={StyleSheet.absoluteFillObject} onPress={onClose} />
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={requestClose} />
         <Animated.View
           style={[
             styles.sheetContainer,
