@@ -46,6 +46,49 @@ export default function NotificationsScreen() {
     return subscribeFriends();
   }, [queriesEnabled]);
 
+  const isGlobalChatMetadata = useCallback((metadata: Record<string, unknown> | undefined): boolean => {
+    if (!metadata) {
+      return true;
+    }
+
+    const rawContextId =
+      metadata.chatId ??
+      metadata.roomId ??
+      metadata.conversationId ??
+      metadata.conversationKey;
+
+    if (typeof rawContextId !== 'string') {
+      return true;
+    }
+
+    const normalizedContextId = rawContextId.trim().toLowerCase();
+    return normalizedContextId.length === 0 || normalizedContextId === 'global';
+  }, []);
+
+  const resolveDmUserId = useCallback(
+    (action: any, notificationId: string): string | null => {
+      const metadata = action?.metadata as Record<string, unknown> | undefined;
+      const notification = notifications.find((item) => item.id === notificationId);
+
+      const candidates: unknown[] = [
+        action?.userId,
+        metadata?.otherUserId,
+        metadata?.userId,
+        metadata?.targetUserId,
+        notification?.type === 'activity' ? notification.fromUser?.id : undefined,
+      ];
+
+      for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+          return candidate.trim();
+        }
+      }
+
+      return null;
+    },
+    [notifications],
+  );
+
   const handleNotificationAction = useCallback(async (type: string, id: string, action: any) => {
     switch (type) {
       case 'mark_all_read':
@@ -68,7 +111,29 @@ export default function NotificationsScreen() {
             }
           });
         } else if (action?.type === 'open_chat') {
-          // Navigate to specific chat (e.g. Global)
+          const metadata = action?.metadata as Record<string, unknown> | undefined;
+          const isGlobalChat = isGlobalChatMetadata(metadata);
+
+          if (!isGlobalChat) {
+            const dmUserId = resolveDmUserId(action, id);
+            if (!dmUserId) {
+              throw new Error('Unable to open direct conversation from notification.');
+            }
+
+            const dmMessageId = action.messageId ?? metadata?.messageId;
+            router.push({
+              pathname: '/chat/[userId]',
+              params: {
+                userId: dmUserId,
+                ...(typeof dmMessageId === 'string' && dmMessageId.length > 0
+                  ? { messageId: dmMessageId }
+                  : {}),
+              },
+            });
+            break;
+          }
+
+          // Navigate to specific chat (Global)
           const messageId = action.messageId ?? action.metadata?.messageId;
           const replyToMessageId = action.replyToMessageId;
           console.log('Navigating to Chat:', messageId);
