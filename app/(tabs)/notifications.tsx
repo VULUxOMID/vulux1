@@ -39,6 +39,27 @@ export default function NotificationsScreen() {
   const openProfileViewsOnMount =
     profileViewsParam === '1' || profileViewsParam?.toLowerCase() === 'true';
 
+  const resolveLiveRoomId = useCallback((action: any): string | null => {
+    const metadata =
+      action?.metadata && typeof action.metadata === 'object' ? action.metadata : undefined;
+    const possibleRoomId =
+      action?.liveId ??
+      action?.roomId ??
+      action?.chatId ??
+      action?.streamId ??
+      metadata?.liveId ??
+      metadata?.roomId ??
+      metadata?.chatId ??
+      metadata?.streamId;
+    const roomId = typeof possibleRoomId === 'string' ? possibleRoomId.trim() : '';
+
+    if (!roomId || roomId.toLowerCase() === 'global') {
+      return null;
+    }
+
+    return roomId;
+  }, []);
+
   useEffect(() => {
     if (!queriesEnabled) {
       return;
@@ -68,7 +89,16 @@ export default function NotificationsScreen() {
             }
           });
         } else if (action?.type === 'open_chat') {
-          // Navigate to specific chat (e.g. Global)
+          const liveRoomId = resolveLiveRoomId(action);
+          if (liveRoomId) {
+            router.push({
+              pathname: '/live',
+              params: { id: liveRoomId },
+            });
+            break;
+          }
+
+          // Navigate to global chat
           const messageId = action.messageId ?? action.metadata?.messageId;
           const replyToMessageId = action.replyToMessageId;
           console.log('Navigating to Chat:', messageId);
@@ -145,7 +175,7 @@ export default function NotificationsScreen() {
         }
         break;
     }
-  }, [notifications, notificationsRepo, router]);
+  }, [notifications, notificationsRepo, resolveLiveRoomId, router]);
 
   const handleRefresh = useCallback(async () => {
     requestBackendRefresh();
