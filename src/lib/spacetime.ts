@@ -286,7 +286,6 @@ const PUBLIC_SUBSCRIPTION_VIEWS = [
   'public_live_presence_item',
   'event_metrics_overview',
   'event_widget_config_item',
-  'global_message_item',
 ] as const;
 
 const IDENTITY_SUBSCRIPTION_VIEWS = [
