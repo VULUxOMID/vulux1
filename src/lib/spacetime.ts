@@ -10,7 +10,15 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
   };
 }
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { DbConnection, type SubscriptionHandle } from './spacetimedb';
+import {
+  PROFILE_VIEW_CLIENT_MAX_DEDUPE_WINDOW_MS,
+  buildProfileViewEventId,
+  buildProfileViewPairKey,
+  evaluateProfileViewClientDecision,
+} from './profileViewTracking';
 import { planScopedSubscriptionTeardown } from './spacetimeSubscriptionLifecycle';
 
 const SPACETIMEDB_URI =
@@ -20,6 +28,7 @@ const RECONNECT_BASE_DELAY_MS = 900;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 const ZERO_ROW_WATCHDOG_DELAY_MS = 9_000;
 const ZERO_ROW_WATCHDOG_MAX_RECOVERIES_PER_SESSION = 3;
+const PROFILE_VIEW_CLIENT_STORAGE_KEY = 'vulu.profile-view-tracking.v1';
 const SPACETIME_VERBOSE_LOGS =
   (process.env.EXPO_PUBLIC_SPACETIME_VERBOSE_LOGS?.trim().toLowerCase() ?? 'false') === 'true';
 
@@ -1773,9 +1782,97 @@ export type SpacetimeProfileAnnouncement = {
 };
 
 const announcedProfileFingerprintByUserId = new Map<string, string>();
+let profileViewLastTrackedAtMsByPair: Map<string, number> | null = null;
+let profileViewLastTrackedAtMsHydration: Promise<Map<string, number>> | null = null;
+const profileViewTrackLocksByPair = new Map<string, Promise<void>>();
 
 function normalizeProfileValue(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function parsePersistedProfileViewTrackingState(rawValue: string | null): Map<string, number> {
+  if (typeof rawValue !== 'string' || rawValue.trim().length === 0) {
+    return new Map();
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    return new Map(
+      Object.entries(parsed).flatMap(([key, value]) => {
+        if (typeof key !== 'string' || key.trim().length === 0) {
+          return [];
+        }
+        const timestamp = typeof value === 'number' && Number.isFinite(value)
+          ? Math.max(0, Math.floor(value))
+          : typeof value === 'string' && value.trim().length > 0
+            ? Math.max(0, Math.floor(Number(value)))
+            : NaN;
+        return Number.isFinite(timestamp) ? [[key, timestamp] as const] : [];
+      }),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function getProfileViewTrackingState(): Promise<Map<string, number>> {
+  if (profileViewLastTrackedAtMsByPair) {
+    return profileViewLastTrackedAtMsByPair;
+  }
+
+  if (!profileViewLastTrackedAtMsHydration) {
+    profileViewLastTrackedAtMsHydration = AsyncStorage.getItem(PROFILE_VIEW_CLIENT_STORAGE_KEY)
+      .then((value) => {
+        const parsed = parsePersistedProfileViewTrackingState(value);
+        profileViewLastTrackedAtMsByPair = parsed;
+        return parsed;
+      })
+      .catch(() => {
+        const empty = new Map<string, number>();
+        profileViewLastTrackedAtMsByPair = empty;
+        return empty;
+      })
+      .finally(() => {
+        profileViewLastTrackedAtMsHydration = null;
+      });
+  }
+
+  return profileViewLastTrackedAtMsHydration;
+}
+
+async function persistProfileViewTrackingState(state: Map<string, number>): Promise<void> {
+  const serialized = JSON.stringify(Object.fromEntries(state.entries()));
+  await AsyncStorage.setItem(PROFILE_VIEW_CLIENT_STORAGE_KEY, serialized);
+}
+
+function pruneProfileViewTrackingState(state: Map<string, number>, nowMs = Date.now()): void {
+  const minTrackedAtMs = Math.max(0, Math.floor(nowMs) - PROFILE_VIEW_CLIENT_MAX_DEDUPE_WINDOW_MS);
+  for (const [pairKey, trackedAtMs] of state.entries()) {
+    if (trackedAtMs < minTrackedAtMs) {
+      state.delete(pairKey);
+    }
+  }
+}
+
+async function withProfileViewTrackLock<T>(pairKey: string, work: () => Promise<T>): Promise<T> {
+  const previous = profileViewTrackLocksByPair.get(pairKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.then(() => current);
+  profileViewTrackLocksByPair.set(pairKey, queued);
+
+  await previous;
+
+  try {
+    return await work();
+  } finally {
+    releaseCurrent();
+    if (profileViewTrackLocksByPair.get(pairKey) === queued) {
+      profileViewTrackLocksByPair.delete(pairKey);
+    }
+  }
 }
 
 export async function announceSpacetimeUserProfile(
@@ -1837,33 +1934,51 @@ export async function trackSpacetimeProfileView(
 ): Promise<void> {
   const viewerUserId = normalizeProfileValue(request.viewerUserId);
   const profileUserId = normalizeProfileValue(request.profileUserId);
-  if (!viewerUserId || !profileUserId) {
+  const pairKey = buildProfileViewPairKey(viewerUserId, profileUserId);
+  if (!viewerUserId || !profileUserId || !pairKey) {
     return;
   }
 
-  const openedAtMs = Math.max(0, Math.floor(request.openedAtMs ?? Date.now()));
   const reducers = spacetimeDb.reducers as any;
   if (typeof reducers?.trackProfileView !== 'function') {
     return;
   }
 
-  const eventId = [
-    'profile-view-v2',
-    encodeURIComponent(viewerUserId),
-    encodeURIComponent(profileUserId),
-    String(openedAtMs),
-  ].join('::');
+  await withProfileViewTrackLock(pairKey, async () => {
+    const trackingState = await getProfileViewTrackingState();
+    const decision = evaluateProfileViewClientDecision({
+      viewerUserId,
+      profileUserId,
+      openedAtMs: request.openedAtMs,
+      dedupeWindowMs: request.dedupeWindowMs,
+      lastTrackedAtMs: trackingState.get(pairKey),
+    });
 
-  await reducers.trackProfileView({
-    id: eventId,
-    viewerUserId,
-    profileUserId,
-    occurredAtMs: String(openedAtMs),
-    source: normalizeProfileValue(request.source) || 'profile_modal_open',
-    dedupeWindowMs:
-      typeof request.dedupeWindowMs === 'number' && Number.isFinite(request.dedupeWindowMs)
-        ? Math.max(0, Math.floor(request.dedupeWindowMs))
-        : undefined,
+    if (!decision.shouldTrack) {
+      return;
+    }
+
+    const eventId = buildProfileViewEventId({
+      viewerUserId: decision.viewerUserId,
+      profileUserId: decision.profileUserId,
+      openedAtMs: decision.openedAtMs,
+    });
+    if (!eventId) {
+      return;
+    }
+
+    await reducers.trackProfileView({
+      id: eventId,
+      viewerUserId: decision.viewerUserId,
+      profileUserId: decision.profileUserId,
+      occurredAtMs: String(decision.openedAtMs),
+      source: normalizeProfileValue(request.source) || 'profile_modal_open',
+      dedupeWindowMs: decision.dedupeWindowMs,
+    });
+
+    trackingState.set(pairKey, decision.openedAtMs);
+    pruneProfileViewTrackingState(trackingState, decision.openedAtMs);
+    await persistProfileViewTrackingState(trackingState);
   });
 }
 

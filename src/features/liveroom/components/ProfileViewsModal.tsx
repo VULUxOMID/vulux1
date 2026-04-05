@@ -21,6 +21,7 @@ import { ProfileViewData, ProfileViewsModalProps } from '../types';
 import { hapticTap } from '../../../utils/haptics';
 import { useProfile } from '../../../context/ProfileContext';
 import { formatTimeAgo } from '../../../utils/timeUtils';
+import { dismissKeyboardAndBlurActiveWebElement } from '../../../utils/webRuntimeCompat';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_HEIGHT * 0.85;
@@ -74,12 +75,14 @@ export function ProfileViewsModal({
         }),
       ]).start();
     } else {
+      dismissKeyboardAndBlurActiveWebElement();
       slideAnim.setValue(SHEET_HEIGHT);
       fadeAnim.setValue(0);
     }
-  }, [visible]);
+  }, [fadeAnim, slideAnim, visible]);
 
   const handleClose = () => {
+    dismissKeyboardAndBlurActiveWebElement();
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: SHEET_HEIGHT,
@@ -100,6 +103,7 @@ export function ProfileViewsModal({
       return;
     }
     hapticTap();
+    dismissKeyboardAndBlurActiveWebElement();
     onClose();
     setTimeout(() => showProfile(viewer.user), 150);
   };

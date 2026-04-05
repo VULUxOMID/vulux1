@@ -113,7 +113,9 @@ test('hasAuthoritativeWalletForUser rejects stale values after account switch', 
 test('hasAuthoritativeWallet only exposes balances after hydration completes', () => {
   assert.equal(hasAuthoritativeWallet(false, false), false);
   assert.equal(hasAuthoritativeWallet(false, true), false);
-  assert.equal(hasAuthoritativeWallet(true, false), false);
+  // After hydration completes, wallet is authoritative even when the backend
+  // did not return wallet state — the UI should show defaults (0) instead of "--".
+  assert.equal(hasAuthoritativeWallet(true, false), true);
   assert.equal(hasAuthoritativeWallet(true, true), true);
 });
 

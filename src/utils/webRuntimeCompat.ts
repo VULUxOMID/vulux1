@@ -1,48 +1,25 @@
-import { Platform } from 'react-native';
+import { Keyboard, Platform } from 'react-native';
 import * as ScreenOrientation from 'expo-screen-orientation';
-
-const IGNORABLE_ORIENTATION_ERROR_NAMES = new Set(['NotSupportedError', 'AbortError']);
-
-function readErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return typeof error === 'string' ? error : '';
-}
-
-function readErrorName(error: unknown): string {
-  if (error instanceof Error) {
-    return error.name;
-  }
-  return '';
-}
-
-function isIgnorableOrientationError(error: unknown): boolean {
-  const name = readErrorName(error);
-  if (IGNORABLE_ORIENTATION_ERROR_NAMES.has(name)) {
-    return true;
-  }
-
-  const message = readErrorMessage(error).toLowerCase();
-  return (
-    message.includes('notsupportederror') ||
-    message.includes('aborterror') ||
-    message.includes('not supported') ||
-    message.includes('screen orientation')
-  );
-}
+import {
+  blurDocumentActiveElement,
+  hasScreenOrientationApiSupport,
+  isIgnorableOrientationError,
+} from './webRuntimeCompat.shared';
 
 function isOrientationApiSupportedOnWeb(): boolean {
   if (Platform.OS !== 'web') {
     return true;
   }
 
-  const globalScreen = (globalThis as { screen?: { orientation?: unknown } }).screen;
-  const orientation = globalScreen?.orientation as
-    | { lock?: unknown; unlock?: unknown }
-    | undefined;
-
-  return !!orientation && typeof orientation.lock === 'function' && typeof orientation.unlock === 'function';
+  const globalScreen = (globalThis as {
+    screen?: {
+      orientation?: {
+        lock?: unknown;
+        unlock?: unknown;
+      } | null;
+    };
+  }).screen;
+  return hasScreenOrientationApiSupport(globalScreen);
 }
 
 export async function lockPortraitOrientationSafely(): Promise<void> {
@@ -86,11 +63,14 @@ export function blurActiveWebElement(): void {
     return;
   }
 
-  const globalDocument = (globalThis as {
-    document?: { activeElement?: { blur?: () => void } | null };
-  }).document;
-  const activeElement = globalDocument?.activeElement;
-  if (activeElement && typeof activeElement.blur === 'function') {
-    activeElement.blur();
-  }
+  blurDocumentActiveElement(
+    (globalThis as {
+      document?: { activeElement?: { blur?: () => void } | null };
+    }).document,
+  );
+}
+
+export function dismissKeyboardAndBlurActiveWebElement(): void {
+  Keyboard.dismiss();
+  blurActiveWebElement();
 }

@@ -1,11 +1,33 @@
 import { useSignIn, useSignUp, useUser } from '@clerk/clerk-expo';
-import Constants from 'expo-constants';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { resolveClerkQaSignInTicket } from '../../auth/clerkConfig';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import {
+  applyQaGuestAuthSession,
+  isSupabaseAuthSpikeActive,
+  readSupabaseAuthSpikeConfigError,
+  requestSupabasePasswordReset,
+  resendSupabaseConfirmation,
+  signInSupabaseSpike,
+  signUpSupabaseSpike,
+  useAuth as useSessionAuth,
+} from '../../auth/spacetimeSession';
+import {
+  clearPendingQaClerkTicket,
+  decodeClerkFrontendHostFromPublishableKey,
+  getQaAuthHelperUrl,
+  isQaGuestAuthEnabled,
+  isQaPasswordlessLoginEnabled,
+  readPendingQaClerkTicket,
+  redirectToQaClerkOverride,
+  requestQaGuestSession,
+  requestQaClerkSignInTicket,
+  writePendingQaClerkTicket,
+} from '../../config/qaAuth';
+import { readConfiguredClerkPublishableKey } from '../../config/clerk';
 import {
   AppButton,
   AppScreen,
@@ -13,8 +35,6 @@ import {
   AppTextInput,
 } from '../../components';
 import { colors, radius, spacing } from '../../theme';
-import { buildSignUpProfileParts } from './signUpProfile';
-import { savePendingSignUpIdentity } from './pendingSignUpIdentity';
 
 type SpacetimeAuthScreenProps = {
   mode: 'welcome' | 'login' | 'register' | 'verify' | 'forgot-password';
@@ -43,6 +63,199 @@ type PendingSignInSecondFactor = {
   phoneNumberId?: string;
   safeIdentifier?: string;
 };
+
+const AUTH_ACCENTS: Record<SpacetimeAuthScreenProps['mode'], readonly [string, string, string]> = {
+  welcome: ['#09090B', '#111113', '#171723'],
+  login: ['#09090B', '#131318', '#1C1226'],
+  register: ['#09090B', '#121116', '#1B141F'],
+  verify: ['#09090B', '#131318', '#181226'],
+  'forgot-password': ['#09090B', '#121116', '#1A151A'],
+};
+
+const AUTH_DECOR = [
+  { top: 66, left: 26, width: 62, height: 16, rotate: '-14deg', color: colors.accentDanger },
+  { top: 108, right: 34, width: 20, height: 20, rotate: '0deg', color: colors.accentPrimary },
+  { top: 152, left: 64, width: 18, height: 18, rotate: '0deg', color: colors.accentPremium },
+  { top: 186, right: 58, width: 72, height: 18, rotate: '21deg', color: colors.accentWarning },
+  { top: 236, left: 24, width: 28, height: 28, rotate: '0deg', color: '#3D68FF' },
+  { top: 248, right: 32, width: 22, height: 22, rotate: '0deg', color: colors.accentCash },
+  { top: 290, left: 96, width: 54, height: 14, rotate: '-24deg', color: colors.accentPremium },
+  { top: 318, right: 104, width: 16, height: 16, rotate: '0deg', color: colors.accentPrimary },
+] as const;
+
+function readHeroTitle(mode: SpacetimeAuthScreenProps['mode']) {
+  switch (mode) {
+    case 'login':
+      return 'Jump back into the room.';
+    case 'register':
+      return 'Tell us a bit about you.';
+    case 'verify':
+      return 'Verify your email.';
+    case 'forgot-password':
+      return 'Reset your password.';
+    default:
+      return 'Go live. Talk fast. Build signal.';
+  }
+}
+
+function readHeroBody(mode: SpacetimeAuthScreenProps['mode']) {
+  switch (mode) {
+    case 'login':
+      return 'Sign in and return to live rooms, chat, music, and your profile status without friction.';
+    case 'register':
+      return 'Create the account, verify once, and VULU will restore your runtime identity before the app opens up.';
+    case 'verify':
+      return 'One code and the rest of the experience unlocks.';
+    case 'forgot-password':
+      return 'We send the reset code, you choose the new password, and the account comes back cleanly.';
+    default:
+      return 'Social gravity for live, music, profile, and chat.';
+  }
+}
+
+type AuthShellProps = {
+  children: ReactNode;
+  mode: SpacetimeAuthScreenProps['mode'];
+  title: string;
+  subtitle: string;
+  errorMessage?: string | null;
+  infoMessage?: string | null;
+  statusHint?: string | null;
+};
+
+function AuthShell({
+  children,
+  mode,
+  title,
+  subtitle,
+  errorMessage,
+  infoMessage,
+  statusHint,
+}: AuthShellProps) {
+  const accent = AUTH_ACCENTS[mode];
+  const isWelcome = mode === 'welcome';
+  const heroTitle = readHeroTitle(mode);
+  const heroBody = readHeroBody(mode);
+
+  return (
+    <AppScreen noPadding style={styles.container}>
+      <LinearGradient
+        colors={[accent[0], accent[1], colors.background]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={styles.blobPrimary} />
+      <View style={styles.blobSecondary} />
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.stage}>
+          <View style={styles.heroPanel}>
+            {AUTH_DECOR.map((shape, index) => (
+              <View
+                key={`shape-${index}`}
+                style={[
+                  styles.decorShape,
+                  {
+                    top: shape.top,
+                    left: 'left' in shape ? shape.left : undefined,
+                    right: 'right' in shape ? shape.right : undefined,
+                    width: shape.width,
+                    height: shape.height,
+                    backgroundColor: shape.color,
+                    transform: [{ rotate: shape.rotate }],
+                  },
+                ]}
+              />
+            ))}
+
+            <View style={styles.logoLockup}>
+              <View style={styles.logoBadge}>
+                <AppText style={styles.logoText}>VULU</AppText>
+              </View>
+              <AppText variant="smallBold" style={styles.logoSubline}>
+                {isWelcome ? heroTitle : 'Go live. Get real. Build signal.'}
+              </AppText>
+            </View>
+
+            {isWelcome ? (
+              <View style={styles.heroCopy}>
+                <AppText variant="small" style={styles.heroBody}>
+                  {heroBody}
+                </AppText>
+              </View>
+            ) : (
+              <View style={styles.compactTopBar}>
+                <Ionicons name="sparkles" size={16} color={colors.accentPremium} />
+                <AppText variant="micro" style={styles.compactTopBarText}>
+                  VULU onboarding
+                </AppText>
+              </View>
+            )}
+          </View>
+
+          <View style={[styles.cardShell, !isWelcome && styles.cardShellSheet]}>
+            <View style={styles.cardHandle} />
+            <View style={styles.cardHeader}>
+              {!isWelcome ? (
+                <>
+                  <AppText variant="h2" style={styles.title}>
+                    {heroTitle}
+                  </AppText>
+                  <AppText variant="small" style={styles.subtitle}>
+                    {heroBody}
+                  </AppText>
+                </>
+              ) : (
+                <>
+                  <AppText variant="h2" style={styles.title}>
+                    {title}
+                  </AppText>
+                  <AppText variant="small" style={styles.subtitle}>
+                    {subtitle}
+                  </AppText>
+                </>
+              )}
+            </View>
+
+            {children}
+
+            {errorMessage ? (
+              <View style={[styles.notice, styles.errorNotice]}>
+                <Ionicons name="alert-circle" size={16} color={colors.accentDanger} />
+                <AppText variant="small" style={styles.errorText}>
+                  {errorMessage}
+                </AppText>
+              </View>
+            ) : null}
+
+            {infoMessage ? (
+              <View style={[styles.notice, styles.infoNotice]}>
+                <Ionicons name="information-circle" size={16} color={colors.accentPrimary} />
+                <AppText variant="small" style={styles.infoText}>
+                  {infoMessage}
+                </AppText>
+              </View>
+            ) : null}
+
+            {statusHint ? (
+              <View style={styles.notice}>
+                <Ionicons name="radio-outline" size={16} color={colors.textSecondary} />
+                <AppText variant="small" style={styles.hintText}>
+                  {statusHint}
+                </AppText>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </ScrollView>
+    </AppScreen>
+  );
+}
 
 function readClerkErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
@@ -184,7 +397,370 @@ function readPendingSignInSecondFactor(
   return null;
 }
 
+function QaGuestOnlyAuthScreen({ mode }: SpacetimeAuthScreenProps) {
+  const router = useRouter();
+  const { isLoaded } = useSessionAuth();
+  const [identifier, setIdentifier] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  const navigateToHome = useCallback(() => {
+    router.replace('/');
+  }, [router]);
+
+  const handleGuestContinue = useCallback(async () => {
+    const normalizedIdentifier = identifier.trim();
+    if (!normalizedIdentifier) {
+      setErrorMessage('Enter a username or nickname.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      const guestSession = await requestQaGuestSession(normalizedIdentifier);
+      await applyQaGuestAuthSession(guestSession);
+      navigateToHome();
+    } catch (error) {
+      setErrorMessage(readClerkErrorMessage(error, 'Unable to start the QA guest session.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [identifier, navigateToHome]);
+
+  const title =
+    mode === 'register'
+      ? 'Create a QA guest account'
+      : mode === 'welcome'
+        ? 'QA guest mode'
+        : 'Sign in for QA';
+  const subtitle =
+    'Local QA guest auth is enabled. Enter any username on each device and Vulu will create a temporary guest session with no email verification or password.';
+
+  return (
+    <AuthShell
+      mode={mode}
+      title={title}
+      subtitle={subtitle}
+      errorMessage={errorMessage}
+      infoMessage={infoMessage}
+    >
+      <View style={styles.form}>
+        <AppTextInput
+          autoCapitalize="none"
+          autoComplete="username"
+          onChangeText={setIdentifier}
+          placeholder="Username or nickname"
+          style={styles.input}
+          value={identifier}
+        />
+        <AppButton
+          title="Continue"
+          onPress={() => {
+            void handleGuestContinue();
+          }}
+          loading={isSubmitting}
+          disabled={!isLoaded || isSubmitting}
+          icon="log-in-outline"
+        />
+        {mode !== 'welcome' ? (
+          <AppButton
+            title="Back"
+            onPress={() => router.replace('/(auth)')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+        ) : null}
+      </View>
+    </AuthShell>
+  );
+}
+
+function SupabaseSpikeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
+  const router = useRouter();
+  const {
+    hasSession,
+    isLoaded,
+    isSignedIn,
+    needsVerification,
+    status,
+    syncError,
+  } = useSessionAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState<'sign_in' | 'create_account'>(
+    mode === 'register' ? 'create_account' : 'sign_in',
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const configError = readSupabaseAuthSpikeConfigError();
+
+  const isCreateAccountMode = authMode === 'create_account';
+
+  useEffect(() => {
+    if (isSignedIn) {
+      router.replace('/');
+    }
+  }, [isSignedIn, router]);
+
+  const handleSignIn = useCallback(async () => {
+    if (configError) {
+      setErrorMessage(configError);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      await signInSupabaseSpike(email, password);
+      setPassword('');
+      setInfoMessage('Supabase session created. Vulu is connecting to SpaceTimeDB.');
+    } catch (error) {
+      setErrorMessage(readClerkErrorMessage(error, 'Unable to sign in to Supabase right now.'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [configError, email, password]);
+
+  const handleCreateAccount = useCallback(async () => {
+    if (configError) {
+      setErrorMessage(configError);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      await signUpSupabaseSpike(email, password);
+      setPassword('');
+      setAuthMode('sign_in');
+      setInfoMessage('Check your email to confirm your account, then return here to sign in.');
+    } catch (error) {
+      const message = readClerkErrorMessage(error, 'Unable to create your account right now.');
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('429') ||
+        normalized.includes('too many requests') ||
+        normalized.includes('rate limit')
+      ) {
+        setErrorMessage('Too many signup attempts. Wait a minute, then try again.');
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [configError, email, password]);
+
+  const handleForgotPassword = useCallback(async () => {
+    if (configError) {
+      setErrorMessage(configError);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      await requestSupabasePasswordReset(email);
+      setInfoMessage('If that email exists, a password reset link has been sent.');
+    } catch (error) {
+      const message = readClerkErrorMessage(error, 'Unable to send a password reset email right now.');
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('429') ||
+        normalized.includes('too many requests') ||
+        normalized.includes('rate limit')
+      ) {
+        setErrorMessage('Too many reset requests. Wait a minute, then try again.');
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [configError, email]);
+
+  const handleResendConfirmation = useCallback(async () => {
+    if (configError) {
+      setErrorMessage(configError);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    try {
+      await resendSupabaseConfirmation(email);
+      setInfoMessage('Confirmation email sent. Check your inbox and spam folder.');
+    } catch (error) {
+      const message = readClerkErrorMessage(
+        error,
+        'Unable to resend the confirmation email right now.',
+      );
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes('429') ||
+        normalized.includes('too many requests') ||
+        normalized.includes('rate limit')
+      ) {
+        setErrorMessage('Too many confirmation email attempts. Wait a minute, then try again.');
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [configError, email]);
+
+  const title =
+    isCreateAccountMode
+      ? 'Create your account'
+      : mode === 'welcome'
+        ? 'Supabase auth'
+        : mode === 'login'
+          ? 'Sign in with Supabase'
+          : 'Supabase auth';
+  const subtitle =
+    'Supabase is now the default auth path. Clerk remains available as an explicit compatibility mode during migration.';
+  const statusHint = configError
+    ? configError
+    : syncError
+      ? syncError
+      : hasSession && !isSignedIn && status === 'syncing'
+        ? 'Supabase session is active. Vulu is reconnecting to SpaceTimeDB.'
+        : hasSession && needsVerification
+          ? 'Supabase session is active, but the account is still awaiting verification.'
+          : null;
+
+  return (
+    <AuthShell
+      mode={mode}
+      title={title}
+      subtitle={subtitle}
+      errorMessage={errorMessage}
+      infoMessage={infoMessage}
+      statusHint={statusHint}
+    >
+      {mode === 'welcome' ? (
+        <View style={styles.buttonGroup}>
+          <AppButton
+            title="Create account"
+            onPress={() => router.replace('/(auth)/register')}
+            disabled={!isLoaded}
+            icon="person-add-outline"
+          />
+          <AppButton
+            title="Log in"
+            onPress={() => router.replace('/(auth)/login')}
+            variant="outline"
+            disabled={!isLoaded}
+            icon="log-in-outline"
+          />
+        </View>
+      ) : (
+        <>
+          <View style={styles.modeSwitch}>
+            <AppButton
+              title="Sign in"
+              onPress={() => {
+                setAuthMode('sign_in');
+                setErrorMessage(null);
+                setInfoMessage(null);
+              }}
+              variant={isCreateAccountMode ? 'outline' : 'primary'}
+              disabled={isSubmitting}
+            />
+            <AppButton
+              title="Create account"
+              onPress={() => {
+                setAuthMode('create_account');
+                setErrorMessage(null);
+                setInfoMessage(null);
+              }}
+              variant={isCreateAccountMode ? 'primary' : 'outline'}
+              disabled={isSubmitting}
+            />
+          </View>
+
+          <View style={styles.form}>
+            <AppTextInput
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              onChangeText={setEmail}
+              placeholder="Supabase email"
+              style={styles.input}
+              value={email}
+            />
+            <AppTextInput
+              autoCapitalize="none"
+              autoComplete="password"
+              onChangeText={setPassword}
+              placeholder="Supabase password"
+              secureTextEntry
+              style={styles.input}
+              value={password}
+            />
+            <AppButton
+              title={isCreateAccountMode ? 'Create account' : 'Sign in'}
+              onPress={() => {
+                void (isCreateAccountMode ? handleCreateAccount() : handleSignIn());
+              }}
+              loading={isSubmitting}
+              disabled={!isLoaded || isSubmitting || Boolean(configError)}
+              icon={isCreateAccountMode ? 'person-add-outline' : 'log-in-outline'}
+            />
+            <AppButton
+              title="Back"
+              onPress={() => router.replace('/(auth)')}
+              variant="outline"
+              disabled={isSubmitting}
+            />
+          </View>
+
+          <View style={styles.inlineActions}>
+            {!isCreateAccountMode ? (
+              <AppButton
+                title="Forgot password"
+                onPress={() => {
+                  void handleForgotPassword();
+                }}
+                variant="outline"
+                size="small"
+                disabled={!isLoaded || isSubmitting || Boolean(configError)}
+              />
+            ) : null}
+            <AppButton
+              title="Resend confirmation"
+              onPress={() => {
+                void handleResendConfirmation();
+              }}
+              variant="outline"
+              size="small"
+              disabled={!isLoaded || isSubmitting || Boolean(configError)}
+            />
+          </View>
+        </>
+      )}
+    </AuthShell>
+  );
+}
+
 export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
+  if (isQaGuestAuthEnabled()) {
+    return <QaGuestOnlyAuthScreen mode={mode} />;
+  }
+
+  if (isSupabaseAuthSpikeActive()) {
+    return <SupabaseSpikeAuthScreen mode={mode} />;
+  }
+
   const router = useRouter();
   const { isLoaded: isSignInLoaded, signIn, setActive: setActiveSignIn } = useSignIn();
   const { isLoaded: isSignUpLoaded, signUp, setActive: setActiveSignUp } = useSignUp();
@@ -198,8 +774,6 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     syncError,
   } = useSessionAuth();
   const [loginEmail, setLoginEmail] = useState('');
-  const [registerDisplayName, setRegisterDisplayName] = useState('');
-  const [registerUsername, setRegisterUsername] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -215,12 +789,19 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const qaAuthHelperUrl = getQaAuthHelperUrl();
+  const qaPasswordlessLoginEnabled = isQaPasswordlessLoginEnabled() && Boolean(qaAuthHelperUrl);
+  const configuredClerkPublishableKey = readConfiguredClerkPublishableKey();
+  const qaFrontendHost = decodeClerkFrontendHostFromPublishableKey(
+    configuredClerkPublishableKey,
+  );
+  const pendingQaTicketAttemptRef = useRef<string | null>(null);
 
   const canUseSignIn = isSignInLoaded && Boolean(signIn) && Boolean(setActiveSignIn);
   const canUseSignUp = isSignUpLoaded && Boolean(signUp) && Boolean(setActiveSignUp);
 
   const navigateToHome = useCallback(() => {
-    router.replace('/(tabs)');
+    router.replace('/');
   }, [router]);
 
   const clearPendingSignInSecondFactor = useCallback(() => {
@@ -300,17 +881,12 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
 
     const identifier = normalizeIdentifier(loginEmail);
-    const qaTicket =
-      resolveClerkQaSignInTicket({
-        env: process.env,
-        expoExtra: Constants.expoConfig?.extra ?? null,
-        runtimeSearch: typeof window !== 'undefined' ? window.location.search : null,
-        runtimeStorageValue:
-          typeof window !== 'undefined'
-            ? window.sessionStorage?.getItem('vulu.qa.clerk_ticket') ?? null
-            : null,
-      }) || null;
-    if (!qaTicket && (!identifier || !password)) {
+    const qaTicket = process.env.EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET?.trim() || null;
+    if (!qaTicket && !identifier) {
+      setErrorMessage('Enter your email or username.');
+      return;
+    }
+    if (!qaTicket && !qaPasswordlessLoginEnabled && !password) {
       setErrorMessage('Enter both your email and password.');
       return;
     }
@@ -321,23 +897,63 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     try {
       clearPendingSignInSecondFactor();
 
-      if (qaTicket && (!identifier || !password)) {
+      const completeTicketSignIn = async (ticket: string, sourceLabel: string) => {
         const ticketAttempt = await signIn.create({
           strategy: 'ticket',
-          ticket: qaTicket,
+          ticket,
         });
 
         if (await completeSignInIfPossible(ticketAttempt)) {
-          return;
+          clearPendingQaClerkTicket();
+          return true;
         }
 
         const startedTicketSecondFactor = await beginSignInSecondFactorChallenge(ticketAttempt);
         if (startedTicketSecondFactor) {
-          return;
+          clearPendingQaClerkTicket();
+          return true;
         }
 
-        setInfoMessage('Clerk ticket sign-in needs another step. Complete it and retry.');
+        setInfoMessage(`${sourceLabel} sign-in needs another step. Complete it and retry.`);
+        return true;
+      };
+
+      const pendingQaTicket = readPendingQaClerkTicket();
+
+      if (qaTicket && !password) {
+        await completeTicketSignIn(qaTicket, 'Clerk ticket');
         return;
+      }
+
+      if (
+        pendingQaTicket?.ticket &&
+        pendingQaTicket.publishableKey === configuredClerkPublishableKey &&
+        !password
+      ) {
+        await completeTicketSignIn(pendingQaTicket.ticket, 'Pending QA Clerk ticket');
+        return;
+      }
+
+      if (qaPasswordlessLoginEnabled && identifier) {
+        try {
+          const qaTicketResponse = await requestQaClerkSignInTicket(identifier);
+          if (
+            qaTicketResponse.publishableKey &&
+            qaTicketResponse.publishableKey !== configuredClerkPublishableKey
+          ) {
+            writePendingQaClerkTicket({
+              ticket: qaTicketResponse.ticket,
+              publishableKey: qaTicketResponse.publishableKey,
+            });
+            redirectToQaClerkOverride(qaTicketResponse.publishableKey);
+          }
+          await completeTicketSignIn(qaTicketResponse.ticket, 'Local QA auth helper');
+          return;
+        } catch (error) {
+          if (!password) {
+            throw error;
+          }
+        }
       }
 
       let attempt = await signIn.create({
@@ -369,12 +985,29 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
         hasSignInFactorStrategy(attempt, 'first', 'ticket')
       ) {
         if (qaTicket) {
-          attempt = await signIn.create({
-            strategy: 'ticket',
-            ticket: qaTicket,
-          });
+          const handledQaTicket = await completeTicketSignIn(qaTicket, 'Clerk ticket');
+          if (handledQaTicket) {
+            return;
+          }
+        }
 
-          if (await completeSignInIfPossible(attempt)) {
+        if (qaPasswordlessLoginEnabled && identifier) {
+          const qaTicketResponse = await requestQaClerkSignInTicket(identifier);
+          if (
+            qaTicketResponse.publishableKey &&
+            qaTicketResponse.publishableKey !== configuredClerkPublishableKey
+          ) {
+            writePendingQaClerkTicket({
+              ticket: qaTicketResponse.ticket,
+              publishableKey: qaTicketResponse.publishableKey,
+            });
+            redirectToQaClerkOverride(qaTicketResponse.publishableKey);
+          }
+          const handledQaTicket = await completeTicketSignIn(
+            qaTicketResponse.ticket,
+            'Local QA auth helper',
+          );
+          if (handledQaTicket) {
             return;
           }
         }
@@ -386,9 +1019,9 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       }
 
       if (attempt.status === 'needs_identifier') {
-        setInfoMessage(
-          'Clerk requires a pending sign-in step. For QA smoke, set EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET and retry.',
-        );
+        setInfoMessage(qaPasswordlessLoginEnabled
+          ? 'Local QA auth is enabled, but the helper could not complete this Clerk sign-in.'
+          : 'Clerk requires a pending sign-in step. For QA smoke, set EXPO_PUBLIC_CLERK_QA_SIGN_IN_TICKET and retry.');
         return;
       }
 
@@ -405,10 +1038,39 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     canUseSignIn,
     clearPendingSignInSecondFactor,
     completeSignInIfPossible,
+    configuredClerkPublishableKey,
     beginSignInSecondFactorChallenge,
     loginEmail,
     password,
+    qaPasswordlessLoginEnabled,
     signIn,
+  ]);
+
+  useEffect(() => {
+    if (mode !== 'login' || !qaPasswordlessLoginEnabled || isSubmitting) {
+      return;
+    }
+
+    const pendingQaTicket = readPendingQaClerkTicket();
+    if (
+      !pendingQaTicket?.ticket ||
+      pendingQaTicket.publishableKey !== configuredClerkPublishableKey
+    ) {
+      return;
+    }
+
+    if (pendingQaTicketAttemptRef.current === pendingQaTicket.ticket) {
+      return;
+    }
+
+    pendingQaTicketAttemptRef.current = pendingQaTicket.ticket;
+    void handleSignIn();
+  }, [
+    configuredClerkPublishableKey,
+    handleSignIn,
+    isSubmitting,
+    mode,
+    qaPasswordlessLoginEnabled,
   ]);
 
   const handleResendSignInVerificationCode = useCallback(async () => {
@@ -639,16 +1301,8 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     }
 
     const emailAddress = normalizeEmail(registerEmail);
-    const profileParts = buildSignUpProfileParts({
-      username: registerUsername,
-      displayName: registerDisplayName,
-    });
     if (!password) {
       setErrorMessage('Enter a password to create your account.');
-      return;
-    }
-    if ('error' in profileParts) {
-      setErrorMessage(profileParts.error);
       return;
     }
     if (!emailAddress) {
@@ -671,18 +1325,6 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       await signUp.create({
         emailAddress,
         password,
-        username: profileParts.username,
-        firstName: profileParts.firstName,
-        lastName: profileParts.lastName,
-        unsafeMetadata: {
-          username: profileParts.username,
-          displayName: profileParts.displayName,
-        },
-      });
-      await savePendingSignUpIdentity({
-        email: emailAddress,
-        username: profileParts.username,
-        displayName: profileParts.displayName,
       });
       await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
       setInfoMessage(`We sent a verification code to ${emailAddress}.`);
@@ -696,9 +1338,7 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     canUseSignUp,
     confirmPassword,
     password,
-    registerDisplayName,
     registerEmail,
-    registerUsername,
     router,
     signUp,
   ]);
@@ -785,10 +1425,12 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
 
   const subtitle = useMemo(() => {
     if (mode === 'register') {
-      return 'Pick your username, display name, email, and password. Clerk verifies your email, then Vulu creates your canonical profile.';
+      return 'Use your email and password. Supabase authenticates the account, then Vulu restores the mapped runtime identity before connecting realtime services.';
     }
     if (mode === 'login') {
-      return 'Use your email or username and password. Vulu restores the same vulu_user_id after sign-in.';
+      return qaPasswordlessLoginEnabled
+        ? `Local QA auth helper is enabled for ${qaFrontendHost ?? 'this Clerk instance'}. Enter any username and Vulu will create or reuse a temporary QA account with no password or email verification.`
+        : 'Use your email or username and password. Vulu restores the same vulu_user_id after sign-in.';
     }
     if (mode === 'verify') {
       return 'Email verification is required before the app unlocks your SpacetimeDB-backed data.';
@@ -796,8 +1438,8 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
     if (mode === 'forgot-password') {
       return 'Enter your email or username. We will email a reset code to the account email, then you can choose a new password.';
     }
-    return 'Clerk authenticates the session. SpacetimeDB owns the user record, roles, balances, and messages.';
-  }, [mode]);
+    return 'Supabase authenticates the session. Cloudflare restores the canonical runtime identity, and Spacetime stays focused on realtime data.';
+  }, [mode, qaFrontendHost, qaPasswordlessLoginEnabled]);
 
   const statusHint = useMemo(() => {
     if (mode !== 'verify' && syncError) {
@@ -807,51 +1449,49 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
       return 'You are signed in, but the app stays locked until the primary email address is verified.';
     }
     if (mode !== 'verify' && hasSession && !isSignedIn && status === 'syncing') {
-      return 'Your Clerk session is active. Vulu is reconnecting to SpacetimeDB.';
+      return 'Your session is active. Vulu is restoring your runtime identity and reconnecting realtime services.';
     }
     return null;
   }, [hasSession, isSignedIn, mode, needsVerification, status, syncError]);
 
   return (
-    <AppScreen style={styles.container}>
-      <View style={styles.card}>
-        <View style={styles.header}>
-          <AppText variant="h2" style={styles.title}>
-            {title}
-          </AppText>
-          <AppText secondary style={styles.subtitle}>
-            {subtitle}
-          </AppText>
+    <AuthShell
+      mode={mode}
+      title={title}
+      subtitle={subtitle}
+      errorMessage={errorMessage}
+      infoMessage={infoMessage}
+      statusHint={statusHint}
+    >
+      {mode === 'welcome' ? (
+        <View style={styles.buttonGroup}>
+          <AppButton
+            title="Create account"
+            onPress={() => router.replace('/(auth)/register')}
+            disabled={!isSessionLoaded}
+            icon="person-add-outline"
+          />
+          <AppButton
+            title="Log in"
+            onPress={() => router.replace('/(auth)/login')}
+            variant="outline"
+            disabled={!isSessionLoaded}
+            icon="log-in-outline"
+          />
         </View>
+      ) : null}
 
-        {mode === 'welcome' ? (
-          <View style={styles.buttonGroup}>
-            <AppButton
-              title="Sign in"
-              onPress={() => router.replace('/(auth)/login')}
-              disabled={!isSessionLoaded}
-              icon="log-in-outline"
-            />
-            <AppButton
-              title="Create account"
-              onPress={() => router.replace('/(auth)/register')}
-              variant="outline"
-              disabled={!isSessionLoaded}
-              icon="person-add-outline"
-            />
-          </View>
-        ) : null}
-
-        {mode === 'login' ? (
-          <View style={styles.form}>
-            <AppTextInput
-              autoCapitalize="none"
-              autoComplete="username"
-              onChangeText={setLoginEmail}
-              placeholder="Email or username"
-              style={styles.input}
-              value={loginEmail}
-            />
+      {mode === 'login' ? (
+        <View style={styles.form}>
+          <AppTextInput
+            autoCapitalize="none"
+            autoComplete="username"
+            onChangeText={setLoginEmail}
+            placeholder={qaPasswordlessLoginEnabled ? 'Username for QA' : 'Email or username'}
+            style={styles.input}
+            value={loginEmail}
+          />
+          {qaPasswordlessLoginEnabled ? null : (
             <AppTextInput
               autoCapitalize="none"
               autoComplete="password"
@@ -861,312 +1501,432 @@ export function SpacetimeAuthScreen({ mode }: SpacetimeAuthScreenProps) {
               style={styles.input}
               value={password}
             />
-            <AppButton
-              title="Sign in"
-              onPress={() => {
-                void handleSignIn();
-              }}
-              loading={isSubmitting}
-              disabled={!canUseSignIn || isSubmitting}
-              icon="log-in-outline"
-            />
-            {pendingSignInSecondFactor ? (
-              <>
-                <AppText secondary style={styles.resetPrompt}>
-                  Enter the sign-in verification code from{' '}
-                  {pendingSignInSecondFactor.safeIdentifier ?? 'your verification channel'}.
-                </AppText>
-                <AppTextInput
-                  autoCapitalize="characters"
-                  keyboardType="number-pad"
-                  onChangeText={setSignInVerificationCode}
-                  placeholder="Sign-in verification code"
-                  style={styles.input}
-                  value={signInVerificationCode}
-                />
-                <AppButton
-                  title="Verify sign-in code"
-                  onPress={() => {
-                    void handleVerifySignInSecondFactor();
-                  }}
-                  loading={isSubmitting}
-                  disabled={!canUseSignIn || isSubmitting}
-                  icon="shield-checkmark-outline"
-                />
-                <AppButton
-                  title="Resend sign-in code"
-                  onPress={() => {
-                    void handleResendSignInVerificationCode();
-                  }}
-                  variant="outline"
-                  disabled={!canUseSignIn || isSubmitting}
-                />
-              </>
-            ) : null}
-            <AppButton
-              title="Need an account? Sign up"
-              onPress={() => router.replace('/(auth)/register')}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-            <AppButton
-              title="Forgot password?"
-              onPress={() => router.replace('/(auth)/forgot-password')}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-          </View>
-        ) : null}
+          )}
+          <AppButton
+            title={qaPasswordlessLoginEnabled ? 'Continue' : 'Sign in'}
+            onPress={() => {
+              void handleSignIn();
+            }}
+            loading={isSubmitting}
+            disabled={!canUseSignIn || isSubmitting}
+            icon="log-in-outline"
+          />
+          {pendingSignInSecondFactor ? (
+            <>
+              <AppText secondary style={styles.resetPrompt}>
+                Enter the sign-in verification code from{' '}
+                {pendingSignInSecondFactor.safeIdentifier ?? 'your verification channel'}.
+              </AppText>
+              <AppTextInput
+                autoCapitalize="characters"
+                keyboardType="number-pad"
+                onChangeText={setSignInVerificationCode}
+                placeholder="Sign-in verification code"
+                style={styles.input}
+                value={signInVerificationCode}
+              />
+              <AppButton
+                title="Verify sign-in code"
+                onPress={() => {
+                  void handleVerifySignInSecondFactor();
+                }}
+                loading={isSubmitting}
+                disabled={!canUseSignIn || isSubmitting}
+                icon="shield-checkmark-outline"
+              />
+              <AppButton
+                title="Resend sign-in code"
+                onPress={() => {
+                  void handleResendSignInVerificationCode();
+                }}
+                variant="outline"
+                disabled={!canUseSignIn || isSubmitting}
+              />
+            </>
+          ) : null}
+          <AppButton
+            title="Need an account? Sign up"
+            onPress={() => router.replace('/(auth)/register')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+          <AppButton
+            title="Forgot password?"
+            onPress={() => router.replace('/(auth)/forgot-password')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+        </View>
+      ) : null}
 
-        {mode === 'register' ? (
-          <View style={styles.form}>
-            <AppTextInput
-              autoCapitalize="words"
-              autoComplete="name"
-              onChangeText={setRegisterDisplayName}
-              placeholder="Display name"
-              style={styles.input}
-              value={registerDisplayName}
-            />
-            <AppTextInput
-              autoCapitalize="none"
-              autoComplete="username-new"
-              onChangeText={setRegisterUsername}
-              placeholder="Username"
-              style={styles.input}
-              value={registerUsername}
-            />
-            <AppTextInput
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              onChangeText={setRegisterEmail}
-              placeholder="Email"
-              style={styles.input}
-              value={registerEmail}
-            />
-            <AppTextInput
-              autoCapitalize="none"
-              autoComplete="new-password"
-              onChangeText={setPassword}
-              placeholder="Password"
-              secureTextEntry
-              style={styles.input}
-              value={password}
-            />
-            <AppTextInput
-              autoCapitalize="none"
-              autoComplete="new-password"
-              onChangeText={setConfirmPassword}
-              placeholder="Confirm password"
-              secureTextEntry
-              style={styles.input}
-              value={confirmPassword}
-            />
-            <AppButton
-              title="Create account"
-              onPress={() => {
-                void handleSignUp();
-              }}
-              loading={isSubmitting}
-              disabled={!canUseSignUp || isSubmitting}
-              icon="person-add-outline"
-            />
-            <AppButton
-              title="Have an account? Sign in"
-              onPress={() => router.replace('/(auth)/login')}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-          </View>
-        ) : null}
+      {mode === 'register' ? (
+        <View style={styles.form}>
+          <AppTextInput
+            autoCapitalize="none"
+            autoComplete="email"
+            keyboardType="email-address"
+            onChangeText={setRegisterEmail}
+            placeholder="Email"
+            style={styles.input}
+            value={registerEmail}
+          />
+          <AppTextInput
+            autoCapitalize="none"
+            autoComplete="new-password"
+            onChangeText={setPassword}
+            placeholder="Password"
+            secureTextEntry
+            style={styles.input}
+            value={password}
+          />
+          <AppTextInput
+            autoCapitalize="none"
+            autoComplete="new-password"
+            onChangeText={setConfirmPassword}
+            placeholder="Confirm password"
+            secureTextEntry
+            style={styles.input}
+            value={confirmPassword}
+          />
+          <AppButton
+            title="Create account"
+            onPress={() => {
+              void handleSignUp();
+            }}
+            loading={isSubmitting}
+            disabled={!canUseSignUp || isSubmitting}
+            icon="person-add-outline"
+          />
+          <AppButton
+            title="Have an account? Sign in"
+            onPress={() => router.replace('/(auth)/login')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+        </View>
+      ) : null}
 
-        {mode === 'verify' ? (
-          <View style={styles.form}>
-            <AppTextInput
-              autoCapitalize="characters"
-              keyboardType="number-pad"
-              onChangeText={setVerificationCode}
-              placeholder="Verification code"
-              style={styles.input}
-              value={verificationCode}
-            />
-            <AppButton
-              title="Verify email"
-              onPress={() => {
-                void handleVerifyEmail();
-              }}
-              loading={isSubmitting}
-              disabled={isSubmitting}
-              icon="mail-open-outline"
-            />
-            <AppButton
-              title="Resend code"
-              onPress={() => {
-                void sendVerificationCode();
-              }}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-            <AppButton
-              title="Back to sign in"
-              onPress={() => router.replace('/(auth)/login')}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-          </View>
-        ) : null}
+      {mode === 'verify' ? (
+        <View style={styles.form}>
+          <AppTextInput
+            autoCapitalize="characters"
+            keyboardType="number-pad"
+            onChangeText={setVerificationCode}
+            placeholder="Verification code"
+            style={styles.input}
+            value={verificationCode}
+          />
+          <AppButton
+            title="Verify email"
+            onPress={() => {
+              void handleVerifyEmail();
+            }}
+            loading={isSubmitting}
+            disabled={isSubmitting}
+            icon="mail-open-outline"
+          />
+          <AppButton
+            title="Resend code"
+            onPress={() => {
+              void sendVerificationCode();
+            }}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+          <AppButton
+            title="Back to sign in"
+            onPress={() => router.replace('/(auth)/login')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+        </View>
+      ) : null}
 
-        {mode === 'forgot-password' ? (
-          <View style={styles.form}>
-            {resetStep === 'request' ? (
-              <>
-                <AppTextInput
-                  autoCapitalize="none"
-                  autoComplete="username"
-                  onChangeText={setResetEmail}
-                  placeholder="Email or username"
-                  style={styles.input}
-                  value={resetEmail}
-                />
-                <AppButton
-                  title="Send reset code"
-                  onPress={() => {
-                    void handleStartPasswordReset();
-                  }}
-                  loading={isSubmitting}
-                  disabled={!canUseSignIn || isSubmitting}
-                  icon="mail-outline"
-                />
-              </>
-            ) : (
-              <>
-                <AppText secondary style={styles.resetPrompt}>
-                  Enter the reset code from your email, then choose a new password.
-                </AppText>
-                <AppTextInput
-                  autoCapitalize="characters"
-                  keyboardType="number-pad"
-                  onChangeText={setResetCode}
-                  placeholder="Reset code"
-                  style={styles.input}
-                  value={resetCode}
-                />
-                <AppTextInput
-                  autoCapitalize="none"
-                  autoComplete="new-password"
-                  onChangeText={setResetNewPassword}
-                  placeholder="New password"
-                  secureTextEntry
-                  style={styles.input}
-                  value={resetNewPassword}
-                />
-                <AppTextInput
-                  autoCapitalize="none"
-                  autoComplete="new-password"
-                  onChangeText={setResetConfirmPassword}
-                  placeholder="Confirm new password"
-                  secureTextEntry
-                  style={styles.input}
-                  value={resetConfirmPassword}
-                />
-                <AppButton
-                  title="Reset password"
-                  onPress={() => {
-                    void handleResetPassword();
-                  }}
-                  loading={isSubmitting}
-                  disabled={!canUseSignIn || isSubmitting}
-                  icon="key-outline"
-                />
-                <AppButton
-                  title="Resend reset code"
-                  onPress={() => {
-                    void handleResendResetCode();
-                  }}
-                  variant="outline"
-                  disabled={!canUseSignIn || isSubmitting}
-                />
-              </>
-            )}
-            <AppButton
-              title="Back to sign in"
-              onPress={() => router.replace('/(auth)/login')}
-              variant="outline"
-              disabled={isSubmitting}
-            />
-          </View>
-        ) : null}
-
-        {errorMessage ? (
-          <AppText variant="small" style={styles.errorText}>
-            {errorMessage}
-          </AppText>
-        ) : null}
-
-        {infoMessage ? (
-          <AppText variant="small" style={styles.infoText}>
-            {infoMessage}
-          </AppText>
-        ) : null}
-
-        {statusHint ? (
-          <AppText variant="small" secondary style={styles.hintText}>
-            {statusHint}
-          </AppText>
-        ) : null}
-      </View>
-    </AppScreen>
+      {mode === 'forgot-password' ? (
+        <View style={styles.form}>
+          {resetStep === 'request' ? (
+            <>
+              <AppTextInput
+                autoCapitalize="none"
+                autoComplete="username"
+                onChangeText={setResetEmail}
+                placeholder="Email or username"
+                style={styles.input}
+                value={resetEmail}
+              />
+              <AppButton
+                title="Send reset code"
+                onPress={() => {
+                  void handleStartPasswordReset();
+                }}
+                loading={isSubmitting}
+                disabled={!canUseSignIn || isSubmitting}
+                icon="mail-outline"
+              />
+            </>
+          ) : (
+            <>
+              <AppText secondary style={styles.resetPrompt}>
+                Enter the reset code from your email, then choose a new password.
+              </AppText>
+              <AppTextInput
+                autoCapitalize="characters"
+                keyboardType="number-pad"
+                onChangeText={setResetCode}
+                placeholder="Reset code"
+                style={styles.input}
+                value={resetCode}
+              />
+              <AppTextInput
+                autoCapitalize="none"
+                autoComplete="new-password"
+                onChangeText={setResetNewPassword}
+                placeholder="New password"
+                secureTextEntry
+                style={styles.input}
+                value={resetNewPassword}
+              />
+              <AppTextInput
+                autoCapitalize="none"
+                autoComplete="new-password"
+                onChangeText={setResetConfirmPassword}
+                placeholder="Confirm new password"
+                secureTextEntry
+                style={styles.input}
+                value={resetConfirmPassword}
+              />
+              <AppButton
+                title="Reset password"
+                onPress={() => {
+                  void handleResetPassword();
+                }}
+                loading={isSubmitting}
+                disabled={!canUseSignIn || isSubmitting}
+                icon="key-outline"
+              />
+              <AppButton
+                title="Resend reset code"
+                onPress={() => {
+                  void handleResendResetCode();
+                }}
+                variant="outline"
+                disabled={!canUseSignIn || isSubmitting}
+              />
+            </>
+          )}
+          <AppButton
+            title="Back to sign in"
+            onPress={() => router.replace('/(auth)/login')}
+            variant="outline"
+            disabled={isSubmitting}
+          />
+        </View>
+      ) : null}
+    </AuthShell>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
+    backgroundColor: '#120814',
   },
-  card: {
-    backgroundColor: colors.surface,
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.lg,
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xl,
+  },
+  blobPrimary: {
+    position: 'absolute',
+    width: 340,
+    height: 340,
+    borderRadius: 170,
+    top: -120,
+    right: -130,
+    backgroundColor: 'rgba(190, 56, 243, 0.12)',
+  },
+  blobSecondary: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    bottom: -80,
+    left: -120,
+    backgroundColor: 'rgba(0, 230, 118, 0.08)',
+  },
+  stage: {
+    flex: 1,
+    minHeight: '100%',
+    justifyContent: 'space-between',
+  },
+  heroPanel: {
+    minHeight: 330,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+    paddingTop: 56,
+    paddingBottom: spacing.xl,
+  },
+  decorShape: {
+    position: 'absolute',
+    borderRadius: 999,
+    opacity: 0.9,
+  },
+  logoLockup: {
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  logoBadge: {
+    minWidth: 230,
+    paddingHorizontal: 26,
+    paddingVertical: 12,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 3,
+    borderColor: '#111111',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  logoText: {
+    color: '#111111',
+    fontSize: 44,
+    lineHeight: 48,
+    fontWeight: '900',
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
+  logoSubline: {
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  heroCopy: {
+    marginTop: spacing.md,
+    maxWidth: 300,
+  },
+  heroBody: {
+    color: colors.textSecondary,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  compactTopBar: {
+    marginTop: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  compactTopBarText: {
+    color: colors.textSecondary,
+    letterSpacing: 1,
+  },
+  cardShell: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.lg,
+    backgroundColor: 'rgba(17, 17, 19, 0.94)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 30,
     borderWidth: 1,
     gap: spacing.lg,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xl,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
   },
-  header: {
+  cardShellSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  cardHandle: {
+    alignSelf: 'center',
+    width: 54,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    marginTop: -spacing.sm,
+  },
+  cardHeader: {
     gap: spacing.sm,
   },
   title: {
-    color: colors.textPrimary,
+    color: '#FFFDFD',
+    textAlign: 'center',
   },
   subtitle: {
-    color: colors.textSecondary,
+    color: 'rgba(255,255,255,0.72)',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
   form: {
     gap: spacing.sm,
   },
+  inlineActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   input: {
     backgroundColor: colors.surfaceAlt,
-    borderColor: colors.borderSubtle,
-    borderRadius: radius.md,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 18,
     borderWidth: 1,
-    minHeight: 52,
-    paddingHorizontal: spacing.md,
+    minHeight: 58,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   buttonGroup: {
     gap: spacing.sm,
   },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.lg,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  errorNotice: {
+    backgroundColor: 'rgba(255, 68, 88, 0.10)',
+    borderColor: 'rgba(255, 68, 88, 0.20)',
+  },
+  infoNotice: {
+    backgroundColor: 'rgba(0, 230, 118, 0.08)',
+    borderColor: 'rgba(0, 230, 118, 0.20)',
+  },
   errorText: {
     color: colors.accentDanger,
+    flex: 1,
   },
   infoText: {
     color: colors.accentPrimary,
+    flex: 1,
   },
   resetPrompt: {
-    color: colors.textSecondary,
+    color: 'rgba(255,255,255,0.72)',
+    lineHeight: 20,
   },
   hintText: {
-    color: colors.textMuted,
+    color: colors.textSecondary,
+    flex: 1,
   },
 });
