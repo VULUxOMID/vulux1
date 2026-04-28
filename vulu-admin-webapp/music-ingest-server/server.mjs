@@ -244,6 +244,137 @@ function mapSpotifyTracks(payload) {
   });
 }
 
+function mapSpotifyArtists(payload) {
+  const items = payload?.artists?.items ?? [];
+  return items.map((a) => ({
+    id: a.id,
+    name: a.name,
+    image: a.images?.[0]?.url ?? '',
+    genres: Array.isArray(a.genres) ? a.genres.slice(0, 4) : [],
+    popularity: typeof a.popularity === 'number' ? a.popularity : null,
+    spotifyUrl: a.external_urls?.spotify ?? '',
+  }));
+}
+
+function spotifyMarket() {
+  return (process.env.SPOTIFY_MARKET ?? 'US').trim() || 'US';
+}
+
+async function spotifyFetchJson(url) {
+  const token = await getSpotifyAccessToken();
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(`Spotify API failed (${r.status}): ${text.slice(0, 500)}`);
+  }
+  return JSON.parse(text);
+}
+
+async function fetchArtistAlbumsForCatalog(artistId, includeGroupsRaw) {
+  const market = spotifyMarket();
+  const allowed = new Set(['album', 'single', 'appears_on', 'compilation']);
+  const groups = String(includeGroupsRaw || 'album,single')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((g) => allowed.has(g));
+  const include_groups = groups.length ? groups.join(',') : 'album,single';
+
+  const u = new URL(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums`);
+  u.searchParams.set('include_groups', include_groups);
+  u.searchParams.set('market', market);
+  u.searchParams.set('limit', '50');
+
+  const albumsRaw = [];
+  let nextUrl = u.toString();
+  while (nextUrl) {
+    const body = await spotifyFetchJson(nextUrl);
+    albumsRaw.push(...(body.items || []));
+    nextUrl = body.next || null;
+  }
+
+  const seenAlbumIds = new Set();
+  const albums = [];
+  for (const a of albumsRaw) {
+    if (!a?.id || seenAlbumIds.has(a.id)) continue;
+    seenAlbumIds.add(a.id);
+    albums.push(a);
+  }
+  albums.sort((x, y) => String(y.release_date || '').localeCompare(String(x.release_date || '')));
+
+  return { albums, market };
+}
+
+async function buildArtistCatalogTracks(artistId, includeGroupsRaw) {
+  const { albums, market } = await fetchArtistAlbumsForCatalog(artistId, includeGroupsRaw);
+  const seenTrackIds = new Set();
+  const catalogTracks = [];
+
+  for (const album of albums) {
+    let tu = `https://api.spotify.com/v1/albums/${encodeURIComponent(album.id)}/tracks?market=${encodeURIComponent(market)}&limit=50`;
+    while (tu) {
+      const tb = await spotifyFetchJson(tu);
+      for (const t of tb.items || []) {
+        const tid = sanitizeSpotifyTrackId(t.id);
+        if (!tid || seenTrackIds.has(tid)) continue;
+        seenTrackIds.add(tid);
+        const artists = (t.artists || []).map((x) => x.name).filter(Boolean).join(', ');
+        catalogTracks.push({
+          id: tid,
+          name: t.name,
+          artists,
+          album: album.name,
+          albumArt: album.images?.[0]?.url ?? '',
+          durationMs: t.duration_ms ?? null,
+          spotifyUrl: t.external_urls?.spotify ?? '',
+          youtubeSearchHint: `${t.name || ''} ${artists}`.replace(/\s+/g, ' ').trim(),
+          albumReleaseDate: album.release_date || '',
+        });
+      }
+      tu = tb.next || null;
+    }
+  }
+
+  return {
+    albumsCount: albums.length,
+    catalogTrackCount: catalogTracks.length,
+    tracks: catalogTracks,
+  };
+}
+
+async function collectOwnedSpotifyIdsFromLibrary() {
+  assertStorageConfigured();
+  const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
+  const ids = new Set();
+
+  await mapWithConcurrency(keys, 16, async (key) => {
+    try {
+      const head = await headWithMeta(key);
+      const metaId = sanitizeSpotifyTrackId(head.metadata?.spotifyId);
+      if (metaId) ids.add(metaId);
+    } catch {
+      /* fall through */
+    }
+    const keyId = sanitizeSpotifyTrackId(spotifyIdFromObjectKey(key));
+    if (keyId) ids.add(keyId);
+  });
+
+  return ids;
+}
+
+async function fetchSpotifyArtistProfile(artistId) {
+  const body = await spotifyFetchJson(
+    `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}`,
+  );
+  return {
+    id: body.id,
+    name: body.name,
+    image: body.images?.[0]?.url ?? '',
+    genres: Array.isArray(body.genres) ? body.genres.slice(0, 6) : [],
+    popularity: typeof body.popularity === 'number' ? body.popularity : null,
+    spotifyUrl: body.external_urls?.spotify ?? '',
+  };
+}
+
 function parseYoutubeVideoId(raw) {
   let u;
   try {
@@ -873,6 +1004,61 @@ app.get('/api/spotify/search', async (req, res) => {
       artists: [...new Set(tracks.flatMap((t) => String(t.artists || '').split(',').map((a) => a.trim())).filter(Boolean))].slice(0, 12),
     });
     res.json({ tracks });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.get('/api/spotify/artists', async (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  if (!q) return res.json({ artists: [] });
+
+  try {
+    const token = await getSpotifyAccessToken();
+    const params = new URLSearchParams({ q, type: 'artist', limit: '12' });
+    const r = await fetch(`https://api.spotify.com/v1/search?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      return res.status(r.status).json({ error: 'Spotify artist search failed', detail: text.slice(0, 500) });
+    }
+    const artists = mapSpotifyArtists(JSON.parse(text));
+    await appendMusicEventSafe({
+      type: 'search',
+      query: q,
+      artistSearch: true,
+      resultCount: artists.length,
+    });
+    res.json({ artists });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.get('/api/music/artist-sync/plan', async (req, res) => {
+  const artistId = sanitizeSpotifyTrackId(String(req.query.artistId ?? '').trim());
+  if (!artistId) return res.status(400).json({ error: 'Missing or invalid artistId' });
+  const includeGroups = String(req.query.includeGroups ?? 'album,single').trim();
+
+  try {
+    assertStorageConfigured();
+    const [profile, catalog, owned] = await Promise.all([
+      fetchSpotifyArtistProfile(artistId),
+      buildArtistCatalogTracks(artistId, includeGroups),
+      collectOwnedSpotifyIdsFromLibrary(),
+    ]);
+    const ownedCount = catalog.tracks.filter((t) => owned.has(t.id)).length;
+    const missing = catalog.tracks.filter((t) => !owned.has(t.id));
+    res.json({
+      artist: profile,
+      albumsCount: catalog.albumsCount,
+      catalogTrackCount: catalog.catalogTrackCount,
+      ownedInLibraryCount: ownedCount,
+      missingCount: missing.length,
+      missingTracks: missing,
+      includeGroups: includeGroups.split(',').map((s) => s.trim()).filter(Boolean),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
