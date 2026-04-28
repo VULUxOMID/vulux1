@@ -323,8 +323,13 @@ function musicIdentityFromObjectKey(objectKey) {
   const k = String(objectKey ?? '');
   const prefix = R2_MUSIC_PREFIX;
   const rel = prefix && k.startsWith(prefix) ? k.slice(prefix.length) : k;
-  const file = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel;
-  return musicIdentityFromParts([file]);
+  const parts = rel.split('/').filter(Boolean);
+  const file = parts.at(-1) || rel;
+  const titlePart = file.replace(/\[[^\]]+\]/g, ' ');
+  if (parts.length >= 3 && parts[0].toLowerCase() === 'audio') {
+    return musicIdentityFromParts([parts[parts.length - 3], titlePart]);
+  }
+  return musicIdentityFromParts([titlePart]);
 }
 
 function musicIdentityGroupId(objectKey, metadata) {
@@ -727,15 +732,17 @@ async function listAllKeysWithPrefix(prefix) {
   return keys;
 }
 
-function musicDedupeGroupId(key, metadata) {
+function musicDedupeGroupIds(key, metadata) {
+  const ids = [];
   const fromMeta = sanitizeSpotifyTrackId(metadata?.spotifyId);
-  if (fromMeta) return `spotify:${fromMeta}`;
+  if (fromMeta) ids.push(`spotify:${fromMeta}`);
   const fromKey = sanitizeSpotifyTrackId(spotifyIdFromObjectKey(key));
-  if (fromKey) return `spotify:${fromKey}`;
+  if (fromKey) ids.push(`spotify:${fromKey}`);
   const identity = musicIdentityGroupId(key, metadata);
-  if (identity) return `identity:${identity}`;
+  if (identity) ids.push(`identity:${identity}`);
   const hash = String(metadata?.contentSha256 || '').trim();
-  return /^[a-f0-9]{64}$/i.test(hash) ? `sha256:${hash.toLowerCase()}` : '';
+  if (/^[a-f0-9]{64}$/i.test(hash)) ids.push(`sha256:${hash.toLowerCase()}`);
+  return [...new Set(ids)];
 }
 
 function canonicalObjectKeyForDedupeGroup(groupId) {
@@ -763,11 +770,11 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
       await mapWithConcurrency(keys, 8, async (key) => {
         try {
           const h = await headWithMeta(key);
-          const groupId = musicDedupeGroupId(key, h.metadata);
-          if (!groupId) return null;
+          const groupIds = musicDedupeGroupIds(key, h.metadata);
+          if (!groupIds.length) return null;
           return {
             key,
-            groupId,
+            groupIds,
             lastModifiedMs: h.lastModifiedMs || 0,
           };
         } catch {
@@ -778,11 +785,13 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
 
     const grouped = new Map();
     for (const it of items) {
-      if (!grouped.has(it.groupId)) grouped.set(it.groupId, []);
-      grouped.get(it.groupId).push(it);
+      for (const groupId of it.groupIds) {
+        if (!grouped.has(groupId)) grouped.set(groupId, []);
+        grouped.get(groupId).push(it);
+      }
     }
 
-    const toDelete = [];
+    const toDelete = new Set();
     const kept = {};
 
     for (const [groupId, group] of grouped.entries()) {
@@ -796,12 +805,13 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
 
       kept[groupId] = keeper.key;
       for (const g of group) {
-        if (g.key !== keeper.key) toDelete.push(g.key);
+        if (g.key !== keeper.key) toDelete.add(g.key);
       }
     }
 
+    const deletedKeys = [...toDelete];
     if (!dryRun) {
-      for (const delKey of toDelete) {
+      for (const delKey of deletedKeys) {
         await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: delKey }));
       }
     }
@@ -814,8 +824,8 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
         ([id, g]) => id.startsWith('spotify:') && g.length >= 2,
       ).length,
       identityGroupsWithDuplicates: [...grouped.values()].filter((g) => g.length >= 2).length,
-      removed: toDelete.length,
-      deletedKeys: toDelete,
+      removed: deletedKeys.length,
+      deletedKeys,
       keptKeysByGroupId: kept,
       keptKeysBySpotifyId: Object.fromEntries(
         Object.entries(kept)
