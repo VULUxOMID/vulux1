@@ -341,6 +341,38 @@ async function buildArtistCatalogTracks(artistId, includeGroupsRaw) {
   };
 }
 
+async function fetchSpotifyTrackPopularityMap(tracks) {
+  const ids = tracks.map((t) => sanitizeSpotifyTrackId(t.id)).filter(Boolean);
+  const out = new Map();
+
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const u = new URL('https://api.spotify.com/v1/tracks');
+    u.searchParams.set('ids', chunk.join(','));
+    u.searchParams.set('market', spotifyMarket());
+    const body = await spotifyFetchJson(u.toString());
+    for (const t of body.tracks || []) {
+      const id = sanitizeSpotifyTrackId(t?.id);
+      if (id && typeof t.popularity === 'number') out.set(id, t.popularity);
+    }
+  }
+
+  return out;
+}
+
+function summarizeArtistSyncTrack(track, owned, popularityMap) {
+  const spotifyId = sanitizeSpotifyTrackId(track?.id);
+  return {
+    ...track,
+    id: spotifyId || track?.id || '',
+    inLibrary: Boolean(spotifyId && owned.has(spotifyId)),
+    spotifyPopularity: popularityMap.has(spotifyId) ? popularityMap.get(spotifyId) : null,
+    // Spotify does not expose public stream counts through the Web API.
+    spotifyStreams: null,
+    youtubeViews: null,
+  };
+}
+
 async function collectOwnedSpotifyIdsFromLibrary() {
   assertStorageConfigured();
   const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
@@ -1048,15 +1080,29 @@ app.get('/api/music/artist-sync/plan', async (req, res) => {
       buildArtistCatalogTracks(artistId, includeGroups),
       collectOwnedSpotifyIdsFromLibrary(),
     ]);
-    const ownedCount = catalog.tracks.filter((t) => owned.has(t.id)).length;
-    const missing = catalog.tracks.filter((t) => !owned.has(t.id));
+    const popularityMap = await fetchSpotifyTrackPopularityMap(catalog.tracks).catch(() => new Map());
+    const tracks = catalog.tracks.map((t) => summarizeArtistSyncTrack(t, owned, popularityMap));
+    const ownedTracks = tracks.filter((t) => t.inLibrary);
+    const missing = tracks.filter((t) => !t.inLibrary);
+    const recentTracks = [...tracks]
+      .sort((a, b) => String(b.albumReleaseDate || '').localeCompare(String(a.albumReleaseDate || '')))
+      .slice(0, 24);
     res.json({
       artist: profile,
       albumsCount: catalog.albumsCount,
       catalogTrackCount: catalog.catalogTrackCount,
-      ownedInLibraryCount: ownedCount,
+      ownedInLibraryCount: ownedTracks.length,
       missingCount: missing.length,
+      tracks,
+      ownedTracks: ownedTracks.slice(0, 100),
       missingTracks: missing,
+      recentTracks,
+      metricsAvailability: {
+        spotifyPopularity: popularityMap.size > 0,
+        spotifyStreams: false,
+        youtubeViews: false,
+        note: 'Spotify Web API exposes popularity scores, not stream/view counts. YouTube views require a YouTube Data API integration and exact video matching.',
+      },
       includeGroups: includeGroups.split(',').map((s) => s.trim()).filter(Boolean),
     });
   } catch (e) {
