@@ -775,6 +775,8 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
           return {
             key,
             groupIds,
+            contentType: h.contentType || '',
+            hasUserMetadata: Boolean(h.metadata?.title || h.metadata?.artist || h.metadata?.album),
             lastModifiedMs: h.lastModifiedMs || 0,
           };
         } catch {
@@ -794,6 +796,19 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
     const toDelete = new Set();
     const kept = {};
 
+    const scoreKeeper = (groupId, item) => {
+      const canonicalKey = canonicalObjectKeyForDedupeGroup(groupId);
+      let score = 0;
+      if (canonicalKey && item.key === canonicalKey) score += 1000;
+      if (item.hasUserMetadata) score += 250;
+      if (String(item.contentType || '').startsWith('audio/')) score += 150;
+      if (/\.mp3$/i.test(item.key)) score += 75;
+      if (/\/(spotify|normalized)\//i.test(item.key) || /^(spotify|normalized)\//i.test(item.key)) {
+        score += 50;
+      }
+      return score;
+    };
+
     for (const [groupId, group] of grouped.entries()) {
       if (group.length < 2) continue;
 
@@ -801,7 +816,12 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
       const canonicalHit = canonicalKey && group.find((g) => g.key === canonicalKey);
       const keeper =
         canonicalHit ||
-        group.reduce((best, cur) => (cur.lastModifiedMs > best.lastModifiedMs ? cur : best), group[0]);
+        group.reduce((best, cur) => {
+          const bestScore = scoreKeeper(groupId, best);
+          const curScore = scoreKeeper(groupId, cur);
+          if (curScore !== bestScore) return curScore > bestScore ? cur : best;
+          return cur.lastModifiedMs > best.lastModifiedMs ? cur : best;
+        }, group[0]);
 
       kept[groupId] = keeper.key;
       for (const g of group) {
