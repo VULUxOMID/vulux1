@@ -45,6 +45,8 @@ const R2_MUSIC_PREFIX =
   process.env.R2_MUSIC_PREFIX === undefined
     ? ''
     : normalizePrefix(String(process.env.R2_MUSIC_PREFIX));
+const MUSIC_ANALYTICS_PREFIX = `${R2_MUSIC_PREFIX}_music_analytics/`;
+const MUSIC_ANALYTICS_MAX_EVENTS_PER_DAY = 5000;
 
 let spotifyCache = { token: '', expiresAtMs: 0 };
 
@@ -93,6 +95,47 @@ function assertStorageKeyAllowed(key) {
   if (R2_MUSIC_PREFIX && !k.startsWith(R2_MUSIC_PREFIX)) {
     throw new Error('Object key is outside the configured R2_MUSIC_PREFIX');
   }
+}
+
+function isMusicAnalyticsKey(key) {
+  return String(key || '').startsWith(MUSIC_ANALYTICS_PREFIX);
+}
+
+function isLibraryObjectKey(key) {
+  return Boolean(key) && !isMusicAnalyticsKey(key);
+}
+
+async function bodyToString(body) {
+  if (!body) return '';
+  if (typeof body.transformToString === 'function') return body.transformToString();
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJsonObject(key, fallback) {
+  try {
+    const res = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    const text = await bodyToString(res.Body);
+    return text ? JSON.parse(text) : fallback;
+  } catch (err) {
+    const code = err?.name || err?.Code || err?.$metadata?.httpStatusCode;
+    if (code === 'NoSuchKey' || code === 404) return fallback;
+    return fallback;
+  }
+}
+
+async function putJsonObject(key, value) {
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      Body: JSON.stringify(value, null, 2),
+      ContentType: 'application/json',
+    }),
+  );
 }
 
 function copySourceForR2(key) {
@@ -348,6 +391,290 @@ function canonicalNormalizedObjectKey(trackMeta) {
   return slug ? `${R2_MUSIC_PREFIX}normalized/${slug}.mp3` : null;
 }
 
+function trackMetadataInput(trackMeta = {}) {
+  return {
+    title: trackMeta.name || trackMeta.title || '',
+    artist: trackMeta.artists || trackMeta.artist || '',
+    album: trackMeta.album || '',
+    spotifyId: sanitizeSpotifyTrackId(trackMeta.id) || sanitizeSpotifyTrackId(trackMeta.spotifyId),
+  };
+}
+
+function trackIdentityKey(trackMeta = {}) {
+  const t = trackMetadataInput(trackMeta);
+  return musicIdentityFromMetadata({ title: t.title, artist: t.artist });
+}
+
+function trackFromResolvedObject(key, head) {
+  const m = head?.metadata || {};
+  return {
+    title: m.title || '',
+    artist: m.artist || '',
+    album: m.album || '',
+    spotifyId: m.spotifyId || '',
+    objectKey: key,
+  };
+}
+
+async function safeHead(key) {
+  try {
+    assertStorageKeyAllowed(key);
+    return await headWithMeta(key);
+  } catch {
+    return null;
+  }
+}
+
+function scoreResolvedObject(item) {
+  let score = 0;
+  if (item.reason === 'spotifyKey') score += 1000;
+  if (item.reason === 'spotifyMetadata') score += 750;
+  if (item.reason === 'identityMetadata') score += 500;
+  if (item.hasUserMetadata) score += 200;
+  if (String(item.contentType || '').startsWith('audio/')) score += 100;
+  if (/\.mp3$/i.test(item.key)) score += 50;
+  return score;
+}
+
+async function resolveExistingMusicObject(trackMeta = {}) {
+  assertStorageConfigured();
+  const input = trackMetadataInput(trackMeta);
+  const candidates = [];
+
+  if (input.spotifyId) {
+    const canonicalKey = canonicalSpotifyObjectKey(input.spotifyId);
+    const head = canonicalKey ? await safeHead(canonicalKey) : null;
+    if (head) {
+      return {
+        found: true,
+        reason: 'spotifyKey',
+        key: canonicalKey,
+        bytes: head.contentLength ?? 0,
+        metadata: head.metadata,
+        contentType: head.contentType,
+        lastModified: head.lastModified,
+        track: trackFromResolvedObject(canonicalKey, head),
+      };
+    }
+  }
+
+  const identity = trackIdentityKey(trackMeta);
+  const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
+  await mapWithConcurrency(keys.filter(isLibraryObjectKey), 8, async (key) => {
+    try {
+      const head = await headWithMeta(key);
+      const metaSpotifyId = sanitizeSpotifyTrackId(head.metadata?.spotifyId);
+      const metaIdentity = String(head.metadata?.identityKey || '').trim() || musicIdentityFromMetadata(head.metadata);
+      let reason = '';
+      if (input.spotifyId && metaSpotifyId === input.spotifyId) reason = 'spotifyMetadata';
+      else if (identity && metaIdentity === identity) reason = 'identityMetadata';
+      if (!reason) return;
+      candidates.push({
+        reason,
+        key,
+        bytes: head.contentLength ?? 0,
+        metadata: head.metadata,
+        contentType: head.contentType,
+        lastModified: head.lastModified,
+        lastModifiedMs: head.lastModifiedMs,
+        hasUserMetadata: Boolean(head.metadata?.title || head.metadata?.artist || head.metadata?.album),
+        track: trackFromResolvedObject(key, head),
+      });
+    } catch {
+      // Ignore individual unreadable objects.
+    }
+  });
+
+  if (!candidates.length) return { found: false, reason: 'miss' };
+  candidates.sort((a, b) => {
+    const scoreDiff = scoreResolvedObject(b) - scoreResolvedObject(a);
+    if (scoreDiff) return scoreDiff;
+    return (b.lastModifiedMs || 0) - (a.lastModifiedMs || 0);
+  });
+  return { found: true, ...candidates[0] };
+}
+
+function isoDay(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
+function analyticsEventsKey(day = isoDay()) {
+  return `${MUSIC_ANALYTICS_PREFIX}events/${day}.json`;
+}
+
+function compactTrackPayload(track = {}) {
+  return {
+    title: String(track.title || track.name || '').slice(0, 200),
+    artist: String(track.artist || track.artists || '').slice(0, 200),
+    album: String(track.album || '').slice(0, 200),
+    spotifyId: sanitizeSpotifyTrackId(track.spotifyId || track.id),
+    objectKey: String(track.objectKey || '').slice(0, 512),
+  };
+}
+
+async function appendMusicEvent(input) {
+  if (!r2Client || !R2_BUCKET) return;
+  const now = new Date();
+  const key = analyticsEventsKey(isoDay(now));
+  const doc = await readJsonObject(key, { events: [] });
+  const events = Array.isArray(doc.events) ? doc.events : [];
+  events.push({
+    id: crypto.randomUUID(),
+    at: now.toISOString(),
+    type: String(input?.type || 'event'),
+    ...input,
+  });
+  const trimmed = events.slice(-MUSIC_ANALYTICS_MAX_EVENTS_PER_DAY);
+  await putJsonObject(key, { updatedAt: now.toISOString(), events: trimmed });
+}
+
+async function appendMusicEventSafe(input) {
+  try {
+    await appendMusicEvent(input);
+  } catch {
+    // Analytics should never break playback or ingest.
+  }
+}
+
+async function listAnalyticsEvents() {
+  const keys = await listAllKeysWithPrefix(`${MUSIC_ANALYTICS_PREFIX}events/`);
+  const docs = await mapWithConcurrency(keys, 8, (key) => readJsonObject(key, { events: [] }));
+  return docs.flatMap((doc) => (Array.isArray(doc.events) ? doc.events : []));
+}
+
+function startOfUtcDay(now = new Date()) {
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
+function periodStartMs(period, now = new Date()) {
+  const day = startOfUtcDay(now);
+  if (period === '24h') return now.getTime() - 24 * 60 * 60 * 1000;
+  if (period === 'today') return day;
+  if (period === 'week') return day - 6 * 24 * 60 * 60 * 1000;
+  if (period === 'month') return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  if (period === 'year') return Date.UTC(now.getUTCFullYear(), 0, 1);
+  return 0;
+}
+
+function eventTimeMs(event) {
+  return Date.parse(event?.at || '') || 0;
+}
+
+function countSince(items, period, timeFn) {
+  const start = periodStartMs(period);
+  return items.filter((item) => timeFn(item) >= start).length;
+}
+
+function bytesSince(objects, period) {
+  const start = periodStartMs(period);
+  return objects
+    .filter((o) => (Date.parse(o.lastModified || '') || 0) >= start)
+    .reduce((sum, o) => sum + (Number(o.size) || 0), 0);
+}
+
+function incrementMap(map, key, amount = 1) {
+  const k = String(key || '').trim() || 'Unknown';
+  map.set(k, (map.get(k) || 0) + amount);
+}
+
+function topMap(map, limit = 8) {
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label, value]) => ({ label, value }));
+}
+
+async function buildMusicStats() {
+  assertStorageConfigured();
+  const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
+  const objects = (
+    await mapWithConcurrency(keys, 8, async (key) => {
+      try {
+        const h = await headWithMeta(key);
+        return {
+          key,
+          size: h.contentLength ?? 0,
+          lastModified: h.lastModified,
+          metadata: h.metadata,
+          contentType: h.contentType,
+        };
+      } catch {
+        return null;
+      }
+    })
+  ).filter(Boolean);
+  const events = await listAnalyticsEvents();
+  const plays = events.filter((e) => e.type === 'play');
+  const installs = events.filter((e) => e.type === 'install');
+  const searches = events.filter((e) => e.type === 'search');
+  const reuse = events.filter((e) => e.type === 'reuse');
+  const totalBytes = objects.reduce((sum, o) => sum + (Number(o.size) || 0), 0);
+
+  const playMap = new Map();
+  const searchArtistMap = new Map();
+  const storageArtistMap = new Map();
+  const installSeriesMap = new Map();
+  const playSeriesMap = new Map();
+
+  for (const o of objects) {
+    incrementMap(storageArtistMap, o.metadata?.artist || 'Unknown', Number(o.size) || 0);
+  }
+  for (const e of plays) {
+    const label = e.title || e.track?.title || e.objectKey || 'Unknown';
+    incrementMap(playMap, label);
+    incrementMap(playSeriesMap, isoDay(new Date(eventTimeMs(e) || Date.now())));
+  }
+  for (const e of searches) {
+    for (const artist of e.artists || []) incrementMap(searchArtistMap, artist);
+  }
+  for (const e of installs) {
+    incrementMap(installSeriesMap, isoDay(new Date(eventTimeMs(e) || Date.now())));
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      tracks: objects.length,
+      totalBytes,
+      installs: {
+        today: countSince(objects, 'today', (o) => Date.parse(o.lastModified || '') || 0),
+        week: countSince(objects, 'week', (o) => Date.parse(o.lastModified || '') || 0),
+        month: countSince(objects, 'month', (o) => Date.parse(o.lastModified || '') || 0),
+        year: countSince(objects, 'year', (o) => Date.parse(o.lastModified || '') || 0),
+        allTime: objects.length,
+      },
+      installedBytes: {
+        today: bytesSince(objects, 'today'),
+        week: bytesSince(objects, 'week'),
+        month: bytesSince(objects, 'month'),
+        year: bytesSince(objects, 'year'),
+        allTime: totalBytes,
+      },
+      plays: {
+        last24h: countSince(plays, '24h', eventTimeMs),
+        week: countSince(plays, 'week', eventTimeMs),
+        month: countSince(plays, 'month', eventTimeMs),
+        year: countSince(plays, 'year', eventTimeMs),
+        allTime: plays.length,
+      },
+      searches: {
+        last24h: countSince(searches, '24h', eventTimeMs),
+        week: countSince(searches, 'week', eventTimeMs),
+        month: countSince(searches, 'month', eventTimeMs),
+        allTime: searches.length,
+      },
+      reuses: reuse.length,
+    },
+    charts: {
+      installsByDay: topMap(installSeriesMap, 30).sort((a, b) => a.label.localeCompare(b.label)),
+      playsByDay: topMap(playSeriesMap, 30).sort((a, b) => a.label.localeCompare(b.label)),
+      storageByArtist: topMap(storageArtistMap, 8),
+      topPlayedSongs: topMap(playMap, 10),
+      mostSearchedArtists: topMap(searchArtistMap, 10),
+    },
+  };
+}
+
 /**
  * One stable object per Spotify track: re-ingesting overwrites the same key.
  * Uploads without a Spotify id but with title/artist metadata use a normalized
@@ -538,7 +865,34 @@ app.get('/api/spotify/search', async (req, res) => {
     if (!r.ok) {
       return res.status(r.status).json({ error: 'Spotify search failed', detail: text.slice(0, 500) });
     }
-    res.json({ tracks: mapSpotifyTracks(JSON.parse(text)) });
+    const tracks = mapSpotifyTracks(JSON.parse(text));
+    await appendMusicEventSafe({
+      type: 'search',
+      query: q,
+      resultCount: tracks.length,
+      artists: [...new Set(tracks.flatMap((t) => String(t.artists || '').split(',').map((a) => a.trim())).filter(Boolean))].slice(0, 12),
+    });
+    res.json({ tracks });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.post('/api/music/resolve', async (req, res) => {
+  try {
+    const track = req.body?.track ?? {};
+    const resolved = await resolveExistingMusicObject(track);
+    if (!resolved.found) return res.json({ found: false });
+    res.json({
+      found: true,
+      reused: true,
+      reason: resolved.reason,
+      objectKey: resolved.key,
+      bytes: resolved.bytes,
+      publicUrl: publicUrlForKey(resolved.key),
+      playbackUrl: await createPlaybackUrl(resolved.key),
+      track: resolved.track,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
@@ -556,15 +910,64 @@ app.post('/api/music/ingest', async (req, res) => {
 
   try {
     const youtubeQuery = queryOverride || buildYoutubeSearchQuery(track);
+    if (wantPlaybackUrl && !queryOverride) {
+      const resolved = await resolveExistingMusicObject(track || { name: title });
+      if (resolved.found) {
+        const playbackUrl = await createPlaybackUrl(resolved.key);
+        await appendMusicEventSafe({
+          type: 'reuse',
+          reason: resolved.reason,
+          objectKey: resolved.key,
+          bytes: resolved.bytes,
+          ...compactTrackPayload({ ...(resolved.track || {}), ...(track || {}) }),
+        });
+        await appendMusicEventSafe({
+          type: 'play',
+          reused: true,
+          objectKey: resolved.key,
+          bytes: resolved.bytes,
+          ...compactTrackPayload({ ...(resolved.track || {}), ...(track || {}) }),
+        });
+        return res.json({
+          ok: true,
+          reused: true,
+          reuseReason: resolved.reason,
+          objectKey: resolved.key,
+          bytes: resolved.bytes,
+          publicUrl: publicUrlForKey(resolved.key),
+          playbackUrl,
+          track: resolved.track,
+          youtubeQuery,
+        });
+      }
+    }
+
     const payload = await downloadAndUploadAudio({
       sourceSpec: `ytsearch1:${youtubeQuery}`,
       trackMeta: track || { name: title },
       wantPlaybackUrl,
       sourceKind: 'query',
     });
+    await appendMusicEventSafe({
+      type: 'install',
+      objectKey: payload.objectKey,
+      bytes: payload.bytes,
+      source: 'spotify-search',
+      ...compactTrackPayload({ ...(track || {}), objectKey: payload.objectKey }),
+    });
+    if (wantPlaybackUrl) {
+      await appendMusicEventSafe({
+        type: 'play',
+        reused: false,
+        objectKey: payload.objectKey,
+        bytes: payload.bytes,
+        ...compactTrackPayload({ ...(track || {}), objectKey: payload.objectKey }),
+      });
+    }
 
     res.json({
       ...payload,
+      reused: false,
       youtubeQuery,
     });
   } catch (e) {
@@ -584,6 +987,13 @@ app.post('/api/youtube/upload', async (req, res) => {
       trackMeta: req.body?.track ?? {},
       wantPlaybackUrl: Boolean(req.body?.wantPlaybackUrl),
       sourceKind: 'url',
+    });
+    await appendMusicEventSafe({
+      type: 'install',
+      objectKey: payload.objectKey,
+      bytes: payload.bytes,
+      source: 'youtube-url',
+      ...compactTrackPayload({ ...(req.body?.track || {}), objectKey: payload.objectKey }),
     });
     res.json({
       ...payload,
@@ -611,7 +1021,7 @@ app.get('/api/storage/music', async (req, res) => {
       }),
     );
 
-    const contents = list.Contents || [];
+    const contents = (list.Contents || []).filter((obj) => isLibraryObjectKey(obj.Key));
     const objects = await mapWithConcurrency(contents, 8, async (obj) => {
       const key = obj.Key;
       if (!key) return null;
@@ -656,6 +1066,16 @@ app.get('/api/storage/music/presign', async (req, res) => {
 
     const expiresIn = Math.min(86_400, Math.max(60, Number(req.query.expiresIn) || 3600));
     const url = await createPlaybackUrl(key, expiresIn);
+    if (String(req.query.event || '') === 'play') {
+      const head = await safeHead(key);
+      await appendMusicEventSafe({
+        type: 'play',
+        reused: true,
+        objectKey: key,
+        bytes: head?.contentLength ?? 0,
+        ...compactTrackPayload({ ...(head?.metadata || {}), objectKey: key }),
+      });
+    }
     res.json({ url, expiresIn });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
@@ -668,6 +1088,7 @@ app.post('/api/storage/music/delete', async (req, res) => {
     const key = String(req.body?.key ?? '').trim();
     assertStorageKeyAllowed(key);
     await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    await appendMusicEventSafe({ type: 'delete', objectKey: key });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
@@ -792,7 +1213,7 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
     assertStorageConfigured();
     const dryRun = Boolean(req.body?.dryRun);
 
-    const keys = await listAllKeysWithPrefix(R2_MUSIC_PREFIX);
+    const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
     const items = (
       await mapWithConcurrency(keys, 8, async (key) => {
         try {
@@ -880,6 +1301,14 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
           .map(([id, key]) => [id.slice('spotify:'.length), key]),
       ),
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.get('/api/music/stats', async (_req, res) => {
+  try {
+    res.json(await buildMusicStats());
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
