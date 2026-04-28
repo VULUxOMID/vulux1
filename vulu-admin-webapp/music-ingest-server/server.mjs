@@ -131,6 +131,8 @@ async function headWithMeta(key) {
       spotifyId: m.spotifyid || m.spotifyId || '',
       youtubeQuery: m.youtubequery || m.youtubeQuery || '',
       source: m.source || '',
+      identityKey: m.identitykey || m.identityKey || '',
+      contentSha256: m.contentsha256 || m.contentSha256 || '',
     },
     lastModified: lm?.toISOString?.() || null,
     lastModifiedMs: lm ? lm.getTime() : 0,
@@ -268,9 +270,83 @@ function spotifyIdFromObjectKey(objectKey) {
   return m ? m[1] : '';
 }
 
+const MUSIC_IDENTITY_STOP_WORDS = new Set([
+  'audio',
+  'clip',
+  'download',
+  'extended',
+  'full',
+  'hd',
+  'hq',
+  'lyrics',
+  'lyric',
+  'music',
+  'official',
+  'original',
+  'remaster',
+  'remastered',
+  'search',
+  'video',
+  'visualizer',
+]);
+
+function musicIdentityTokens(value) {
+  return String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/^[0-9]{10,}_/, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((t) => t.trim())
+    .filter((t) => {
+      if (!t || t.length <= 1) return false;
+      if (/^[0-9]+$/.test(t)) return false;
+      if (/^[a-f0-9]{7,}$/i.test(t)) return false;
+      return !MUSIC_IDENTITY_STOP_WORDS.has(t);
+    });
+}
+
+function musicIdentityFromParts(parts) {
+  const tokens = [...new Set(parts.flatMap((p) => musicIdentityTokens(p)))].sort();
+  if (tokens.length < 2) return '';
+  return `tokens:${tokens.join('|')}`;
+}
+
+function musicIdentityFromMetadata(metadata) {
+  const title = metadata?.title || metadata?.name || '';
+  const artist = metadata?.artist || metadata?.artists || '';
+  return musicIdentityFromParts([artist, title]);
+}
+
+function musicIdentityFromObjectKey(objectKey) {
+  const k = String(objectKey ?? '');
+  const prefix = R2_MUSIC_PREFIX;
+  const rel = prefix && k.startsWith(prefix) ? k.slice(prefix.length) : k;
+  const file = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel;
+  return musicIdentityFromParts([file]);
+}
+
+function musicIdentityGroupId(objectKey, metadata) {
+  const stored = String(metadata?.identityKey || '').trim();
+  if (stored) return stored;
+  return musicIdentityFromMetadata(metadata) || musicIdentityFromObjectKey(objectKey);
+}
+
+function canonicalNormalizedObjectKey(trackMeta) {
+  const identity = musicIdentityFromMetadata({
+    title: trackMeta?.name || trackMeta?.title || '',
+    artist: trackMeta?.artists || trackMeta?.artist || '',
+  });
+  if (!identity) return null;
+  const slug = slugPart(identity.replace(/^tokens:/, '').replace(/\|/g, '_')).slice(0, 120);
+  return slug ? `${R2_MUSIC_PREFIX}normalized/${slug}.mp3` : null;
+}
+
 /**
  * One stable object per Spotify track: re-ingesting overwrites the same key.
- * Uploads without a Spotify id (manual URL only) still use a unique random key.
+ * Uploads without a Spotify id but with title/artist metadata use a normalized
+ * title+artist key. Metadata-free manual URL uploads remain unique.
  */
 function buildObjectKey(trackMeta, fallbackSeed) {
   const prefix = R2_MUSIC_PREFIX;
@@ -279,6 +355,9 @@ function buildObjectKey(trackMeta, fallbackSeed) {
   if (sid) {
     return `${prefix}spotify/${sid}.mp3`;
   }
+
+  const normalizedKey = canonicalNormalizedObjectKey(trackMeta);
+  if (normalizedKey) return normalizedKey;
 
   const title = slugPart(trackMeta?.name ?? trackMeta?.title ?? '');
   const artist = slugPart(trackMeta?.artists ?? trackMeta?.artist ?? '');
@@ -377,6 +456,7 @@ async function downloadAndUploadAudio({ sourceSpec, trackMeta = {}, wantPlayback
     const filePath = await locateDownloadedMp3(workDir);
     const buf = await fs.readFile(filePath);
     const bytes = buf.length;
+    const contentSha256 = crypto.createHash('sha256').update(buf).digest('hex');
 
     const fallbackSeed = sourceKind === 'url' ? parseYoutubeVideoId(sourceSpec) || 'youtube' : 'search';
     const objectKey = buildObjectKey(trackMeta, fallbackSeed);
@@ -387,6 +467,12 @@ async function downloadAndUploadAudio({ sourceSpec, trackMeta = {}, wantPlayback
       spotifyId: trackMeta.id || '',
       youtubeQuery: sourceKind === 'query' ? sourceSpec.replace(/^ytsearch1:/, '') : '',
       source: sourceKind,
+      identityKey:
+        musicIdentityFromMetadata({
+          title: trackMeta.name || trackMeta.title || '',
+          artist: trackMeta.artists || trackMeta.artist || '',
+        }) || musicIdentityFromObjectKey(objectKey),
+      contentSha256,
     });
 
     await r2Client.send(
@@ -598,6 +684,8 @@ app.put('/api/storage/music/metadata', async (req, res) => {
       spotifyId: previous.spotifyid || previous.spotifyId || '',
       youtubeQuery: previous.youtubequery || previous.youtubeQuery || '',
       source: previous.source || '',
+      identityKey: musicIdentityFromMetadata({ title, artist }) || previous.identitykey || previous.identityKey || '',
+      contentSha256: previous.contentsha256 || previous.contentSha256 || '',
     });
 
     await r2Client.send(
@@ -639,16 +727,31 @@ async function listAllKeysWithPrefix(prefix) {
   return keys;
 }
 
-function spotifyDedupeGroupId(key, metadata) {
+function musicDedupeGroupId(key, metadata) {
   const fromMeta = sanitizeSpotifyTrackId(metadata?.spotifyId);
-  if (fromMeta) return fromMeta;
-  return sanitizeSpotifyTrackId(spotifyIdFromObjectKey(key));
+  if (fromMeta) return `spotify:${fromMeta}`;
+  const fromKey = sanitizeSpotifyTrackId(spotifyIdFromObjectKey(key));
+  if (fromKey) return `spotify:${fromKey}`;
+  const identity = musicIdentityGroupId(key, metadata);
+  if (identity) return `identity:${identity}`;
+  const hash = String(metadata?.contentSha256 || '').trim();
+  return /^[a-f0-9]{64}$/i.test(hash) ? `sha256:${hash.toLowerCase()}` : '';
+}
+
+function canonicalObjectKeyForDedupeGroup(groupId) {
+  const s = String(groupId || '');
+  if (s.startsWith('spotify:')) return canonicalSpotifyObjectKey(s.slice('spotify:'.length));
+  if (s.startsWith('identity:tokens:')) {
+    const slug = slugPart(s.slice('identity:tokens:'.length).replace(/\|/g, '_')).slice(0, 120);
+    return slug ? `${R2_MUSIC_PREFIX}normalized/${slug}.mp3` : null;
+  }
+  return null;
 }
 
 /**
- * Deletes extra R2 objects that represent the same Spotify track (same id in metadata
- * or canonical spotify/{id}.mp3 path). Keeps the canonical key when present, otherwise
- * the newest LastModified.
+ * Deletes extra R2 objects that represent the same track. We prefer strong IDs
+ * (Spotify ID), then normalized artist/title/filename tokens, then exact content
+ * hashes. Keeps the canonical key when present, otherwise the newest LastModified.
  */
 app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
   try {
@@ -660,7 +763,7 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
       await mapWithConcurrency(keys, 8, async (key) => {
         try {
           const h = await headWithMeta(key);
-          const groupId = spotifyDedupeGroupId(key, h.metadata);
+          const groupId = musicDedupeGroupId(key, h.metadata);
           if (!groupId) return null;
           return {
             key,
@@ -685,7 +788,7 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
     for (const [groupId, group] of grouped.entries()) {
       if (group.length < 2) continue;
 
-      const canonicalKey = canonicalSpotifyObjectKey(groupId);
+      const canonicalKey = canonicalObjectKeyForDedupeGroup(groupId);
       const canonicalHit = canonicalKey && group.find((g) => g.key === canonicalKey);
       const keeper =
         canonicalHit ||
@@ -707,10 +810,18 @@ app.post('/api/storage/music/prune-spotify-duplicates', async (req, res) => {
       ok: true,
       dryRun,
       keysScanned: keys.length,
-      spotifyIdsWithDuplicates: [...grouped.values()].filter((g) => g.length >= 2).length,
+      spotifyIdsWithDuplicates: [...grouped.entries()].filter(
+        ([id, g]) => id.startsWith('spotify:') && g.length >= 2,
+      ).length,
+      identityGroupsWithDuplicates: [...grouped.values()].filter((g) => g.length >= 2).length,
       removed: toDelete.length,
       deletedKeys: toDelete,
-      keptKeysBySpotifyId: kept,
+      keptKeysByGroupId: kept,
+      keptKeysBySpotifyId: Object.fromEntries(
+        Object.entries(kept)
+          .filter(([id]) => id.startsWith('spotify:'))
+          .map(([id, key]) => [id.slice('spotify:'.length), key]),
+      ),
     });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
