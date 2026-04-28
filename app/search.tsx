@@ -197,6 +197,33 @@ export default function SearchScreen() {
   const handleItemPress = (item: SearchItem) => {
     hapticTap();
 
+    // In add-friends mode, always open the profile modal instead of navigating
+    // away (e.g. into a live stream or chat).
+    if (addFriendsMode && (item.userId || (item.type === 'Live' && item.liveId))) {
+      const resolvedUserId =
+        item.userId ??
+        (item.type === 'Live' && item.liveId
+          ? searchIndex.lives.find((l) => l.id === item.liveId)?.hosts?.[0]?.id
+          : undefined);
+
+      if (resolvedUserId) {
+        const socialUser = searchIndex.users.find((user) => user.id === resolvedUserId);
+        const friend = friends.find((friendItem) => friendItem.id === resolvedUserId);
+        const profileUser: LiveUser = {
+          id: resolvedUserId,
+          name: friend?.name ?? socialUser?.username ?? item.title,
+          username: friend?.username ?? socialUser?.username ?? item.title.toLowerCase().replace(/\s+/g, ''),
+          age: 0,
+          country: '',
+          bio: socialUser?.statusText ?? friend?.statusText ?? '',
+          avatarUrl: friend?.avatarUrl ?? friend?.imageUrl ?? socialUser?.avatarUrl ?? item.imageUrl ?? '',
+          verified: false,
+        };
+        showProfile(profileUser);
+        return;
+      }
+    }
+
     if (item.type === 'Live' && item.liveId) {
       const live = searchIndex.lives.find((candidate) => candidate.id === item.liveId);
       if (live) {
@@ -209,23 +236,6 @@ export default function SearchScreen() {
           params: { id: live.id },
         });
       }
-      return;
-    }
-
-    if (addFriendsMode && item.userId && (item.type === 'People' || item.type === 'Friends')) {
-      const socialUser = searchIndex.users.find((user) => user.id === item.userId);
-      const friend = friends.find((friendItem) => friendItem.id === item.userId);
-      const profileUser: LiveUser = {
-        id: item.userId,
-        name: friend?.name ?? socialUser?.username ?? item.title,
-        username: friend?.username ?? socialUser?.username ?? item.title.toLowerCase().replace(/\s+/g, ''),
-        age: 0,
-        country: '',
-        bio: socialUser?.statusText ?? friend?.statusText ?? '',
-        avatarUrl: friend?.avatarUrl ?? friend?.imageUrl ?? socialUser?.avatarUrl ?? '',
-        verified: false,
-      };
-      showProfile(profileUser);
       return;
     }
 

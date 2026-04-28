@@ -3,6 +3,7 @@ import { LiveUser, UserRole } from '../features/liveroom/types';
 
 interface ProfileContextType {
   selectedUser: LiveUser | null;
+  selectedUserOpenedAtMs: number | null;
   showProfile: (user: LiveUser) => void;
   hideProfile: () => void;
   isPremiumUser: boolean;
@@ -11,19 +12,39 @@ interface ProfileContextType {
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
-  const [selectedUser, setSelectedUser] = useState<LiveUser | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<{
+    user: LiveUser | null;
+    openedAtMs: number | null;
+  }>({
+    user: null,
+    openedAtMs: null,
+  });
   const [isPremiumUser] = useState(true); // Set to true for testing
 
   const showProfile = (user: LiveUser) => {
-    setSelectedUser(user);
+    setSelectedProfile({
+      user,
+      openedAtMs: Date.now(),
+    });
   };
 
   const hideProfile = () => {
-    setSelectedUser(null);
+    setSelectedProfile({
+      user: null,
+      openedAtMs: null,
+    });
   };
 
   return (
-    <ProfileContext.Provider value={{ selectedUser, showProfile, hideProfile, isPremiumUser }}>
+    <ProfileContext.Provider
+      value={{
+        selectedUser: selectedProfile.user,
+        selectedUserOpenedAtMs: selectedProfile.openedAtMs,
+        showProfile,
+        hideProfile,
+        isPremiumUser,
+      }}
+    >
       {children}
     </ProfileContext.Provider>
   );
@@ -38,6 +59,7 @@ export function useProfile() {
     // Return safe default values instead of throwing
     return {
       selectedUser: null,
+      selectedUserOpenedAtMs: null,
       showProfile: () => {
         if (__DEV__) {
           console.warn('showProfile called outside ProfileProvider');
