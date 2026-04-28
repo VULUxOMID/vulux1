@@ -490,10 +490,13 @@ async function downloadAndUploadAudio({ sourceSpec, trackMeta = {}, wantPlayback
       }),
     );
 
+    const dedupedKeys = await pruneDuplicatesForKeeper(objectKey, metadata).catch(() => []);
+
     return {
       ok: true,
       objectKey,
       bytes,
+      dedupedKeys,
       publicUrl: publicUrlForKey(objectKey),
       playbackUrl: wantPlaybackUrl ? await createPlaybackUrl(objectKey) : null,
       track: {
@@ -753,6 +756,30 @@ function canonicalObjectKeyForDedupeGroup(groupId) {
     return slug ? `${R2_MUSIC_PREFIX}normalized/${slug}.mp3` : null;
   }
   return null;
+}
+
+async function pruneDuplicatesForKeeper(keeperKey, keeperMetadata) {
+  const keeperGroupIds = new Set(musicDedupeGroupIds(keeperKey, keeperMetadata));
+  if (!keeperGroupIds.size) return [];
+
+  const keys = await listAllKeysWithPrefix(R2_MUSIC_PREFIX);
+  const toDelete = [];
+
+  await mapWithConcurrency(keys, 8, async (key) => {
+    if (!key || key === keeperKey) return;
+    try {
+      const h = await headWithMeta(key);
+      const overlaps = musicDedupeGroupIds(key, h.metadata).some((id) => keeperGroupIds.has(id));
+      if (overlaps) toDelete.push(key);
+    } catch {
+      // Ignore unreadable objects; the explicit prune endpoint can report broader failures.
+    }
+  });
+
+  for (const delKey of toDelete) {
+    await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: delKey }));
+  }
+  return toDelete;
 }
 
 /**
