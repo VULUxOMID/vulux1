@@ -15,12 +15,15 @@ import { createQaGuestAuthHelper } from "./qaGuestAuth.js";
 import {
   createCashTransfer,
   createWithdrawal,
+  handleLiveMutation,
   handleMutation,
   handleWalletMutation,
   isRailwayDataConfigured,
   listCashTransfers,
   listWithdrawals,
   loadSnapshot,
+  readAccountState,
+  writeAccountState,
 } from "./railwayData.js";
 import { createRtcServer } from "./rtc.js";
 
@@ -333,6 +336,29 @@ async function handleRailwayApiRequest(req, res, url) {
     return true;
   }
 
+  if (req.method === "GET" && pathname === "/api/account/state") {
+    const viewerUserId = await requireViewerUserId(req);
+    const state = await readAccountState(viewerUserId);
+    sendJson(res, 200, {
+      state,
+      source: "railway",
+      durable: isRailwayDataConfigured(),
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/account/state") {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    const result = await writeAccountState(viewerUserId, body);
+    sendJson(res, 200, {
+      source: "railway",
+      viewerUserId,
+      ...result,
+    });
+    return true;
+  }
+
   if (
     req.method === "GET" &&
     (pathname === "/api/social/snapshot" ||
@@ -418,6 +444,18 @@ async function handleRailwayApiRequest(req, res, url) {
     const viewerUserId = await requireViewerUserId(req);
     const body = await readJsonBody(req);
     const result = await handleWalletMutation(viewerUserId, body);
+    sendJson(res, 200, {
+      source: "railway",
+      viewerUserId,
+      ...result,
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname.startsWith("/api/live/")) {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    const result = await handleLiveMutation(pathname, viewerUserId, body);
     sendJson(res, 200, {
       source: "railway",
       viewerUserId,

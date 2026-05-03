@@ -10,6 +10,21 @@ function toObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function parseJsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return toObject(parsed);
+  } catch {
+    return {};
+  }
+}
+
 function normalizeString(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -102,7 +117,8 @@ function conversationRowToItem(row) {
 }
 
 function messageRowToItem(row) {
-  const body = toObject(row.body);
+  const rawBody = toObject(row.body);
+  const body = Object.keys(parseJsonObject(rawBody.item)).length > 0 ? parseJsonObject(rawBody.item) : rawBody;
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -111,6 +127,7 @@ function messageRowToItem(row) {
     targetUserId: row.target_user_id,
     roomId: row.room_id,
     createdAt: new Date(row.created_at).getTime(),
+    deleted: rawBody.deleted === true,
     ...body,
   };
 }
@@ -158,6 +175,7 @@ export async function loadSnapshot(viewerUserId) {
     media,
     conversations,
     messages,
+    globalMessages,
     lives,
     presence,
     wallet,
@@ -181,6 +199,11 @@ export async function loadSnapshot(viewerUserId) {
        ORDER BY m.created_at DESC LIMIT 1000`,
       [viewerUserId],
     ),
+    query(
+      `SELECT * FROM messages
+       WHERE room_id IS NOT NULL AND target_user_id IS NULL
+       ORDER BY created_at DESC LIMIT 500`,
+    ),
     query("SELECT * FROM live_rooms WHERE status != 'ended' ORDER BY updated_at DESC LIMIT 100"),
     query("SELECT * FROM live_presence ORDER BY updated_at DESC LIMIT 500"),
     readWalletAccount(viewerUserId),
@@ -189,6 +212,7 @@ export async function loadSnapshot(viewerUserId) {
   const socialUsers = users.rows.map(userRowToSocialUser);
   const mediaItems = media.rows.map(mediaRowToItem);
   const messageItems = messages.rows.map(messageRowToItem);
+  const globalMessageItems = globalMessages.rows.map(messageRowToItem).filter((item) => item.deleted !== true);
   const threadSeedMessagesByUserId = {};
   for (const message of messageItems) {
     const otherUserId =
@@ -217,20 +241,102 @@ export async function loadSnapshot(viewerUserId) {
       row.requester_user_id === viewerUserId ? row.addressee_user_id : row.requester_user_id,
     ),
     notifications: notifications.rows.map(notificationRowToItem),
+    leaderboardItems: [],
     videos: mediaItems.filter((item) => item.mediaType === "video"),
     tracks: mediaItems.filter((item) => item.mediaType === "music" || item.mediaType === "audio"),
     playlists: [],
     artists: [],
     conversations: conversations.rows.map(conversationRowToItem),
+    globalMessages: globalMessageItems,
+    mentionUsers: socialUsers,
     threadSeedMessagesByUserId,
     wallet,
     searchIndex: {
       users: socialUsers,
       conversations: conversations.rows.map(conversationRowToItem),
+      lives: lives.rows.map(liveRowToItem),
       videos: mediaItems.filter((item) => item.mediaType === "video"),
       tracks: mediaItems.filter((item) => item.mediaType === "music" || item.mediaType === "audio"),
     },
   };
+}
+
+export async function readAccountState(viewerUserId) {
+  if (!isRailwayDataConfigured()) {
+    return null;
+  }
+  await ensureUser(viewerUserId);
+  const [{ rows: userRows }, wallet] = await Promise.all([
+    query("SELECT * FROM app_users WHERE auth_user_id = $1", [viewerUserId]),
+    readWalletAccount(viewerUserId),
+  ]);
+  const user = userRows[0] ?? {};
+  const profile = toObject(user.profile);
+  return {
+    account: {
+      authUserId: viewerUserId,
+      email: user.email ?? profile.email ?? profile.emailAddress ?? null,
+      username: user.username ?? profile.username ?? null,
+      displayName: user.display_name ?? profile.displayName ?? profile.name ?? null,
+      avatarUrl: user.avatar_url ?? profile.avatarUrl ?? profile.imageUrl ?? null,
+    },
+    profile,
+    onboarding: toObject(user.onboarding),
+    wallet,
+  };
+}
+
+export async function writeAccountState(viewerUserId, updates) {
+  if (!isRailwayDataConfigured()) {
+    return { ok: true, durable: false };
+  }
+  const patch = toObject(updates.updates ?? updates);
+  const account = toObject(patch.account);
+  const profile = toObject(patch.profile ?? patch.userProfile);
+  const onboarding = toObject(patch.onboarding);
+  const wallet = toObject(patch.wallet);
+
+  await ensureUser(viewerUserId, {
+    email: account.email,
+    username: account.username,
+    displayName: account.displayName ?? account.name,
+    avatarUrl: account.avatarUrl,
+    profile: {
+      ...profile,
+      ...(Object.keys(account).length > 0 ? { account } : {}),
+    },
+  });
+
+  if (Object.keys(onboarding).length > 0) {
+    await query(
+      `UPDATE app_users
+       SET onboarding = onboarding || $2::jsonb, updated_at = NOW()
+       WHERE auth_user_id = $1`,
+      [viewerUserId, JSON.stringify(onboarding)],
+    );
+  }
+
+  if (Object.keys(wallet).length > 0) {
+    await query(
+      `INSERT INTO wallet_accounts (user_id, gems, cash, fuel, payload)
+       VALUES ($1, COALESCE($2, 0), COALESCE($3, 0), COALESCE($4, 0), $5::jsonb)
+       ON CONFLICT (user_id) DO UPDATE SET
+         gems = COALESCE($2, wallet_accounts.gems),
+         cash = COALESCE($3, wallet_accounts.cash),
+         fuel = COALESCE($4, wallet_accounts.fuel),
+         payload = wallet_accounts.payload || EXCLUDED.payload,
+         updated_at = NOW()`,
+      [
+        viewerUserId,
+        Number.isFinite(Number(wallet.gems)) ? Math.max(0, Math.floor(Number(wallet.gems))) : null,
+        Number.isFinite(Number(wallet.cash)) ? Math.max(0, Math.floor(Number(wallet.cash))) : null,
+        Number.isFinite(Number(wallet.fuel)) ? Math.max(0, Math.floor(Number(wallet.fuel))) : null,
+        JSON.stringify(wallet),
+      ],
+    );
+  }
+
+  return { ok: true, durable: true, state: await readAccountState(viewerUserId) };
 }
 
 export function emptySnapshot() {
@@ -242,11 +348,14 @@ export function emptySnapshot() {
     socialUsers: [],
     acceptedFriendIds: [],
     notifications: [],
+    leaderboardItems: [],
     videos: [],
     tracks: [],
     playlists: [],
     artists: [],
     conversations: [],
+    globalMessages: [],
+    mentionUsers: [],
     threadSeedMessagesByUserId: {},
     wallet: null,
     searchIndex: {
@@ -272,11 +381,18 @@ async function upsertConversationMessage(viewerUserId, body) {
   const targetUserId = normalizeString(body.toUserId ?? body.targetUserId ?? body.recipientId, null);
   const conversationId = normalizeString(
     body.conversationKey ?? body.conversationId,
-    targetUserId ? [viewerUserId, targetUserId].sort().join(":") : normalizeString(body.roomId, "global"),
+    targetUserId
+      ? [viewerUserId, targetUserId].sort().join(":")
+      : `room:${normalizeString(body.roomId, "global")}`,
   );
   const messageId = normalizeString(body.messageId ?? body.id, makeId("message"));
+  const roomId = normalizeString(body.roomId, null);
   const participantIds = targetUserId ? [viewerUserId, targetUserId].sort() : [viewerUserId];
-  const message = toObject(body.message ?? body);
+  const parsedItem = parseJsonObject(body.item);
+  const message =
+    Object.keys(parsedItem).length > 0
+      ? { ...parsedItem, item: body.item }
+      : toObject(body.message ?? body);
 
   await withTransaction(async (client) => {
     await client.query(
@@ -293,7 +409,7 @@ async function upsertConversationMessage(viewerUserId, body) {
       `INSERT INTO messages (id, conversation_id, sender_user_id, target_user_id, room_id, body, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
        ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, updated_at = NOW()`,
-      [messageId, conversationId, viewerUserId, targetUserId, body.roomId ?? null, JSON.stringify(message)],
+      [messageId, conversationId, viewerUserId, targetUserId, roomId, JSON.stringify(message)],
     );
   });
 }
@@ -348,6 +464,26 @@ export async function handleMutation(pathname, method, viewerUserId, body) {
     return { ok: true, durable: true };
   }
   if (pathname.startsWith("/api/messages/")) {
+    if (pathname.endsWith("/global/edit")) {
+      const messageId = normalizeString(body.messageId ?? body.id, null);
+      if (messageId) {
+        await query(
+          "UPDATE messages SET body = body || $2::jsonb, updated_at = NOW() WHERE id = $1",
+          [messageId, JSON.stringify({ text: body.text })],
+        );
+      }
+      return { ok: true, durable: true };
+    }
+    if (pathname.endsWith("/global/delete")) {
+      const messageId = normalizeString(body.messageId ?? body.id, null);
+      if (messageId) {
+        await query(
+          "UPDATE messages SET body = body || $2::jsonb, updated_at = NOW() WHERE id = $1",
+          [messageId, JSON.stringify({ deleted: true })],
+        );
+      }
+      return { ok: true, durable: true };
+    }
     if (pathname.endsWith("/read")) {
       const conversationId = normalizeString(body.conversationKey ?? body.conversationId, null);
       if (conversationId) {
@@ -376,6 +512,121 @@ export async function handleMutation(pathname, method, viewerUserId, body) {
   }
 
   return { ok: true, durable: false };
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function handleLiveMutation(pathname, viewerUserId, body) {
+  if (!isRailwayDataConfigured()) {
+    return { ok: true, durable: false };
+  }
+  await ensureUser(viewerUserId);
+
+  const liveId = normalizeString(body.liveId, null);
+  const operation = pathname.split("/").filter(Boolean).at(-1) ?? "mutate";
+  if (!liveId && operation !== "set-presence") {
+    throw Object.assign(new Error("liveId is required."), { statusCode: 400, code: "invalid_input" });
+  }
+
+  if (operation === "start" || operation === "start-live") {
+    const hostUserId = normalizeString(body.ownerUserId ?? body.hostUserId, viewerUserId);
+    const payload = {
+      ...toObject(body),
+      hosts: parseJsonArray(body.hosts),
+      bannedUserIds: parseJsonArray(body.bannedUserIds),
+    };
+    await withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO live_rooms (id, host_user_id, status, payload, started_at, updated_at)
+         VALUES ($1, $2, 'live', $3::jsonb, NOW(), NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           host_user_id = EXCLUDED.host_user_id,
+           status = 'live',
+           payload = live_rooms.payload || EXCLUDED.payload,
+           started_at = COALESCE(live_rooms.started_at, NOW()),
+           ended_at = NULL,
+           updated_at = NOW()`,
+        [liveId, hostUserId, JSON.stringify(payload)],
+      );
+      await client.query(
+        `INSERT INTO live_presence (room_id, user_id, role, payload, updated_at)
+         VALUES ($1, $2, 'host', $3::jsonb, NOW())
+         ON CONFLICT (room_id, user_id) DO UPDATE SET
+           role = 'host',
+           payload = live_presence.payload || EXCLUDED.payload,
+           updated_at = NOW()`,
+        [liveId, hostUserId, JSON.stringify({ activity: "hosting" })],
+      );
+    });
+    return { ok: true, durable: true, liveId };
+  }
+
+  if (operation === "update" || operation === "update-live") {
+    await query(
+      `UPDATE live_rooms
+       SET payload = payload || $2::jsonb, updated_at = NOW()
+       WHERE id = $1`,
+      [liveId, JSON.stringify(toObject(body))],
+    );
+    return { ok: true, durable: true, liveId };
+  }
+
+  if (operation === "end" || operation === "end-live") {
+    await query(
+      `UPDATE live_rooms
+       SET status = 'ended', ended_at = NOW(), updated_at = NOW()
+       WHERE id = $1`,
+      [liveId],
+    );
+    await query("DELETE FROM live_presence WHERE room_id = $1", [liveId]);
+    return { ok: true, durable: true, liveId };
+  }
+
+  if (operation === "presence" || operation === "set-presence") {
+    const userId = normalizeString(body.userId, viewerUserId);
+    const activity = normalizeString(body.activity, "none");
+    const roomId = liveId ?? normalizeString(body.roomId, null);
+    if (!roomId || activity === "none") {
+      await query("DELETE FROM live_presence WHERE user_id = $1", [userId]);
+      return { ok: true, durable: true, liveId: roomId };
+    }
+    await query(
+      `INSERT INTO live_presence (room_id, user_id, role, payload, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, NOW())
+       ON CONFLICT (room_id, user_id) DO UPDATE SET
+         role = EXCLUDED.role,
+         payload = live_presence.payload || EXCLUDED.payload,
+         updated_at = NOW()`,
+      [
+        roomId,
+        userId,
+        activity === "hosting" ? "host" : "viewer",
+        JSON.stringify(toObject(body)),
+      ],
+    );
+    return { ok: true, durable: true, liveId: roomId };
+  }
+
+  if (operation === "ban" || operation === "unban" || operation === "boost" || operation === "tick") {
+    await query(
+      `UPDATE live_rooms
+       SET payload = payload || $2::jsonb, updated_at = NOW()
+       WHERE id = $1`,
+      [liveId, JSON.stringify({ [`last${operation[0].toUpperCase()}${operation.slice(1)}`]: body })],
+    );
+    return { ok: true, durable: true, liveId };
+  }
+
+  return { ok: true, durable: false, liveId };
 }
 
 export async function handleWalletMutation(viewerUserId, body) {

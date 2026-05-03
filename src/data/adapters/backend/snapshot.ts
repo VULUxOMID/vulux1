@@ -283,6 +283,8 @@ export async function loadBackendMessagesSnapshot(
     const payload = getSnapshotPayload(rawPayload);
     return {
       conversations: safeArray<ListConversationsResponse[number]>(payload.conversations),
+      globalMessages: safeArray<ListGlobalMessagesResponse[number]>(payload.globalMessages),
+      mentionUsers: safeArray<ListMentionUsersResponse[number]>(payload.mentionUsers),
       threadSeedMessagesByUserId: parseThreadSeedMessagesByUserId(
         payload.threadSeedMessagesByUserId,
       ),

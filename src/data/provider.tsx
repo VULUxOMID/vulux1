@@ -16,6 +16,11 @@ import { upsertAccountState } from './adapters/backend/accountState';
 import { subscribeBackendRefresh } from './adapters/backend/refreshBus';
 import { getBackendTokenTemplate } from '../config/backendToken';
 import { getBackendToken } from '../utils/backendToken';
+import {
+  connectRailway,
+  disconnectRailway,
+  setRailwayAuthSnapshot,
+} from '../lib/railwayRuntime';
 
 const DataContext = createContext<Repositories | undefined>(undefined);
 
@@ -174,6 +179,61 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }, [applyRepositories]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    if (!isAuthLoaded) {
+      setRailwayAuthSnapshot({
+        isLoaded: false,
+        isSignedIn: false,
+        userId: null,
+        token: null,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isSignedIn || !userId) {
+      setRailwayAuthSnapshot({
+        isLoaded: true,
+        isSignedIn: false,
+        userId: null,
+        token: null,
+      });
+      disconnectRailway();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      const token = await getBackendToken(
+        getToken,
+        getBackendTokenTemplate(),
+      );
+      if (cancelled) return;
+
+      setRailwayAuthSnapshot({
+        isLoaded: true,
+        isSignedIn: Boolean(token),
+        userId,
+        token,
+      });
+      if (token) {
+        backendClientRef.current?.setAuth(token);
+        connectRailway();
+      } else {
+        backendClientRef.current?.clearAuth();
+        disconnectRailway();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isAuthLoaded, isSignedIn, userId]);
+
+  useEffect(() => {
     if (!isAuthLoaded || !isUserLoaded || !isSignedIn || !userId) {
       if (!isSignedIn) {
         lastSyncedAccountFingerprintRef.current = null;
@@ -283,7 +343,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         !QA_DISABLE_BACKEND_SNAPSHOTS &&
         (event?.forceFull === true ||
           scopes.some(
-            (scope) => scope === 'messages' || scope === 'conversations' || scope === 'counts',
+            (scope) =>
+              scope === 'messages' ||
+              scope === 'conversations' ||
+              scope === 'global_messages' ||
+              scope === 'mention_users' ||
+              scope === 'counts',
           ));
 
       if (shouldRefreshSocialSnapshot) {
@@ -347,7 +412,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
               'music',
               'messages',
               'conversations',
+              'global_messages',
+              'mention_users',
               'counts',
+              'wallet',
             ],
           });
         }, RAILWAY_SOCIAL_REFRESH_MS);
