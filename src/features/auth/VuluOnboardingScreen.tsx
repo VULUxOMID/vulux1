@@ -93,6 +93,28 @@ type NotificationPermissionState = {
   canAskAgain: boolean;
 };
 
+type OAuthProvider = 'apple' | 'google';
+
+const OAUTH_PROVIDERS: ReadonlyArray<{
+  id: OAuthProvider;
+  title: string;
+  strategy: 'oauth_apple' | 'oauth_google';
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  {
+    id: 'apple',
+    title: 'Continue with Apple',
+    strategy: 'oauth_apple',
+    icon: 'logo-apple',
+  },
+  {
+    id: 'google',
+    title: 'Continue with Google',
+    strategy: 'oauth_google',
+    icon: 'logo-google',
+  },
+];
+
 const STEP_ORDER: readonly VuluOnboardingStepId[] = [
   'welcome',
   'name',
@@ -127,6 +149,21 @@ const MONTH_LABELS = [
   'November',
   'December',
 ];
+
+function readOAuthErrorMessage(error: unknown, provider: OAuthProvider): string {
+  const providerName = provider === 'apple' ? 'Apple' : 'Google';
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message.trim()
+      : `${providerName} sign-in failed.`;
+  if (
+    message.includes('does not match one of the allowed values for parameter strategy') ||
+    message.toLowerCase().includes('strategy')
+  ) {
+    return `${providerName} sign-in is not enabled in Clerk yet.`;
+  }
+  return message;
+}
 
 const STEP_CONFIG: Record<VuluOnboardingStepId, StepConfig> = {
   welcome: {
@@ -428,7 +465,7 @@ export function VuluOnboardingScreen() {
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<Record<string, number>>({});
   const [completionStepUnlocked, setCompletionStepUnlocked] = useState(false);
   const [usernameTouched, setUsernameTouched] = useState(false);
-  const [isAuthenticatingWithApple, setIsAuthenticatingWithApple] = useState(false);
+  const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProvider | null>(null);
   const [isRequestingNotifications, setIsRequestingNotifications] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>({
     status: null,
@@ -1763,8 +1800,11 @@ export function VuluOnboardingScreen() {
     setStepIndex((prev) => Math.max(0, prev - 1));
   };
 
-  const handleAppleContinue = async () => {
+  const handleOAuthContinue = async (provider: OAuthProvider) => {
     setErrorMessage(null);
+    const config = OAUTH_PROVIDERS.find((item) => item.id === provider);
+    if (!config) return;
+    const providerName = provider === 'apple' ? 'Apple' : 'Google';
 
     if (isPreview) {
       handleContinue();
@@ -1776,19 +1816,19 @@ export function VuluOnboardingScreen() {
       return;
     }
 
-    setIsAuthenticatingWithApple(true);
+    setActiveOAuthProvider(provider);
     try {
       if (hasOnboardingSession) {
         await signOut();
       }
       const { createdSessionId, setActive, authSessionResult } = await startSSOFlow({
-        strategy: 'oauth_apple',
+        strategy: config.strategy,
       });
       if (!createdSessionId || !setActive) {
         const message =
           authSessionResult?.type === 'cancel' || authSessionResult?.type === 'dismiss'
-            ? 'Apple sign-in was canceled.'
-            : 'Apple sign-in did not return an active Clerk session.';
+            ? `${providerName} sign-in was canceled.`
+            : `${providerName} sign-in did not return an active Clerk session.`;
         setErrorMessage(message);
         toast.info(message);
         return;
@@ -1796,12 +1836,11 @@ export function VuluOnboardingScreen() {
       await setActive({ session: createdSessionId });
       handleContinue();
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unable to continue with Apple right now.';
+      const message = readOAuthErrorMessage(error, provider);
       setErrorMessage(message);
       toast.error(message);
     } finally {
-      setIsAuthenticatingWithApple(false);
+      setActiveOAuthProvider(null);
     }
   };
 
@@ -1919,29 +1958,24 @@ export function VuluOnboardingScreen() {
                 </AppText>
 
                 <View style={styles.welcomeButtonStack}>
-                  <PillButton
-                    title="Continue with Apple"
-                    onPress={() => {
-                      void handleAppleContinue();
-                    }}
-                    variant="secondary"
-                    icon="logo-apple"
-                    style={styles.welcomeAppleButton}
-                  />
-                  <PillButton
-                    title="Continue with email"
-                    onPress={() => {
-                      router.replace('/(auth)/login');
-                    }}
-                    variant="primary"
-                    icon="mail-outline"
-                    style={styles.welcomeAppleButton}
-                  />
-                  {isAuthenticatingWithApple ? (
+                  {OAUTH_PROVIDERS.map((provider) => (
+                    <PillButton
+                      key={provider.id}
+                      title={provider.title}
+                      onPress={() => {
+                        void handleOAuthContinue(provider.id);
+                      }}
+                      variant="secondary"
+                      icon={provider.icon}
+                      disabled={Boolean(activeOAuthProvider)}
+                      style={styles.welcomeAppleButton}
+                    />
+                  ))}
+                  {activeOAuthProvider ? (
                     <View style={styles.uploadRowCompact}>
                       <ActivityIndicator size="small" color="#10B981" />
                       <AppText variant="small" style={styles.uploadText}>
-                        Connecting to Apple...
+                        Connecting to {activeOAuthProvider === 'apple' ? 'Apple' : 'Google'}...
                       </AppText>
                     </View>
                   ) : null}

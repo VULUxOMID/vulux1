@@ -1,4 +1,4 @@
-import { useSignIn, useSignUp } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp, useSSO } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -28,6 +28,28 @@ type AuthShellProps = {
   infoMessage?: string | null;
 };
 
+type OAuthProvider = 'apple' | 'google';
+
+const OAUTH_PROVIDERS: ReadonlyArray<{
+  id: OAuthProvider;
+  title: string;
+  strategy: 'oauth_apple' | 'oauth_google';
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  {
+    id: 'apple',
+    title: 'Continue with Apple',
+    strategy: 'oauth_apple',
+    icon: 'logo-apple',
+  },
+  {
+    id: 'google',
+    title: 'Continue with Google',
+    strategy: 'oauth_google',
+    icon: 'logo-google',
+  },
+];
+
 function readErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object' && 'errors' in error) {
     const errors = (error as { errors?: Array<{ message?: string }> }).errors;
@@ -38,6 +60,18 @@ function readErrorMessage(error: unknown, fallback: string): string {
     return error.message.trim();
   }
   return fallback;
+}
+
+function readOAuthErrorMessage(error: unknown, provider: OAuthProvider): string {
+  const providerName = provider === 'apple' ? 'Apple' : 'Google';
+  const message = readErrorMessage(error, `${providerName} sign-in failed.`);
+  if (
+    message.includes('does not match one of the allowed values for parameter strategy') ||
+    message.toLowerCase().includes('strategy')
+  ) {
+    return `${providerName} sign-in is not enabled in Clerk yet.`;
+  }
+  return message;
 }
 
 function AuthShell({ children, title, subtitle, errorMessage, infoMessage }: AuthShellProps) {
@@ -94,11 +128,13 @@ function AuthButton({
   onPress,
   loading,
   variant = 'primary',
+  icon,
 }: {
   title: string;
   onPress: () => void;
   loading?: boolean;
   variant?: 'primary' | 'secondary';
+  icon?: keyof typeof Ionicons.glyphMap;
 }) {
   const isPrimary = variant === 'primary';
   return (
@@ -116,12 +152,22 @@ function AuthButton({
       {loading ? (
         <ActivityIndicator size="small" color={isPrimary ? '#FFFFFF' : '#171A27'} />
       ) : (
-        <AppText
-          variant="bodyBold"
-          style={isPrimary ? styles.actionButtonTextPrimary : styles.actionButtonTextSecondary}
-        >
-          {title}
-        </AppText>
+        <>
+          {icon ? (
+            <Ionicons
+              name={icon}
+              size={20}
+              color={isPrimary ? colors.textOnDark : colors.textPrimary}
+              style={styles.actionButtonIcon}
+            />
+          ) : null}
+          <AppText
+            variant="bodyBold"
+            style={isPrimary ? styles.actionButtonTextPrimary : styles.actionButtonTextSecondary}
+          >
+            {title}
+          </AppText>
+        </>
       )}
     </Pressable>
   );
@@ -132,17 +178,27 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
   const { isLoaded, isSignedIn } = useSessionAuth();
   const signIn = useSignIn();
   const signUp = useSignUp();
+  const { startSSOFlow } = useSSO();
   const [emailAddress, setEmailAddress] = useState('');
   const [password, setPassword] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeOAuthProvider, setActiveOAuthProvider] = useState<OAuthProvider | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const isRegister = mode === 'register';
   const isForgotPassword = mode === 'forgot-password';
   const isVerify = mode === 'verify';
+  const isProviderOnlyAuth = mode === 'welcome' || mode === 'login' || mode === 'register';
 
   const copy = useMemo(() => {
+    if (isProviderOnlyAuth) {
+      return {
+        title: 'Welcome to Vulu',
+        subtitle: 'Sign in or create your account with Apple or Google.',
+        primary: 'Continue',
+      };
+    }
     if (isRegister) {
       return {
         title: 'Create your account',
@@ -169,11 +225,42 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
       subtitle: 'Sign in with your Clerk account to continue.',
       primary: 'Sign in',
     };
-  }, [isForgotPassword, isRegister, isVerify]);
+  }, [isForgotPassword, isProviderOnlyAuth, isRegister, isVerify]);
 
   const routeAfterAuth = useCallback(() => {
     router.replace('/(tabs)');
   }, [router]);
+
+  const handleOAuth = useCallback(
+    async (provider: OAuthProvider) => {
+      const config = OAUTH_PROVIDERS.find((item) => item.id === provider);
+      if (!config) return;
+
+      setActiveOAuthProvider(provider);
+      setErrorMessage(null);
+      setInfoMessage(null);
+      try {
+        const { createdSessionId, setActive, authSessionResult } = await startSSOFlow({
+          strategy: config.strategy,
+        });
+        if (!createdSessionId || !setActive) {
+          const message =
+            authSessionResult?.type === 'cancel' || authSessionResult?.type === 'dismiss'
+              ? `${provider === 'apple' ? 'Apple' : 'Google'} sign-in was canceled.`
+              : `${provider === 'apple' ? 'Apple' : 'Google'} sign-in did not return an active Clerk session.`;
+          setInfoMessage(message);
+          return;
+        }
+        await setActive({ session: createdSessionId });
+        routeAfterAuth();
+      } catch (error) {
+        setErrorMessage(readOAuthErrorMessage(error, provider));
+      } finally {
+        setActiveOAuthProvider(null);
+      }
+    },
+    [routeAfterAuth, startSSOFlow],
+  );
 
   const handleSubmit = useCallback(async () => {
     const normalizedEmail = emailAddress.trim().toLowerCase();
@@ -266,7 +353,25 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
   return (
     <AuthShell title={copy.title} subtitle={copy.subtitle} errorMessage={errorMessage} infoMessage={infoMessage}>
       <View style={styles.form}>
-        {isVerify ? null : (
+        {isProviderOnlyAuth ? (
+          <>
+            {OAUTH_PROVIDERS.map((provider, index) => (
+              <AuthButton
+                key={provider.id}
+                title={provider.title}
+                onPress={() => {
+                  void handleOAuth(provider.id);
+                }}
+                loading={activeOAuthProvider === provider.id}
+                variant={index === 0 ? 'primary' : 'secondary'}
+                icon={provider.icon}
+              />
+            ))}
+            <AppText variant="small" style={styles.legalText}>
+              By continuing, you agree to our Terms & Privacy Policy
+            </AppText>
+          </>
+        ) : isVerify ? null : (
           <View style={styles.inputGroup}>
             <AppText variant="smallBold" style={styles.inputLabel}>
               Email
@@ -297,7 +402,7 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
             />
           </View>
         ) : null}
-        {isForgotPassword || isVerify ? null : (
+        {isProviderOnlyAuth || isForgotPassword || isVerify ? null : (
           <View style={styles.inputGroup}>
             <AppText variant="smallBold" style={styles.inputLabel}>
               Password
@@ -313,13 +418,15 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
             />
           </View>
         )}
-        <AuthButton title={copy.primary} onPress={handleSubmit} loading={isSubmitting} />
-        {isRegister ? (
+        {isProviderOnlyAuth ? null : (
+          <AuthButton title={copy.primary} onPress={handleSubmit} loading={isSubmitting} />
+        )}
+        {isProviderOnlyAuth || isVerify || isForgotPassword ? null : isRegister ? (
           <AuthButton title="I already have an account" onPress={() => router.replace('/(auth)/login')} variant="secondary" />
         ) : (
           <AuthButton title="Create account" onPress={() => router.replace('/(auth)/register')} variant="secondary" />
         )}
-        {!isForgotPassword ? (
+        {isProviderOnlyAuth || isForgotPassword ? null : (
           <Pressable
             accessibilityRole="button"
             onPress={() => router.replace('/(auth)/forgot-password')}
@@ -330,7 +437,7 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
               Reset password
             </AppText>
           </Pressable>
-        ) : null}
+        )}
       </View>
     </AuthShell>
   );
@@ -418,9 +525,14 @@ const styles = StyleSheet.create({
   actionButton: {
     minHeight: 52,
     borderRadius: radius.full,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.sm,
     paddingHorizontal: spacing.lg,
+  },
+  actionButtonIcon: {
+    marginTop: 1,
   },
   actionButtonPrimary: {
     backgroundColor: colors.accentPrimarySoft,
@@ -449,6 +561,11 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.textSecondary,
+  },
+  legalText: {
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   inputGroup: {
     gap: spacing.xs,

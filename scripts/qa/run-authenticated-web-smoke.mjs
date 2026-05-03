@@ -87,10 +87,10 @@ async function main() {
 
   try {
     await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' });
-    await page.getByText('Welcome back', { exact: false }).waitFor({ timeout: 30_000 });
-    await page.getByPlaceholder('you@example.com').waitFor({ timeout: 10_000 });
-    await page.getByRole('button', { name: 'Sign in' }).waitFor({ timeout: 10_000 });
-    logger('Clerk login screen rendered successfully.');
+    await page.getByText('Welcome to Vulu', { exact: false }).waitFor({ timeout: 30_000 });
+    await page.getByRole('button', { name: 'Continue with Apple' }).waitFor({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'Continue with Google' }).waitFor({ timeout: 10_000 });
+    logger('Clerk provider login screen rendered successfully.');
   } finally {
     await browser.close();
     await stopProcess(server);
