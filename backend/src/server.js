@@ -12,6 +12,16 @@ import {
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
 import { createDemoLiveStore } from "./demoLiveState.js";
 import { createQaGuestAuthHelper } from "./qaGuestAuth.js";
+import {
+  createCashTransfer,
+  createWithdrawal,
+  handleMutation,
+  handleWalletMutation,
+  isRailwayDataConfigured,
+  listCashTransfers,
+  listWithdrawals,
+  loadSnapshot,
+} from "./railwayData.js";
 import { createRtcServer } from "./rtc.js";
 
 const port = Number.parseInt(process.env.PORT ?? "3000", 10) || 3000;
@@ -309,38 +319,16 @@ function validateUploadRequest(body) {
   };
 }
 
-function emptyAppSnapshot() {
-  return {
-    lives: [],
-    boostLeaderboard: [],
-    knownLiveUsers: [],
-    livePresence: [],
-    socialUsers: [],
-    acceptedFriendIds: [],
-    notifications: [],
-    videos: [],
-    tracks: [],
-    playlists: [],
-    artists: [],
-    conversations: [],
-    threadSeedMessagesByUserId: {},
-    searchIndex: {
-      users: [],
-      conversations: [],
-      videos: [],
-      tracks: [],
-    },
-  };
-}
-
 async function handleRailwayApiRequest(req, res, url) {
   const pathname = url.pathname;
 
   if (req.method === "GET" && (pathname === "/snapshot" || pathname === "/snapshot/patch")) {
-    await requireViewerUserId(req);
+    const viewerUserId = await requireViewerUserId(req);
+    const data = await loadSnapshot(viewerUserId);
     sendJson(res, 200, {
-      data: emptyAppSnapshot(),
+      data,
       source: "railway",
+      durable: isRailwayDataConfigured(),
     });
     return true;
   }
@@ -351,10 +339,60 @@ async function handleRailwayApiRequest(req, res, url) {
       pathname === "/api/media/snapshot" ||
       pathname === "/api/messages/snapshot")
   ) {
-    await requireViewerUserId(req);
+    const viewerUserId = await requireViewerUserId(req);
+    const data = await loadSnapshot(viewerUserId);
     sendJson(res, 200, {
-      data: emptyAppSnapshot(),
+      data,
       source: "railway",
+      durable: isRailwayDataConfigured(),
+    });
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/wallet/withdrawals") {
+    const viewerUserId = await requireViewerUserId(req);
+    const requests = await listWithdrawals(viewerUserId);
+    sendJson(res, 200, {
+      requests,
+      data: requests,
+      source: "railway",
+      durable: isRailwayDataConfigured(),
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/wallet/withdrawals") {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    const result = await createWithdrawal(viewerUserId, body);
+    sendJson(res, 200, {
+      source: "railway",
+      viewerUserId,
+      ...result,
+    });
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/wallet/transfers") {
+    const viewerUserId = await requireViewerUserId(req);
+    const transfers = await listCashTransfers(viewerUserId, url.searchParams.get("limit") ?? 20);
+    sendJson(res, 200, {
+      transfers,
+      data: transfers,
+      source: "railway",
+      durable: isRailwayDataConfigured(),
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/wallet/transfers") {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    const result = await createCashTransfer(viewerUserId, body);
+    sendJson(res, 200, {
+      source: "railway",
+      viewerUserId,
+      ...result,
     });
     return true;
   }
@@ -367,11 +405,23 @@ async function handleRailwayApiRequest(req, res, url) {
   ) {
     const viewerUserId = await requireViewerUserId(req);
     const body = await readJsonBody(req);
+    const result = await handleMutation(pathname, req.method, viewerUserId, body);
     sendJson(res, 200, {
-      ok: true,
       source: "railway",
       viewerUserId,
-      received: body,
+      ...result,
+    });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/wallet/mutate") {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    const result = await handleWalletMutation(viewerUserId, body);
+    sendJson(res, 200, {
+      source: "railway",
+      viewerUserId,
+      ...result,
     });
     return true;
   }
@@ -400,6 +450,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "vulu-railway-backend",
       storageReady: isR2Configured,
+      databaseReady: isRailwayDataConfigured(),
       rtcReady: rtcServer.health.enabled,
       rtcAuthReady: rtcServer.health.authReady,
       qaAuthReady: false,
@@ -615,10 +666,20 @@ const server = http.createServer(async (req, res) => {
         `[railway-backend] presign user=${viewerUserId} size=${size} type=${contentType} key=${objectKey}`,
       );
 
+      const publicUrl = getPublicUrlForObjectKey(objectKey);
+      await handleMutation("/api/media/uploads", "POST", viewerUserId, {
+        objectKey,
+        publicUrl,
+        contentType,
+        mediaType,
+        size,
+        uploadStatus: "presigned",
+      });
+
       sendJson(res, 200, {
         url: presignedUrl,
         objectKey,
-        publicUrl: getPublicUrlForObjectKey(objectKey),
+        publicUrl,
         requiredHeaders: {
           "Content-Type": contentType,
         },

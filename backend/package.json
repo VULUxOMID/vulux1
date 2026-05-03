@@ -6,6 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node --env-file=.env src/server.js",
+    "migrate": "node --env-file=.env scripts/migrate.mjs",
     "smoke": "node --env-file=.env scripts/smoke.mjs",
     "smoke:rtc": "node scripts/rtc-smoke.mjs"
   },
@@ -13,6 +14,7 @@
     "@aws-sdk/client-s3": "^3.995.0",
     "@aws-sdk/s3-request-presigner": "^3.995.0",
     "jose": "^5.9.6",
+    "pg": "^8.20.0",
     "socket.io": "^4.8.3"
   }
 }
