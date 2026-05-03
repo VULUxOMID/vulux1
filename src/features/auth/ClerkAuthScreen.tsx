@@ -28,12 +28,12 @@ type AuthShellProps = {
   infoMessage?: string | null;
 };
 
-type OAuthProvider = 'apple' | 'google';
+type OAuthProvider = 'apple';
 
 const OAUTH_PROVIDERS: ReadonlyArray<{
   id: OAuthProvider;
   title: string;
-  strategy: 'oauth_apple' | 'oauth_google';
+  strategy: 'oauth_apple';
   icon: keyof typeof Ionicons.glyphMap;
 }> = [
   {
@@ -41,12 +41,6 @@ const OAUTH_PROVIDERS: ReadonlyArray<{
     title: 'Continue with Apple',
     strategy: 'oauth_apple',
     icon: 'logo-apple',
-  },
-  {
-    id: 'google',
-    title: 'Continue with Google',
-    strategy: 'oauth_google',
-    icon: 'logo-google',
   },
 ];
 
@@ -63,7 +57,7 @@ function readErrorMessage(error: unknown, fallback: string): string {
 }
 
 function readOAuthErrorMessage(error: unknown, provider: OAuthProvider): string {
-  const providerName = provider === 'apple' ? 'Apple' : 'Google';
+  const providerName = 'Apple';
   const message = readErrorMessage(error, `${providerName} sign-in failed.`);
   if (
     message.includes('does not match one of the allowed values for parameter strategy') ||
@@ -195,7 +189,7 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
     if (isProviderOnlyAuth) {
       return {
         title: 'Welcome to Vulu',
-        subtitle: 'Sign in or create your account with Apple or Google.',
+        subtitle: 'Sign in or create your account with Apple.',
         primary: 'Continue',
       };
     }
@@ -246,8 +240,8 @@ export function ClerkAuthScreen({ mode }: ClerkAuthScreenProps) {
         if (!createdSessionId || !setActive) {
           const message =
             authSessionResult?.type === 'cancel' || authSessionResult?.type === 'dismiss'
-              ? `${provider === 'apple' ? 'Apple' : 'Google'} sign-in was canceled.`
-              : `${provider === 'apple' ? 'Apple' : 'Google'} sign-in did not return an active Clerk session.`;
+              ? 'Apple sign-in was canceled.'
+              : 'Apple sign-in did not return an active Clerk session.';
           setInfoMessage(message);
           return;
         }

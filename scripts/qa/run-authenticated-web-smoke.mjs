@@ -89,8 +89,10 @@ async function main() {
     await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' });
     await page.getByText('Welcome to Vulu', { exact: false }).waitFor({ timeout: 30_000 });
     await page.getByRole('button', { name: 'Continue with Apple' }).waitFor({ timeout: 10_000 });
-    await page.getByRole('button', { name: 'Continue with Google' }).waitFor({ timeout: 10_000 });
-    logger('Clerk provider login screen rendered successfully.');
+    if (await page.getByRole('button', { name: 'Continue with Google' }).isVisible().catch(() => false)) {
+      fail('Google auth button should be hidden for the Apple-only launch.');
+    }
+    logger('Clerk Apple-only login screen rendered successfully.');
   } finally {
     await browser.close();
     await stopProcess(server);

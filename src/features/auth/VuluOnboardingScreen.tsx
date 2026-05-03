@@ -93,12 +93,12 @@ type NotificationPermissionState = {
   canAskAgain: boolean;
 };
 
-type OAuthProvider = 'apple' | 'google';
+type OAuthProvider = 'apple';
 
 const OAUTH_PROVIDERS: ReadonlyArray<{
   id: OAuthProvider;
   title: string;
-  strategy: 'oauth_apple' | 'oauth_google';
+  strategy: 'oauth_apple';
   icon: keyof typeof Ionicons.glyphMap;
 }> = [
   {
@@ -106,12 +106,6 @@ const OAUTH_PROVIDERS: ReadonlyArray<{
     title: 'Continue with Apple',
     strategy: 'oauth_apple',
     icon: 'logo-apple',
-  },
-  {
-    id: 'google',
-    title: 'Continue with Google',
-    strategy: 'oauth_google',
-    icon: 'logo-google',
   },
 ];
 
@@ -151,7 +145,7 @@ const MONTH_LABELS = [
 ];
 
 function readOAuthErrorMessage(error: unknown, provider: OAuthProvider): string {
-  const providerName = provider === 'apple' ? 'Apple' : 'Google';
+  const providerName = 'Apple';
   const message =
     error instanceof Error && error.message.trim().length > 0
       ? error.message.trim()
@@ -1804,7 +1798,7 @@ export function VuluOnboardingScreen() {
     setErrorMessage(null);
     const config = OAUTH_PROVIDERS.find((item) => item.id === provider);
     if (!config) return;
-    const providerName = provider === 'apple' ? 'Apple' : 'Google';
+    const providerName = 'Apple';
 
     if (isPreview) {
       handleContinue();
@@ -1975,7 +1969,7 @@ export function VuluOnboardingScreen() {
                     <View style={styles.uploadRowCompact}>
                       <ActivityIndicator size="small" color="#10B981" />
                       <AppText variant="small" style={styles.uploadText}>
-                        Connecting to {activeOAuthProvider === 'apple' ? 'Apple' : 'Google'}...
+                        Connecting to Apple...
                       </AppText>
                     </View>
                   ) : null}
