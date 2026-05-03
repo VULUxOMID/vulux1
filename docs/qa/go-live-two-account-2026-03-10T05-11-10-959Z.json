@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-03-10T05:11:12.049Z",
+  "hostBase": "http://127.0.0.1:19140",
+  "viewerBase": "http://127.0.0.1:19141",
+  "hostCreds": {
+    "identifier": "amin99nr@gmail.com"
+  },
+  "viewerCreds": {
+    "identifier": "misa"
+  },
+  "pass": false,
+  "error": "[host] login failed. Body sample: Sign in to Vulu\nUse your email or username and password. Vulu restores the same vulu_user_id after sign-in.\n\nSign in\nNeed an account? Sign up\nForgot password?\nYour sign-in needs another step in Clerk. Complete it and try again.\nST\ndown/idle\ng0 u0 d------\nr0\nd0\nnow/none",
+  "artifacts": {
+    "go-live-two-account-2026-03-10T05-11-10-959Z-host-error.png": "/Users/omid/vulux1/docs/qa/go-live-two-account-2026-03-10T05-11-10-959Z-host-error.png",
+    "go-live-two-account-2026-03-10T05-11-10-959Z-viewer-error.png": "/Users/omid/vulux1/docs/qa/go-live-two-account-2026-03-10T05-11-10-959Z-viewer-error.png"
+  },
+  "finishedAt": "2026-03-10T05:13:15.762Z"
+}

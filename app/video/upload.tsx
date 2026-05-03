@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 
 import { useVideo, VideoCategory } from '../../src/context/VideoContext';
-import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../src/auth/clerkSession';
 import { uploadMediaAsset } from '../../src/utils/mediaUpload';
 import { toast } from '../../src/components/Toast';
 import { colors, spacing, typography } from '../../src/theme';

@@ -15,9 +15,9 @@ import { toast } from '../../components/Toast';
 import { useWallet } from '../../context';
 import {
   shouldRefreshWalletFromBackendEvent,
-  shouldRefreshWalletFromSpacetimeEvent,
+  shouldRefreshWalletFromRailwayEvent,
 } from '../../context/walletHydration';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
 import { fetchAccountState } from '../../data/adapters/backend/accountState';
 import {
   requestBackendRefresh,
@@ -34,8 +34,8 @@ import {
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import {
   subscribeBootstrap,
-  subscribeSpacetimeDataChanges,
-} from '../../lib/spacetime';
+  subscribeRailwayDataChanges,
+} from '../../lib/railwayRuntime';
 import { colors, spacing } from '../../theme';
 import {
   buildFailureReceipt,
@@ -197,8 +197,8 @@ export function EarnScreen() {
       return;
     }
 
-    const unsubscribeSpacetime = subscribeSpacetimeDataChanges((event) => {
-      if (shouldRefreshWalletFromSpacetimeEvent(event, walletHydrated)) {
+    const unsubscribeRailway = subscribeRailwayDataChanges((event) => {
+      if (shouldRefreshWalletFromRailwayEvent(event, walletHydrated)) {
         setRefreshNonce((value) => value + 1);
       }
     });
@@ -209,7 +209,7 @@ export function EarnScreen() {
     });
 
     return () => {
-      unsubscribeSpacetime();
+      unsubscribeRailway();
       unsubscribeBackend();
     };
   }, [isAuthLoaded, isSignedIn, userId, walletHydrated]);

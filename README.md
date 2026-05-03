@@ -1,20 +1,41 @@
 # Vulu
 
-## Architecture: SpacetimeDB-only + Clerk + R2
+## Target Architecture: Railway + Clerk + WebRTC + R2
 
-The mobile app now treats SpacetimeDB as the primary application backend.
+Vulu is moving to one app-owned backend that is easier to inspect, test, and change agentically:
 
-- Auth: Clerk issues the JWT used by the app and by the upload signer.
-- App data: SpacetimeDB stores profiles, account state, live state, conversations, thread history, notifications, and client-published catalog events.
-- Media storage: Cloudflare R2 stores uploaded files.
-- Upload signing: a minimal Node HTTP signer in [/Users/omid/vulux1/backend/src/server.js](/Users/omid/vulux1/backend/src/server.js) validates Clerk JWTs and returns presigned R2 upload URLs from `POST /presign` (`GET /health` remains public).
-- Legacy admin API: optional only. The app no longer depends on `EXPO_PUBLIC_API_BASE_URL` for normal runtime data.
+- `Clerk` owns authentication and session tokens.
+- `Railway` hosts the Node/TypeScript API, WebSocket signaling, Postgres database, migrations, background jobs, and R2 upload signing.
+- `WebRTC` carries live room audio/video through peer connections, with Railway only handling signaling and room control.
+- `R2` stores uploaded media blobs. R2 is storage only, not an application runtime.
+- `Expo` powers the iOS, Android, and web app surfaces.
 
-### Local Run
+The active direction is to keep one backend vocabulary in active development context: Clerk for auth, Railway for app services, WebRTC for media, and R2 for blob storage.
 
-1. Start the SpacetimeDB module you use for development (or point the app at your deployed module with `EXPO_PUBLIC_SPACETIMEDB_URI` and `EXPO_PUBLIC_SPACETIMEDB_NAME`).
-2. Configure the upload signer with the vars from [/Users/omid/vulux1/backend/.env.example](/Users/omid/vulux1/backend/.env.example).
-3. Start the signer:
+## Local App Setup
+
+Create `/Users/omid/vulux1/.env.local`:
+
+```env
+EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_or_live_value
+EXPO_PUBLIC_RAILWAY_API_BASE_URL=http://127.0.0.1:3000
+EXPO_PUBLIC_RAILWAY_WS_BASE_URL=ws://127.0.0.1:3000
+EXPO_PUBLIC_RTC_ENABLE=1
+```
+
+Run the app:
+
+```bash
+cd /Users/omid/vulux1
+npm start
+npm run ios
+npm run android
+npm run web
+```
+
+## Railway Backend
+
+The backend lives in `/Users/omid/vulux1/backend`.
 
 ```bash
 cd /Users/omid/vulux1/backend
@@ -22,20 +43,49 @@ npm install
 npm start
 ```
 
-4. Ensure [/Users/omid/vulux1/.env.local](/Users/omid/vulux1/.env.local) contains:
+Railway backend env:
 
 ```env
-EXPO_PUBLIC_UPLOAD_SIGNER_URL=http://192.168.0.192:3000
-EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE=vulu-backend
+PORT=3000
+DATABASE_URL=postgresql://...
+CLERK_JWKS_URL=https://your-clerk-domain/.well-known/jwks.json
+CLERK_JWT_ISSUER=https://your-clerk-domain
+CLERK_JWT_AUDIENCE=vulu-backend
+R2_ACCOUNT_ID=...
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_BUCKET_NAME=...
+R2_PUBLIC_BASE_URL=https://media.your-domain.com
+RTC_STUN_URLS=stun:stun.l.google.com:19302
+RTC_TURN_URLS=
+RTC_TURN_SECRET=
 ```
 
-5. Start Expo:
+## Common Commands
 
 ```bash
-cd /Users/omid/vulux1
-npx expo start
+npm run env:check
+npm run smoke:web:auth
+npx tsc --noEmit
+git diff --check
 ```
 
-No `DATABASE_URL` is required for the signer or the app runtime.
+Backend:
 
-If you enforce `AUTH_JWT_AUDIENCE` in the signer, make sure your Clerk JWT template emits a matching `aud` claim.
+```bash
+cd /Users/omid/vulux1/backend
+npm run smoke
+```
+
+Deploy the Railway backend from the repo root with the guarded backend-root command:
+
+```bash
+npm run railway:deploy:backend
+npm run railway:migrate:backend
+```
+
+Do not run plain `railway up` from the repo root for `vulu-api`; that deploys the Expo app package instead of the backend service.
+
+## Migration Rule
+
+New product work should target Clerk and Railway only. Do not add new app dependencies on removed platform names or env variables. If a legacy import is still present, treat it as staged migration debt and replace it behind a Railway-backed seam before deleting it.

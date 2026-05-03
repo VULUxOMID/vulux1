@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, StatusBar, TouchableOpacity, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
+import { AppScreen } from '../../src/components/AppScreen';
 import { AppText } from '../../src/components/AppText';
 import { colors } from '../../src/theme/colors';
 import { UnifiedMusicDashboard } from '../../src/features/music/components/UnifiedMusicDashboard';
@@ -12,10 +12,11 @@ import { MusicCategories } from '../../src/features/music/components/MusicCatego
 import { TrackRow } from '../../src/features/music/components/TrackRow';
 import { useMusic } from '../../src/features/music/context/MusicContext';
 import type { Track, Playlist } from '../../src/features/music/types';
-import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../src/auth/clerkSession';
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
 import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBus';
-import { subscribeMusicCatalog } from '../../src/lib/spacetime';
+import { spacing } from '../../src/theme';
+import { TopBar } from '../../src/features/home/TopBar';
 
 export default function MusicScreen() {
   const isFocused = useIsFocused();
@@ -37,8 +38,6 @@ export default function MusicScreen() {
       source: 'manual',
       reason: 'music_screen_focused',
     });
-
-    return subscribeMusicCatalog();
   }, [queriesEnabled]);
 
   const handleTrackPress = (track: Track, queue: Track[] = []) => {
@@ -122,9 +121,8 @@ export default function MusicScreen() {
     
     return (
       <>
-        {/* Header */}
         <View style={styles.header}>
-          <AppText style={styles.headerTitle}>Music</AppText>
+          <TopBar title="Music" variant="page" />
         </View>
 
         {/* Dashboard */}
@@ -141,11 +139,11 @@ export default function MusicScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <AppScreen noPadding style={styles.container}>
       <StatusBar barStyle="light-content" />
       
       {renderContent()}
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
@@ -155,16 +153,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: colors.textPrimary,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   offlineContainer: {
     flex: 1,
@@ -173,16 +164,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   subHeaderTitle: {
     color: colors.textPrimary,

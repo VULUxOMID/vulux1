@@ -8,8 +8,14 @@ V1 automation runner for safe Codex work on the Vulu repo.
 - Verifies `Linear-Signature`
 - Filters to safe issues only
 - Routes issues to prompt templates
-- Triggers GitHub `repository_dispatch`
-- Provides a 10-minute fallback sweep
+- Can run manual Codex tasks locally in an isolated git worktree
+- Can chain the next eligible Linear issue locally when the runner is idle
+
+Deprecated/disabled:
+
+- GitHub Actions `repository_dispatch` Codex execution
+- GitHub scheduled fallback sweep
+- GitHub webhook completion loop
 
 ## Supported V1 scope
 
@@ -48,11 +54,18 @@ export VULU_AGENT_RUNNER_CONFIG=/Users/omid/vulux1/tools/vulu-agent-runner/confi
 export LINEAR_WEBHOOK_SECRET=...
 export LINEAR_API_KEY=...
 export LINEAR_TEAM_ID=...
-export GITHUB_DISPATCH_TOKEN=...
-export VULU_AGENT_INTERNAL_TOKEN=...
 export VULU_AGENT_TASK_TOKEN=...
 export OPENCLAW_GATEWAY_URL=http://localhost:8080
 export OPENCLAW_TOKEN=...
+export OPENAI_API_KEY=...
+```
+
+Runner-launched `codex exec` now also reuses the Codex env file at
+`~/.codex/environments/environment.toml` for MCP auth values such as
+`MCP_BEARER_TOKEN`. If your Codex env file lives somewhere else, set:
+
+```bash
+export VULU_AGENT_CODEX_ENV_FILE=/absolute/path/to/environment.toml
 ```
 
 4. Run the server:
@@ -67,53 +80,73 @@ The server exposes:
 - `GET /health`
 - `POST /webhooks/linear`
 - `POST /webhooks/task`
-- `POST /webhooks/github`
-- `POST /internal/fallback-sweep`
 
 `POST /webhooks/task` accepts:
 
 - `Authorization: Bearer <token>`
 - JSON body with `text` or `task`
 
-`POST /webhooks/github` accepts GitHub webhook payloads. When it receives a
-`workflow_run` event with `action=completed`, it posts a completion callback to
-OpenClaw using `OPENCLAW_GATEWAY_URL` and `OPENCLAW_TOKEN`.
+Manual task execution defaults to `local` and runs `codex exec` on the local
+machine inside a dedicated git worktree under `tools/vulu-agent-runner/.data/runs`.
+Each run writes `run.json`, `prompt.md`, `codex.log`, and `codex-last-message.txt`.
 
-## GitHub Actions setup
+The runner now appends a strict close-out contract to each Codex prompt. A
+follow-up Linear issue is only auto-created when Codex ends with an explicit
+`FOLLOW_UP_*` block that declares real remaining product work. Plain prose,
+optional ideas, or missing acceptance criteria do not create new issues.
 
-Repository secrets required:
+## Local autonomous loop
 
-- `OPENAI_API_KEY`
-- `LINEAR_API_KEY`
-- `VULU_AGENT_INTERNAL_TOKEN`
+With the default config, the runner starts a small local poll loop:
 
-Optional repository variables:
+- every 60 seconds
+- only when there are no active local Codex runs
+- dispatches at most one next eligible Linear issue
 
-- `VULU_AGENT_RUNNER_URL`
-- `VULU_AGENT_CONFIG`
+When a local Linear-backed Codex run finishes successfully, the runner now also
+immediately queries Linear and starts the next eligible Vulu issue without
+waiting for the next poll tick.
 
-`VULU_AGENT_RUNNER_URL` should point to the running webhook receiver if you want the scheduled fallback workflow to call the live runner.
+If the final Codex message contains a valid `FOLLOW_UP_*` block, the runner
+creates exactly one Linear sub-issue through the GraphQL API instead of
+dispatching an ad hoc continuation. The created issue:
 
-## Primary trigger model
+- uses the completed Linear issue as `parentId`
+- includes the parent issue link/id, remaining work summary, and acceptance criteria
+- applies `agent-ready` and `codex-generated`
+- targets the normal unstarted queue state so the standard Linear webhook path can retrigger it
 
-- `pull_request.ready_for_review`
-- `pull_request.synchronize`
-- `push`
-- Linear issue moved to `In Review`
+Infinite loop guards for follow-up creation:
 
-GitHub completion signals are normalized into `repository_dispatch`.
+- no follow-up for smoke/setup/runner/MCP/auth/automation issues
+- no follow-up unless Codex explicitly emitted the structured block
+- no second auto-created child once the parent already has a `codex-generated` child
+- no duplicate child when an existing sub-issue already has the same title
 
-Linear webhooks are handled by the runner service and also dispatched into `repository_dispatch`.
+Continuation selection is intentionally narrower than a raw “next updated issue”
+scan:
 
-## 10-minute fallback
+- same Vulu Linear team
+- real product issues only (`VUL-*`)
+- skip `Done`, `Cancelled`, and blocked issues
+- skip smoke-test, setup, runner, MCP, auth, and automation-maintenance issues
+- blocked labels
+- safe issue types
 
-The fallback workflow runs every 10 minutes and calls the runner's `/internal/fallback-sweep` endpoint.
+The idle poll loop still exists as a recovery path, but it no longer depends on
+an issue being updated in the last lookback window to continue the chain.
 
-If you prefer GitHub-hosted sweeping later, the same runner can also be invoked with:
+## Official path
 
-```bash
-npm run fallback-sweep
+Official automation path:
+
+```text
+Linear -> local runner -> codex exec
 ```
+
+The GitHub-hosted fallback path has been disabled and removed from
+`.github/workflows` to avoid red status noise and confusion. If GitHub still
+shows old failed runs, they are historical only.
 
 ## Prompt routing
 
@@ -129,6 +162,6 @@ All prompts are designed to stay compatible with `/Users/omid/vulux1/AGENTS.md`.
 
 ## Notes
 
-- The workflow creates or updates a codex branch and PR when Codex produces changes.
-- The workflow posts a status comment back to Linear when `LINEAR_API_KEY` and the issue id are available.
-- The fallback sweep uses cooldown and lock state via the configured state file.
+- Local runs create commits inside their isolated worktrees when Codex makes changes.
+- The local autonomous loop uses cooldown and lock state via the configured state file.
+- `POST /webhooks/github` and `/internal/fallback-sweep` are deprecated compatibility paths and are no longer part of the official flow.

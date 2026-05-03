@@ -82,6 +82,17 @@ export function hasAuthoritativeWallet(
   return walletHydrated && walletStateAvailable;
 }
 
+export function selectAuthoritativeWalletHistory<T>(
+  walletUserId: string | null,
+  signedInUserId: string | null | undefined,
+  walletStateAvailable: boolean,
+  history: T[],
+): T[] {
+  return hasAuthoritativeWalletForUser(walletUserId, signedInUserId, walletStateAvailable)
+    ? history
+    : [];
+}
+
 export function hasRelevantWalletScope(
   scopes: readonly string[] | null | undefined,
 ): boolean {
@@ -92,7 +103,7 @@ export function hasRelevantWalletScope(
   return scopes.some((scope) => WALLET_RELEVANT_SCOPES.has(scope));
 }
 
-export function shouldRefreshWalletFromSpacetimeEvent(
+export function shouldRefreshWalletFromRailwayEvent(
   event: { scopes: readonly string[] },
   walletHydrated: boolean,
 ): boolean {

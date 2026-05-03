@@ -382,9 +382,10 @@ function ParticipantRow({
   onProfilePress?: () => void;
 }) {
   const hasActions = showKick || showBan || showInvite;
+  const normalizedUserId = user.id.replace(/[^a-zA-Z0-9_-]/g, '_');
 
   return (
-    <Pressable style={styles.participantRow} onPress={onProfilePress}>
+    <Pressable style={styles.participantRow} onPress={onProfilePress} testID={`live-participant-row-${normalizedUserId}`}>
       {user.avatarUrl?.trim() ? (
         <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
       ) : (
@@ -412,21 +413,21 @@ function ParticipantRow({
         <View style={styles.actionRow}>
           {/* X button to kick co-hosts */}
           {showKick && (
-            <Pressable style={styles.kickButton} onPress={onKick}>
+            <Pressable style={styles.kickButton} onPress={onKick} testID={`live-host-kick-${normalizedUserId}`}>
               <Ionicons name="close" size={18} color="#fff" />
             </Pressable>
           )}
 
           {/* Ban button */}
           {showBan && (
-            <Pressable style={styles.banButton} onPress={onBan}>
+            <Pressable style={styles.banButton} onPress={onBan} testID={`live-host-ban-${normalizedUserId}`}>
               <Ionicons name="ban" size={16} color="#fff" />
             </Pressable>
           )}
 
           {/* + button to invite viewers to become hosts */}
           {showInvite && (
-            <Pressable style={styles.inviteButton} onPress={onInvite}>
+            <Pressable style={styles.inviteButton} onPress={onInvite} testID={`live-viewer-invite-${normalizedUserId}`}>
               <Ionicons name="add" size={20} color="#fff" />
             </Pressable>
           )}

@@ -2,10 +2,10 @@ import type { LiveRepository } from '../../contracts';
 import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
 import {
-  isSpacetimeViewActive,
-  isSpacetimeViewRequested,
-  spacetimeDb,
-} from '../../../lib/spacetime';
+  isRailwayViewActive,
+  isRailwayViewRequested,
+  railwayDb,
+} from '../../../lib/railwayRuntime';
 import type { LiveItem } from '../../../features/home/LiveSection';
 import type { LiveUser } from '../../../features/liveroom/types';
 
@@ -165,6 +165,15 @@ const LIVE_PRESENCE_FRESHNESS_WINDOW_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
 })();
 
+const LIVE_DISCOVERY_GRACE_WINDOW_MS = (() => {
+  const raw = process.env.EXPO_PUBLIC_LIVE_DISCOVERY_GRACE_MS?.trim();
+  if (!raw) return 15_000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+})();
+
+const discoveryLiveFirstSeenAtMs = new Map<string, number>();
+
 type PresenceItem = {
   userId: string;
   liveId: string;
@@ -211,7 +220,31 @@ function applyFreshPresenceFilter<T extends { updatedAt: number }>(presence: T[]
   return presence.filter((entry) => entry.updatedAt >= cutoffMs);
 }
 
-function getSpacetimeLives(dbView: any = spacetimeDb.db as any): ExtendedLiveItem[] {
+function noteDiscoveryLives(lives: ExtendedLiveItem[], nowMs: number): void {
+  const currentLiveIds = new Set<string>();
+
+  for (const live of lives) {
+    currentLiveIds.add(live.id);
+    if (!discoveryLiveFirstSeenAtMs.has(live.id)) {
+      discoveryLiveFirstSeenAtMs.set(live.id, nowMs);
+    }
+  }
+
+  const staleCutoffMs = nowMs - LIVE_DISCOVERY_GRACE_WINDOW_MS;
+  for (const [liveId, firstSeenAtMs] of discoveryLiveFirstSeenAtMs) {
+    if (currentLiveIds.has(liveId)) continue;
+    if (firstSeenAtMs >= staleCutoffMs) continue;
+    discoveryLiveFirstSeenAtMs.delete(liveId);
+  }
+}
+
+function isWithinDiscoveryGraceWindow(liveId: string, nowMs: number): boolean {
+  const firstSeenAtMs = discoveryLiveFirstSeenAtMs.get(liveId);
+  if (typeof firstSeenAtMs !== 'number') return false;
+  return nowMs - firstSeenAtMs <= LIVE_DISCOVERY_GRACE_WINDOW_MS;
+}
+
+function getRailwayLives(dbView: any = railwayDb.db as any): ExtendedLiveItem[] {
   const rows: any[] = Array.from(dbView?.publicLiveDiscovery?.iter?.() ?? []);
 
   const parsedRows: Array<ExtendedLiveItem | null> = rows.map((row) => {
@@ -249,9 +282,9 @@ function getSpacetimeLives(dbView: any = spacetimeDb.db as any): ExtendedLiveIte
   return parsedRows.filter((live): live is ExtendedLiveItem => live !== null);
 }
 
-function getSpacetimeLiveById(
+function getRailwayLiveById(
   liveId: string,
-  dbView: any = spacetimeDb.db as any,
+  dbView: any = railwayDb.db as any,
 ): ExtendedLiveItem | null {
   const normalizedLiveId = liveId.trim();
   if (!normalizedLiveId) return null;
@@ -263,7 +296,7 @@ function getSpacetimeLiveById(
   return parseLiveRow(row);
 }
 
-function getSpacetimeBoostLeaderboard(dbView: any = spacetimeDb.db as any) {
+function getRailwayBoostLeaderboard(dbView: any = railwayDb.db as any) {
   const rows: any[] = Array.from(dbView?.liveBoostLeaderboardItem?.iter?.() ?? []);
 
   return rows
@@ -284,7 +317,7 @@ function getSpacetimeBoostLeaderboard(dbView: any = spacetimeDb.db as any) {
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 }
 
-function getSpacetimeKnownLiveUsers(dbView: any = spacetimeDb.db as any): LiveUser[] {
+function getRailwayKnownLiveUsers(dbView: any = railwayDb.db as any): LiveUser[] {
   const rows: any[] = Array.from(dbView?.knownLiveUserItem?.iter?.() ?? []);
 
   return rows
@@ -292,7 +325,7 @@ function getSpacetimeKnownLiveUsers(dbView: any = spacetimeDb.db as any): LiveUs
     .filter((entry): entry is LiveUser => Boolean(entry));
 }
 
-function getSpacetimePresence(dbView: any = spacetimeDb.db as any) {
+function getRailwayPresence(dbView: any = railwayDb.db as any) {
   const rows: any[] = Array.from(
     dbView?.publicLivePresenceItem?.iter?.() ??
     dbView?.public_live_presence_item?.iter?.() ??
@@ -314,42 +347,57 @@ function getSpacetimePresence(dbView: any = spacetimeDb.db as any) {
 function filterLivesWithFreshHostingPresence(
   lives: ExtendedLiveItem[],
   presence: PresenceItem[],
+  allowUnconfirmedDiscovery: boolean,
+  nowMs: number = Date.now(),
 ): ExtendedLiveItem[] {
+  if (allowUnconfirmedDiscovery) {
+    noteDiscoveryLives(lives, nowMs);
+  }
+
   const activeHostingLiveIds = new Set(
     presence
       .filter((entry) => entry.activity === 'hosting')
       .map((entry) => entry.liveId),
   );
 
-  if (activeHostingLiveIds.size === 0) {
-    return [];
-  }
+  return lives.filter(
+    (live) =>
+      activeHostingLiveIds.has(live.id) ||
+      (allowUnconfirmedDiscovery && isWithinDiscoveryGraceWindow(live.id, nowMs)),
+  );
+}
 
-  return lives.filter((live) => activeHostingLiveIds.has(live.id));
+export function resetLiveDiscoveryVisibilityStateForTests(): void {
+  discoveryLiveFirstSeenAtMs.clear();
 }
 
 export function createBackendLiveRepository(
   snapshot: BackendSnapshot,
   runtime: LiveRepositoryRuntime = {},
 ): LiveRepository {
-  const dbView = runtime.dbView ?? (spacetimeDb.db as any);
-  const isViewRequested = runtime.isViewRequested ?? isSpacetimeViewRequested;
-  const isViewActive = runtime.isViewActive ?? isSpacetimeViewActive;
+  const dbView = runtime.dbView ?? (railwayDb.db as any);
+  const isViewRequested = runtime.isViewRequested ?? isRailwayViewRequested;
+  const isViewActive = runtime.isViewActive ?? isRailwayViewActive;
   return {
     listLives(request) {
-      const spacetimeLives = getSpacetimeLives(dbView);
-      const freshPresence = applyFreshPresenceFilter(getSpacetimePresence(dbView));
+      const railwayLives = getRailwayLives(dbView);
+      const freshPresence = applyFreshPresenceFilter(getRailwayPresence(dbView));
       const liveDiscoveryRequested = isViewRequested('public_live_discovery');
       const liveDiscoveryActive = isViewActive('public_live_discovery');
       const shouldUseSnapshotFallback =
-        spacetimeLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
+        railwayLives.length === 0 && !liveDiscoveryRequested && !liveDiscoveryActive;
       const byId = new Map<string, ExtendedLiveItem>();
 
       if (!shouldUseSnapshotFallback) {
+        const allowUnconfirmedDiscovery = request?.allowUnconfirmedDiscovery ?? true;
         const authoritativeLives =
           liveDiscoveryRequested || liveDiscoveryActive
-            ? filterLivesWithFreshHostingPresence(spacetimeLives, freshPresence)
-            : spacetimeLives;
+            ? filterLivesWithFreshHostingPresence(
+              railwayLives,
+              freshPresence,
+              allowUnconfirmedDiscovery,
+            )
+            : railwayLives;
         for (const live of authoritativeLives) {
           byId.set(live.id, live);
         }
@@ -384,18 +432,18 @@ export function createBackendLiveRepository(
       const normalized = liveId.trim();
       if (!normalized) return undefined;
 
-      const fromLiveItem = getSpacetimeLiveById(normalized, dbView);
+      const fromLiveItem = getRailwayLiveById(normalized, dbView);
       if (fromLiveItem) return fromLiveItem;
       const fromSnapshot = snapshot.lives.find((live) => live.id === normalized);
       if (fromSnapshot) return fromSnapshot;
-      return getSpacetimeLives(dbView).find((live) => live.id === normalized);
+      return getRailwayLives(dbView).find((live) => live.id === normalized);
     },
     listBoostLeaderboard(request) {
       const byId = new Map<string, (typeof snapshot.boostLeaderboard)[number]>();
       for (const row of snapshot.boostLeaderboard) {
         byId.set(row.id, row);
       }
-      for (const row of getSpacetimeBoostLeaderboard(dbView)) {
+      for (const row of getRailwayBoostLeaderboard(dbView)) {
         byId.set(row.id, row);
       }
 
@@ -408,7 +456,7 @@ export function createBackendLiveRepository(
         if (!user?.id) continue;
         byId.set(user.id, user);
       }
-      for (const user of getSpacetimeKnownLiveUsers(dbView)) {
+      for (const user of getRailwayKnownLiveUsers(dbView)) {
         byId.set(user.id, user);
       }
 
@@ -421,7 +469,7 @@ export function createBackendLiveRepository(
         if (!normalized) continue;
         byUserId.set(normalized.userId, normalized);
       }
-      for (const row of getSpacetimePresence(dbView)) {
+      for (const row of getRailwayPresence(dbView)) {
         byUserId.set(row.userId, row);
       }
 

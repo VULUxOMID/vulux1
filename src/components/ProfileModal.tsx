@@ -19,13 +19,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { AppText } from './AppText';
 import { useProfile } from '../context/ProfileContext';
+import { useWallet } from '../context';
 import { useFriendshipsRepo, useNotificationsRepo } from '../data/provider';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
-import { resolveSessionGate } from '../auth/sessionGate';
+import { readCurrentAuthAccessToken, useAuth as useSessionAuth } from '../auth/clerkSession';
 import { useUserProfile } from '../context/UserProfileContext';
-import { trackSpacetimeProfileView } from '../lib/spacetime';
+import { getConfiguredBackendBaseUrl } from '../config/backendBaseUrl';
+import { getRailwayAuthSnapshot } from '../lib/railwayRuntime';
 import { colors, radius, spacing } from '../theme';
-import { hapticConfirm, hapticTap } from '../utils/haptics';
+import { hapticConfirm, hapticTap, hapticWarn } from '../utils/haptics';
+import { shouldPersistProfileView } from './profileViewEligibility';
 import { UserRole } from '../features/liveroom/types';
 import type { FriendRequestNotification } from '../features/notifications/types';
 
@@ -53,6 +55,54 @@ function normalizeStorySegments(value: unknown): string[] {
   return value
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter((entry): entry is string => entry.length > 0);
+}
+
+async function persistProfileViewToBackend(input: {
+  viewerUserId: string;
+  profileUserId: string;
+  openedAtMs: number;
+  viewerName?: string | null;
+  viewerAvatar?: string | null;
+  source?: string;
+}): Promise<void> {
+  const baseUrl = getConfiguredBackendBaseUrl().trim().replace(/\/+$/, '');
+  const token = await readCurrentAuthAccessToken();
+  if (!baseUrl || !token) {
+    throw new Error('Profile view backend is unavailable.');
+  }
+
+  const eventId = [
+    'profile-view-v2',
+    encodeURIComponent(input.viewerUserId),
+    encodeURIComponent(input.profileUserId),
+    String(input.openedAtMs),
+  ].join('::');
+
+  const response = await fetch(`${baseUrl}/api/social/profile-view`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(getRailwayAuthSnapshot().userId
+        ? { 'X-Vulu-User-Id': getRailwayAuthSnapshot().userId as string }
+        : {}),
+    },
+    body: JSON.stringify({
+      id: eventId,
+      viewerUserId: input.viewerUserId,
+      profileUserId: input.profileUserId,
+      openedAtMs: input.openedAtMs,
+      viewerName: input.viewerName ?? null,
+      viewerAvatar: input.viewerAvatar ?? null,
+      source: input.source ?? 'profile_modal_open',
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(message || `Profile view backend write failed (${response.status})`);
+  }
 }
 
 function getRelationshipStatus(
@@ -97,19 +147,9 @@ function getRelationshipStatus(
 
 export function ProfileModal() {
   const { selectedUser, hideProfile } = useProfile();
-  const {
-    userId: viewerUserId,
-    hasSession,
-    isLoaded: isAuthLoaded,
-    isSignedIn,
-  } = useSessionAuth();
-  const sessionGate = resolveSessionGate({
-    isAuthLoaded,
-    hasSession,
-    isSignedIn,
-    userId: viewerUserId,
-  });
+  const { userId: viewerUserId } = useSessionAuth();
   const { userProfile } = useUserProfile();
+  const { cash, sendCashToUser } = useWallet();
   const friendshipsRepo = useFriendshipsRepo();
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
   const CARD_HEIGHT = SCREEN_HEIGHT * 0.70;
@@ -137,9 +177,14 @@ export function ProfileModal() {
   const [confirmAction, setConfirmAction] = useState<'cancel' | 'unfriend' | null>(null);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [optimisticRequestUntil, setOptimisticRequestUntil] = useState(0);
+  const [showCashTransferModal, setShowCashTransferModal] = useState(false);
+  const [cashTransferAmount, setCashTransferAmount] = useState('');
+  const [cashTransferNote, setCashTransferNote] = useState('');
+  const [isSendingCash, setIsSendingCash] = useState(false);
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const lastSnap = useRef(SNAP_DEFAULT);
+  const lastTrackedProfileViewKeyRef = useRef<string | null>(null);
 
   // Reset and animate only when opening a different profile.
   useEffect(() => {
@@ -155,6 +200,10 @@ export function ProfileModal() {
       setIsLiked(false);
       setToastMessage(null);
       setOptimisticRequestUntil(0);
+      setShowCashTransferModal(false);
+      setCashTransferAmount('');
+      setCashTransferNote('');
+      setIsSendingCash(false);
 
       // Animate to default position
       Animated.spring(translateY, {
@@ -197,22 +246,53 @@ export function ProfileModal() {
   ]);
 
   useEffect(() => {
-    if (!selectedUser?.id || !viewerUserId) {
+    const selectedProfileId = selectedUser?.id ?? null;
+    if (!viewerUserId || !selectedProfileId) {
+      return;
+    }
+    if (
+      !shouldPersistProfileView({
+        viewerUserId,
+        profileUserId: selectedProfileId,
+        isSelfPreview: selectedUser?.isSelfPreview,
+      })
+    ) {
       return;
     }
 
+    const profileViewKey = `${viewerUserId}::${selectedProfileId}`;
+    if (lastTrackedProfileViewKeyRef.current === profileViewKey) {
+      return;
+    }
+    lastTrackedProfileViewKeyRef.current = profileViewKey;
+    const currentViewerUserId = viewerUserId;
+    const currentProfileUserId = selectedProfileId;
+
     const openedAtMs = Date.now();
-    void trackSpacetimeProfileView({
-      viewerUserId,
-      profileUserId: selectedUser.id,
-      openedAtMs,
-      source: 'profile_modal_open',
-    }).catch((error) => {
-      if (__DEV__) {
-        console.warn('[profile] Failed to track profile view', error);
+    void (async () => {
+      try {
+        await persistProfileViewToBackend({
+          viewerUserId: currentViewerUserId,
+          profileUserId: currentProfileUserId,
+          openedAtMs,
+          viewerName: userProfile.name || userProfile.username || null,
+          viewerAvatar: userProfile.avatarUrl || null,
+          source: 'profile_modal_open',
+        });
+      } catch (error) {
+        if (__DEV__) {
+          console.warn('[profile] Failed to persist profile view via backend', error);
+        }
       }
-    });
-  }, [selectedUser?.id, viewerUserId]);
+    })();
+  }, [selectedUser?.id, userProfile.avatarUrl, userProfile.name, userProfile.username, viewerUserId]);
+
+  useEffect(() => {
+    if (selectedUser?.id) {
+      return;
+    }
+    lastTrackedProfileViewKeyRef.current = null;
+  }, [selectedUser?.id]);
 
   useEffect(() => {
     if (optimisticRequestUntil <= 0) return;
@@ -471,14 +551,6 @@ export function ProfileModal() {
 
   // Handle navigating to DMs
   const handleOpenDM = () => {
-    if (!sessionGate.hasAuthenticatedSession) {
-      showToast(
-        sessionGate.shouldShowSignInRequired
-          ? 'Sign in required to open direct messages.'
-          : 'Preparing your session...',
-      );
-      return;
-    }
     const targetUserId =
       (typeof selectedUser?.id === 'string' && selectedUser.id.trim().length > 0
         ? selectedUser.id.trim()
@@ -492,6 +564,57 @@ export function ProfileModal() {
     hapticTap();
     hideProfile();
     router.push(`/chat/${encodeURIComponent(targetUserId)}`);
+  };
+
+  const handleOpenCashTransfer = () => {
+    if (!selectedUser || isSelfPreview) {
+      return;
+    }
+    hapticTap();
+    setCashTransferAmount('');
+    setCashTransferNote('');
+    setShowCashTransferModal(true);
+  };
+
+  const handleSubmitCashTransfer = async () => {
+    if (!selectedUser || isSelfPreview || isSendingCash) {
+      return;
+    }
+
+    const amount = Math.floor(Number(cashTransferAmount.trim()));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      hapticWarn();
+      showToast('Enter a valid cash amount');
+      return;
+    }
+
+    if (amount > cash) {
+      hapticWarn();
+      showToast('Not enough cash');
+      return;
+    }
+
+    setIsSendingCash(true);
+    const result = await sendCashToUser({
+      targetUserId: selectedUser.id,
+      targetHandle: typeof selectedUser.username === 'string' ? selectedUser.username : null,
+      amountCash: amount,
+      note: cashTransferNote.trim().length > 0 ? cashTransferNote.trim() : null,
+      requestIdempotencyKey: `cash-transfer:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    });
+    setIsSendingCash(false);
+
+    if (!result.ok) {
+      hapticWarn();
+      showToast(result.message || 'Cash transfer failed');
+      return;
+    }
+
+    hapticConfirm();
+    setShowCashTransferModal(false);
+    setCashTransferAmount('');
+    setCashTransferNote('');
+    showToast(`Sent $${amount} to @${selectedUser.username || selectedUser.name}`);
   };
 
   // Handle profile preview
@@ -719,6 +842,10 @@ export function ProfileModal() {
                 />
               </Pressable>
 
+              <Pressable style={styles.externalActionBtn} onPress={handleOpenCashTransfer}>
+                <Ionicons name="cash-outline" size={24} color="rgba(255,255,255,0.8)" />
+              </Pressable>
+
               {/* Only show DM button if user is a friend */}
               {friendStatus === 'friends' && (
                 <Pressable style={styles.dmButton} onPress={handleOpenDM}>
@@ -819,6 +946,70 @@ export function ProfileModal() {
                 <Pressable style={styles.confirmYes} onPress={executeConfirmAction}>
                   <AppText style={styles.confirmYesText}>
                     {confirmAction === 'cancel' ? 'Yes, Cancel' : 'Remove'}
+                  </AppText>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
+
+      {showCashTransferModal && (
+        <Modal
+          visible={true}
+          animationType="fade"
+          transparent={true}
+          statusBarTranslucent
+          onRequestClose={() => setShowCashTransferModal(false)}
+        >
+          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+          <Pressable style={styles.confirmOverlay} onPress={() => setShowCashTransferModal(false)}>
+            <Pressable style={styles.confirmModal} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.confirmIconContainer}>
+                <Ionicons name="cash-outline" size={32} color={colors.accentSuccess} />
+              </View>
+              <AppText style={styles.confirmTitle}>Send Cash</AppText>
+              <AppText style={styles.confirmMessage}>
+                Send cash to @{selectedUser?.username || selectedUser?.name}. Available balance: ${cash}
+              </AppText>
+
+              <View style={styles.transferField}>
+                <AppText style={styles.transferLabel}>Amount</AppText>
+                <TextInput
+                  style={styles.transferInput}
+                  keyboardType="number-pad"
+                  placeholder="0"
+                  placeholderTextColor={colors.textMuted}
+                  value={cashTransferAmount}
+                  onChangeText={setCashTransferAmount}
+                />
+              </View>
+
+              <View style={styles.transferField}>
+                <AppText style={styles.transferLabel}>Note</AppText>
+                <TextInput
+                  style={[styles.transferInput, styles.transferNoteInput]}
+                  placeholder="Optional note"
+                  placeholderTextColor={colors.textMuted}
+                  value={cashTransferNote}
+                  onChangeText={setCashTransferNote}
+                  maxLength={120}
+                />
+              </View>
+
+              <View style={styles.confirmButtons}>
+                <Pressable
+                  style={styles.confirmCancel}
+                  onPress={() => setShowCashTransferModal(false)}
+                >
+                  <AppText style={styles.confirmCancelText}>Cancel</AppText>
+                </Pressable>
+                <Pressable
+                  style={[styles.confirmYes, isSendingCash && styles.confirmYesDisabled]}
+                  onPress={handleSubmitCashTransfer}
+                >
+                  <AppText style={styles.confirmYesText}>
+                    {isSendingCash ? 'Sending...' : 'Send'}
                   </AppText>
                 </Pressable>
               </View>
@@ -1268,6 +1459,29 @@ const styles = StyleSheet.create({
     }),
     elevation: 8,
   },
+  transferField: {
+    width: '100%',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  transferLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  transferInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    color: colors.textPrimary,
+    backgroundColor: colors.surfaceAlt,
+  },
+  transferNoteInput: {
+    minHeight: 48,
+  },
   // Confirmation modal styles
   confirmOverlay: {
     flex: 1,
@@ -1359,6 +1573,9 @@ const styles = StyleSheet.create({
       },
     }),
     elevation: 4,
+  },
+  confirmYesDisabled: {
+    opacity: 0.7,
   },
   confirmYesText: {
     fontSize: 16,

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect, useMemo } from 'react';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../auth/clerkSession';
 import { useFriendshipsRepo, useSocialRepo } from '../data/provider';
 import type { SocialUser } from '../data/contracts';
 import { useAppIsActive } from '../hooks/useAppIsActive';
@@ -29,6 +29,30 @@ interface FriendsContextType {
 }
 
 const FriendsContext = createContext<FriendsContextType | undefined>(undefined);
+const EMPTY_SOCIAL_USERS: SocialUser[] = [];
+const EMPTY_ACCEPTED_FRIEND_IDS = new Set<string>();
+const EMPTY_FRIENDS: Friend[] = [];
+
+function areFriendsEqual(left: Friend[], right: Friend[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((friend, index) => {
+    const other = right[index];
+    return (
+      other &&
+      friend.id === other.id &&
+      friend.name === other.name &&
+      friend.username === other.username &&
+      friend.status === other.status &&
+      friend.imageUrl === other.imageUrl &&
+      friend.avatarUrl === other.avatarUrl &&
+      friend.isOnline === other.isOnline &&
+      friend.isLive === other.isLive &&
+      friend.statusText === other.statusText &&
+      friend.lastSeen === other.lastSeen
+    );
+  });
+}
 
 function mapSocialUserToFriend(user: SocialUser): Friend {
   const status: FriendStatus =
@@ -55,14 +79,17 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   const isAppActive = useAppIsActive();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isAppActive;
   const socialUsers = useMemo<SocialUser[]>(
-    () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : []),
+    () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : EMPTY_SOCIAL_USERS),
     [queriesEnabled, socialRepo],
   );
   const acceptedFriendIds = useMemo<Set<string>>(
-    () => new Set(queriesEnabled ? friendshipsRepo.listAcceptedFriendIds() : []),
+    () =>
+      queriesEnabled
+        ? new Set(friendshipsRepo.listAcceptedFriendIds())
+        : EMPTY_ACCEPTED_FRIEND_IDS,
     [friendshipsRepo, queriesEnabled],
   );
-  const [friends, setFriendsState] = useState<Friend[]>([]);
+  const [friends, setFriendsState] = useState<Friend[]>(EMPTY_FRIENDS);
   const [loading, setLoading] = useState(false);
 
   const setFriends = useCallback((newFriends: Friend[]) => {
@@ -70,12 +97,16 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const syncFriendsFromRepo = useCallback(() => {
+    if (!queriesEnabled || !userId) return;
     if (!isAppActive) return;
     const filteredUsers = socialUsers.filter(
       (u) => u.id !== userId && u.id !== 'me' && acceptedFriendIds.has(u.id),
     );
-    setFriendsState(filteredUsers.map(mapSocialUserToFriend));
-  }, [acceptedFriendIds, isAppActive, socialUsers, userId]);
+    const nextFriends = filteredUsers.map(mapSocialUserToFriend);
+    setFriendsState((currentFriends) =>
+      areFriendsEqual(currentFriends, nextFriends) ? currentFriends : nextFriends,
+    );
+  }, [acceptedFriendIds, isAppActive, queriesEnabled, socialUsers, userId]);
 
   const updateFriendStatus = useCallback(async (friendId: string, status: FriendStatus) => {
     setFriendsState((prev) =>

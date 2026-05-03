@@ -21,19 +21,12 @@ import { colors, radius, spacing } from '../../theme';
 import { Friend } from './ActivitiesRow';
 import { LiveItem } from './LiveSection';
 import { useWallet } from '../../context/WalletContext';
-import { hasAuthoritativeWallet } from '../../context/walletHydration';
 import { useLive } from '../../context/LiveContext';
-import {
-  buildRefuelPendingReceipt,
-  IDLE_REFUEL_RECEIPT,
-  runRefuelAction,
-  type RefuelReceiptState,
-} from '../liveroom/refuelFlow';
-import { FUEL_COSTS, FuelFillAmount, getFuelDisplayCapacity } from '../liveroom/types';
+import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../liveroom/types';
 import { hapticTap } from '../../utils/haptics';
 import { normalizeImageUri } from '../../utils/imageSource';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
-import { buildFailureReceipt } from '../shop/shopReceipts';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
+import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 // Base screen width for scaling (iPhone 12/13 width)
 const BASE_SCREEN_WIDTH = 390;
@@ -129,12 +122,11 @@ export function FriendLivePreviewSheet({
   const router = useRouter();
   const { userId } = useSessionAuth();
   const { width: screenWidth } = useWindowDimensions();
-  const { fuel, gems, cash, walletHydrated, walletStateAvailable } = useWallet();
+  const { fuel, gems, cash } = useWallet();
   const { switchLiveRoom } = useLive();
   const isClosingRef = useRef(false);
   const isSwipeDismissRef = useRef(false);
   const [isRefuelSheetVisible, setIsRefuelSheetVisible] = useState(false);
-  const [refuelReceipt, setRefuelReceipt] = useState<RefuelReceiptState>(IDLE_REFUEL_RECEIPT);
   const [selectedFuelOptionIndex, setSelectedFuelOptionIndex] = useState(0);
   const [fuelPaymentType, setFuelPaymentType] = useState<'gems' | 'cash'>('gems');
 
@@ -220,10 +212,9 @@ export function FriendLivePreviewSheet({
   ).current;
 
   // Memoized calculations
-  const fuelDisplayCapacity = useMemo(() => getFuelDisplayCapacity(fuel), [fuel]);
   const fuelPercentage = useMemo(() => {
-    return Math.min((fuel / fuelDisplayCapacity) * 100, 100);
-  }, [fuel, fuelDisplayCapacity]);
+    return Math.min((fuel / MAX_FUEL_MINUTES) * 100, 100);
+  }, [fuel]);
 
   const circleCircumference = 100;
   const strokeDashoffset = useMemo(() => {
@@ -232,16 +223,7 @@ export function FriendLivePreviewSheet({
   const selectedFuelAmount = FUEL_OPTION_STEPS[selectedFuelOptionIndex] ?? FUEL_OPTION_STEPS[0];
   const selectedFuelCost = FUEL_COSTS[selectedFuelAmount];
   const selectedFuelPrice = fuelPaymentType === 'gems' ? selectedFuelCost.gems : selectedFuelCost.cash;
-  const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
-  const hasEnoughBalance = walletReady && (fuelPaymentType === 'gems' ? gems >= selectedFuelCost.gems : cash >= selectedFuelCost.cash);
-  const isRefuelPending = refuelReceipt.status === 'pending';
-  const isRefuelSuccess = refuelReceipt.status === 'success';
-
-  useEffect(() => {
-    if (!isRefuelSheetVisible) {
-      setRefuelReceipt(IDLE_REFUEL_RECEIPT);
-    }
-  }, [isRefuelSheetVisible]);
+  const hasEnoughBalance = fuelPaymentType === 'gems' ? gems >= selectedFuelCost.gems : cash >= selectedFuelCost.cash;
 
   // Memoized grid layout calculation
   const gridRows = useMemo(() => {
@@ -367,9 +349,13 @@ export function FriendLivePreviewSheet({
   }, [live, switchLiveRoom, handleClose, router]);
 
   const handleAddFuel = useCallback(() => {
+    if (fuel >= MAX_FUEL_MINUTES) {
+      toast.info('Your fuel tank is already full.');
+      return;
+    }
     hapticTap();
     setIsRefuelSheetVisible(true);
-  }, []);
+  }, [fuel]);
 
   const handleDecreaseFuelPack = useCallback(() => {
     setSelectedFuelOptionIndex((currentIndex) => Math.max(0, currentIndex - 1));
@@ -384,53 +370,44 @@ export function FriendLivePreviewSheet({
   }, []);
 
   const handleConfirmRefuel = useCallback(async () => {
-    if (isRefuelPending) {
-      return;
-    }
-
-    if (isRefuelSuccess) {
+    if (fuel >= MAX_FUEL_MINUTES) {
+      toast.info('Your fuel tank is already full.');
       setIsRefuelSheetVisible(false);
       return;
     }
 
-    if (!walletReady) {
-      setRefuelReceipt(
-        buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
-      );
-      return;
-    }
-
     if (!hasEnoughBalance) {
-      setRefuelReceipt(
-        buildFailureReceipt(
-          'purchase_fuel',
-          `You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'} to buy this fuel pack.`,
-        ),
-      );
+      toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
       return;
     }
 
     if (!userId) {
-      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
+      toast.error('Sign in required to refuel.');
       return;
     }
 
-    setRefuelReceipt(buildRefuelPendingReceipt(selectedFuelAmount));
-    const nextReceipt = await runRefuelAction({
+    const result = await purchaseFuelPack(
       userId,
-      amount: selectedFuelAmount,
-      paymentType: fuelPaymentType,
-      source: 'friend_live_preview_refuel',
-    });
-    setRefuelReceipt(nextReceipt);
+      selectedFuelAmount,
+      fuelPaymentType,
+      'friend_live_preview_refuel',
+    );
+    if (!result.ok) {
+      if (result.code === 'insufficient_balance') {
+        toast.warning(`You need ${selectedFuelPrice} ${fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}.`);
+      } else {
+        toast.error(result.message ?? 'Refuel failed.');
+      }
+      return;
+    }
+
+    setIsRefuelSheetVisible(false);
+    toast.success(`Added ${selectedFuelAmount}m fuel.`);
     hapticTap();
   }, [
     fuel,
     fuelPaymentType,
     hasEnoughBalance,
-    isRefuelPending,
-    isRefuelSuccess,
-    walletReady,
     selectedFuelAmount,
     selectedFuelPrice,
     userId,
@@ -716,34 +693,13 @@ export function FriendLivePreviewSheet({
             <View style={styles.refuelOverlay}>
               <Pressable
                 style={styles.refuelOverlayBackdrop}
-                onPress={isRefuelPending ? undefined : () => setIsRefuelSheetVisible(false)}
+                onPress={() => setIsRefuelSheetVisible(false)}
               />
               <View style={styles.refuelSheet}>
                 <AppText style={styles.refuelTitle}>Refuel Before Joining</AppText>
                 <AppText style={styles.refuelSubtitle}>
                   Pick your fuel pack without leaving this live preview.
                 </AppText>
-
-                {refuelReceipt.status !== 'idle' ? (
-                  <View
-                    style={[
-                      styles.refuelStatusCard,
-                      refuelReceipt.status === 'success'
-                        ? styles.refuelStatusCardSuccess
-                        : refuelReceipt.status === 'failure'
-                          ? styles.refuelStatusCardFailure
-                          : styles.refuelStatusCardPending,
-                    ]}
-                  >
-                    <AppText style={styles.refuelStatusTitle}>{refuelReceipt.title}</AppText>
-                    <AppText style={styles.refuelStatusMessage}>{refuelReceipt.message}</AppText>
-                    {refuelReceipt.balanceAfter ? (
-                      <AppText style={styles.refuelStatusBalance}>
-                        Wallet now: {refuelReceipt.balanceAfter.gems} Gems • {refuelReceipt.balanceAfter.cash} Cash • {refuelReceipt.balanceAfter.fuel}m Fuel
-                      </AppText>
-                    ) : null}
-                  </View>
-                ) : null}
 
                 <View style={styles.refuelPaymentRow}>
                   <Pressable
@@ -752,7 +708,6 @@ export function FriendLivePreviewSheet({
                       fuelPaymentType === 'gems' && styles.refuelPaymentChipActive,
                     ]}
                     onPress={() => setFuelPaymentType('gems')}
-                    disabled={isRefuelPending || isRefuelSuccess}
                   >
                     <AppText
                       style={[
@@ -760,7 +715,7 @@ export function FriendLivePreviewSheet({
                         fuelPaymentType === 'gems' && styles.refuelPaymentTextActive,
                       ]}
                     >
-                      {walletReady ? `Gems (${gems})` : 'Gems'}
+                      Gems ({gems})
                     </AppText>
                   </Pressable>
                   <Pressable
@@ -769,7 +724,6 @@ export function FriendLivePreviewSheet({
                       fuelPaymentType === 'cash' && styles.refuelPaymentChipActive,
                     ]}
                     onPress={() => setFuelPaymentType('cash')}
-                    disabled={isRefuelPending || isRefuelSuccess}
                   >
                     <AppText
                       style={[
@@ -777,7 +731,7 @@ export function FriendLivePreviewSheet({
                         fuelPaymentType === 'cash' && styles.refuelPaymentTextActive,
                       ]}
                     >
-                      {walletReady ? `Cash (${cash})` : 'Cash'}
+                      Cash ({cash})
                     </AppText>
                   </Pressable>
                 </View>
@@ -789,7 +743,7 @@ export function FriendLivePreviewSheet({
                       selectedFuelOptionIndex === 0 && styles.refuelStepButtonDisabled,
                     ]}
                     onPress={handleDecreaseFuelPack}
-                    disabled={selectedFuelOptionIndex === 0 || isRefuelPending || isRefuelSuccess}
+                    disabled={selectedFuelOptionIndex === 0}
                   >
                     <Ionicons name="remove" size={18} color={colors.textPrimary} />
                   </Pressable>
@@ -806,7 +760,7 @@ export function FriendLivePreviewSheet({
                         styles.refuelStepButtonDisabled,
                     ]}
                     onPress={handleIncreaseFuelPack}
-                    disabled={selectedFuelOptionIndex === FUEL_OPTION_STEPS.length - 1 || isRefuelPending || isRefuelSuccess}
+                    disabled={selectedFuelOptionIndex === FUEL_OPTION_STEPS.length - 1}
                   >
                     <Ionicons name="add" size={18} color={colors.textPrimary} />
                   </Pressable>
@@ -817,28 +771,19 @@ export function FriendLivePreviewSheet({
                     Cost: {selectedFuelPrice} {fuelPaymentType === 'gems' ? 'Gems' : 'Cash'}
                   </AppText>
                   <AppText style={styles.refuelTankText}>
-                    Tank after: {fuel + selectedFuelAmount}m
+                    Tank after: {Math.min(fuel + selectedFuelAmount, MAX_FUEL_MINUTES)}m
                   </AppText>
                 </View>
 
                 <Pressable
                   style={[
                     styles.refuelConfirmButton,
-                    isRefuelPending || (!hasEnoughBalance && !isRefuelSuccess)
-                      ? styles.refuelConfirmButtonDisabled
-                      : null,
+                    !hasEnoughBalance && styles.refuelConfirmButtonDisabled,
                   ]}
                   onPress={handleConfirmRefuel}
-                  disabled={isRefuelPending || (!hasEnoughBalance && !isRefuelSuccess)}
                 >
                   <AppText style={styles.refuelConfirmButtonText}>
-                    {isRefuelPending
-                      ? 'Processing...'
-                      : isRefuelSuccess
-                        ? 'Done'
-                        : !walletReady
-                          ? 'Syncing wallet...'
-                          : 'Add Fuel'}
+                    Add Fuel
                   </AppText>
                 </Pressable>
               </View>
@@ -1183,39 +1128,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     textAlign: 'center',
-  },
-  refuelStatusCard: {
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    gap: spacing.xs,
-  },
-  refuelStatusCardPending: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  refuelStatusCardSuccess: {
-    backgroundColor: 'rgba(34, 197, 94, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(34, 197, 94, 0.28)',
-  },
-  refuelStatusCardFailure: {
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.24)',
-  },
-  refuelStatusTitle: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  refuelStatusMessage: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  refuelStatusBalance: {
-    color: colors.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
   },
   refuelPaymentRow: {
     flexDirection: 'row',

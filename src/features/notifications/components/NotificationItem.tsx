@@ -5,6 +5,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '../../../components';
 import { colors, spacing, radius } from '../../../theme';
 import { Notification, ActivityNotification } from '../types';
+import { resolveActivityNotificationNavigation } from '../notificationNavigation';
+import {
+  getActivityNotificationAccessibilityText,
+  shouldPrefixActivityActor,
+} from '../activityNotificationText';
+import { countsTowardUnreadNotificationBadges } from '../unreadBadgeState';
 
 interface NotificationItemProps {
   item: Notification;
@@ -69,7 +75,7 @@ function getAccessibilityLabel(item: Notification): string {
     case 'profile_view':
       return `${item.viewer.name} viewed your profile, ${time}`;
     case 'activity':
-      return `${item.fromUser?.name ?? 'Someone'} ${item.message}, ${time}`;
+      return `${getActivityNotificationAccessibilityText(item)}, ${time}`;
     default:
       return `Notification, ${time}`;
   }
@@ -80,6 +86,7 @@ export function NotificationItem({ item, onAction, onPress, onLongPress }: Notif
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendRequestStatus = item.type === 'friend_request' ? item.status : undefined;
   const friendRequestDirection = item.type === 'friend_request' ? (item.direction ?? 'received') : undefined;
+  const showsUnreadIndicator = countsTowardUnreadNotificationBadges(item);
 
   useEffect(() => {
     return () => {
@@ -166,7 +173,7 @@ export function NotificationItem({ item, onAction, onPress, onLongPress }: Notif
                   </View>
                 )}
                 <AppText style={styles.time}>{formatTime(item.createdAt)}</AppText>
-                {!item.read && <View style={styles.unreadDot} />}
+                {showsUnreadIndicator && <View style={styles.unreadDot} />}
               </View>
               {isSent ? (
                 <View style={styles.actionRow}>
@@ -277,13 +284,15 @@ export function NotificationItem({ item, onAction, onPress, onLongPress }: Notif
 
       case 'activity':
         const groupedNames = item.groupedNames ?? [];
+        const showActorPrefix = shouldPrefixActivityActor(item);
+        const showGroupedPrefix = showActorPrefix && Boolean(item.groupCount && item.groupCount > 1 && groupedNames.length > 0);
         return (
           <View style={styles.contentContainer}>
             <AppText style={styles.primaryText}>
-              {item.fromUser ? (
+              {showActorPrefix && item.fromUser ? (
                 <AppText style={styles.bold}>{item.fromUser.name}</AppText>
               ) : null}
-              {item.groupCount && item.groupCount > 1 && groupedNames.length > 0 ? (
+              {showGroupedPrefix ? (
                 <AppText style={styles.primaryText}>
                   {' + '}
                   <AppText style={styles.bold}>
@@ -293,7 +302,8 @@ export function NotificationItem({ item, onAction, onPress, onLongPress }: Notif
                   </AppText>
                 </AppText>
               ) : null}
-              {' '}{item.message}
+              {showActorPrefix && (item.fromUser || showGroupedPrefix) ? ' ' : null}
+              {item.message}
             </AppText>
 
             {item.metadata?.preview && (
@@ -314,14 +324,12 @@ export function NotificationItem({ item, onAction, onPress, onLongPress }: Notif
               <View style={styles.actionRow}>
                 <Pressable
                   style={[styles.actionBtn, styles.replyBtn]}
-                  onPress={() =>
-                    onAction?.('navigation', item.id, {
-                      type: 'open_chat',
-                      metadata: item.metadata,
-                      messageId: item.metadata?.messageId,
-                      replyToMessageId: item.metadata?.messageId,
-                    })
-                  }
+                  onPress={() => {
+                    const action = resolveActivityNotificationNavigation(item, 'reply');
+                    if (action) {
+                      onAction?.('navigation', item.id, action);
+                    }
+                  }}
                   accessibilityRole="button"
                   accessibilityLabel="Reply to mention"
                 >

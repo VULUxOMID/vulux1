@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Keyboard, Platform, ScrollView, StyleSheet, UIManager } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
 
 import { AppScreen } from '../../components';
 import { useFriends } from '../../context';
@@ -28,19 +28,81 @@ import {
 } from './activityFriends';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
 import { useUserProfile } from '../../context/UserProfileContext';
-import { resolveSessionGate } from '../../auth/sessionGate';
 import {
-  spacetimeDb,
+  railwayDb,
   subscribeBootstrap,
   subscribeGlobalChat,
-  subscribeSpacetimeDataChanges,
-} from '../../lib/spacetime';
+  subscribeRailwayDataChanges,
+} from '../../lib/railwayRuntime';
 import { useLive } from '../../context/LiveContext';
 import { deriveHostActiveLiveFallback, mergeHomeLiveNowList } from './liveNowList';
 import {
   countDistinctActivePlayersNow,
   readActivePlayersNowFromEventOverview,
 } from './widgets/eventRuntimeConfig';
+
+const PREVIEW_LIVES: LiveItem[] = [
+  {
+    id: 'preview-live-1',
+    title: 'Late Night Vibes & Editing',
+    viewers: 12400,
+    boosted: true,
+    images: ['https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=1200&q=80'],
+    hosts: [
+      {
+        id: 'preview-host-1',
+        username: 'alex_creates',
+        name: 'Alex Creates',
+        age: 25,
+        country: 'NO',
+        bio: '',
+        avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=600&q=80',
+      },
+    ],
+  },
+  {
+    id: 'preview-live-2',
+    title: 'Ranked Grind',
+    viewers: 842,
+    images: ['https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=1200&q=80'],
+    hosts: [
+      {
+        id: 'preview-host-2',
+        username: 'mia_live',
+        name: 'Mia',
+        age: 24,
+        country: 'SE',
+        bio: '',
+        avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=600&q=80',
+      },
+    ],
+  },
+  {
+    id: 'preview-live-3',
+    title: 'House Set',
+    viewers: 2100,
+    images: ['https://images.unsplash.com/photo-1571266028243-d220c9d4cf3a?auto=format&fit=crop&w=1200&q=80'],
+    hosts: [
+      {
+        id: 'preview-host-3',
+        username: 'zoe_mix',
+        name: 'Zoe',
+        age: 26,
+        country: 'DK',
+        bio: '',
+        avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=600&q=80',
+      },
+    ],
+  },
+];
+
+const PREVIEW_FRIENDS: Friend[] = [
+  { id: 'preview-friend-1', name: 'Mia', status: 'live', liveId: 'preview-live-2', imageUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=400&q=80' },
+  { id: 'preview-friend-2', name: 'Leo', status: 'recent', imageUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80' },
+  { id: 'preview-friend-3', name: 'Zoe', status: 'live', liveId: 'preview-live-3', imageUrl: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=400&q=80' },
+  { id: 'preview-friend-4', name: 'Kai', status: 'recent', imageUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80' },
+  { id: 'preview-friend-5', name: 'Ava', status: 'recent', imageUrl: 'https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=400&q=80' },
+];
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -50,28 +112,23 @@ export default function HomeScreen() {
     openChat?: string;
     messageId?: string;
     replyToMessageId?: string;
+    preview?: string | string[];
   }>();
   const insets = useSafeAreaInsets();
-  const { isLoaded: isAuthLoaded, hasSession, isSignedIn, userId } = useSessionAuth();
-  const { friends, loading: friendsLoading, refreshFriends } = useFriends();
+  const isPreview =
+    __DEV__ &&
+    (params.preview === '1' ||
+      params.preview === 'true' ||
+      (Array.isArray(params.preview) && params.preview.includes('1')));
+  const { isLoaded: isAuthLoaded, isSignedIn, userId } = useSessionAuth();
+  const { friends, loading: friendsLoading } = useFriends();
   const { userProfile } = useUserProfile();
   const { activeLive, liveRoom, isHost, isLiveEnding, liveState } = useLive();
   const [eventMetricsRefreshNonce, setEventMetricsRefreshNonce] = useState(0);
   const currentUserDisplayName = userProfile.name || userProfile.username || 'User';
-  const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } = useRepositories();
-  const sessionGate = useMemo(
-    () =>
-      resolveSessionGate({
-        isAuthLoaded,
-        hasSession,
-        isSignedIn,
-        userId,
-        isFocused,
-        isAppActive,
-      }),
-    [hasSession, isAppActive, isAuthLoaded, isFocused, isSignedIn, userId],
-  );
-  const queriesEnabled = sessionGate.canRunForegroundQueries;
+  const { messages: messagesRepo, live: liveRepo, notifications: notificationsRepo } =
+    useRepositories();
+  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const repositoryLives = useMemo<LiveItem[]>(
     () => (queriesEnabled ? liveRepo.listLives({ limit: 100 }) : []),
     [liveRepo, queriesEnabled],
@@ -121,12 +178,14 @@ export default function HomeScreen() {
         return count;
       }
 
-      const chatId = typeof metadata.chatId === 'string' ? metadata.chatId.trim().toLowerCase() : '';
+      const chatId =
+        typeof metadata.chatId === 'string' ? metadata.chatId.trim().toLowerCase() : '';
       if (chatId.length > 0 && chatId !== 'global') {
         return count;
       }
 
-      const roomId = typeof metadata.roomId === 'string' ? metadata.roomId.trim().toLowerCase() : '';
+      const roomId =
+        typeof metadata.roomId === 'string' ? metadata.roomId.trim().toLowerCase() : '';
       if (roomId.length > 0 && roomId !== 'global') {
         return count;
       }
@@ -140,15 +199,15 @@ export default function HomeScreen() {
     () =>
       queriesEnabled
         ? liveRepo.listPresence({
-          limit: 500,
-          userIds: friendIds,
-        })
+            limit: 500,
+            userIds: friendIds,
+          })
         : [],
     [friendIds, liveRepo, queriesEnabled],
   );
   const activePlayersNow = useMemo(() => {
     if (!queriesEnabled) return 0;
-    const overviewActivePlayers = readActivePlayersNowFromEventOverview((spacetimeDb as any).db);
+    const overviewActivePlayers = readActivePlayersNowFromEventOverview((railwayDb as any).db);
     if (overviewActivePlayers !== null) {
       return overviewActivePlayers;
     }
@@ -180,6 +239,14 @@ export default function HomeScreen() {
     () => buildActivityFriends(friends, validFriendActivities),
     [friends, validFriendActivities],
   );
+  const displayLives = useMemo(
+    () => (isPreview && lives.length === 0 ? PREVIEW_LIVES : lives),
+    [isPreview, lives],
+  );
+  const displayActivityFriends = useMemo(
+    () => (isPreview && activityFriends.length === 0 ? PREVIEW_FRIENDS : activityFriends),
+    [activityFriends, isPreview],
+  );
   const scrollRef = useRef<ScrollView>(null);
   const lastScrollY = useRef(0);
   const searchAnim = useRef(new Animated.Value(0)).current;
@@ -187,13 +254,11 @@ export default function HomeScreen() {
   const searchVisibleRef = useRef(false);
   const canToggleSearchRef = useRef(true);
   const [showChat, setShowChat] = useState(false);
-  const [globalChatLoading, setGlobalChatLoading] = useState(false);
   const [globalMessages, setGlobalMessages] = useState<ChatMessage[]>([]);
   const [targetMessageId, setTargetMessageId] = useState<string | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string | null>(null);
   const lastRemoteGlobalMessagesRef = useRef<ChatMessage[]>([]);
 
-  // Friend Live Preview State
   const [friendSheetVisible, setFriendSheetVisible] = useState(false);
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [previewLive, setPreviewLive] = useState<LiveItem | null>(null);
@@ -225,7 +290,6 @@ export default function HomeScreen() {
           message.status !== 'failed',
       );
       if (mergedRemoteMessages.length === 0 && hasPersistedRemoteMessages) {
-        // Avoid wiping the chat during transient reconnect/subscription gaps.
         return previousMessages;
       }
 
@@ -254,30 +318,13 @@ export default function HomeScreen() {
   }, [isAuthLoaded, isSignedIn, userId]);
 
   useEffect(() => {
-    if (!showChat || !queriesEnabled) {
-      setGlobalChatLoading(false);
-      return;
-    }
-    if (repositoryGlobalMessages.length > 0 || globalMessages.length > 0) {
-      setGlobalChatLoading(false);
-      return;
-    }
-
-    setGlobalChatLoading(true);
-    const timer = setTimeout(() => {
-      setGlobalChatLoading(false);
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [globalMessages.length, queriesEnabled, repositoryGlobalMessages.length, showChat]);
-
-  useEffect(() => {
     if (!queriesEnabled) return;
     requestBackendRefresh();
   }, [queriesEnabled]);
 
   useEffect(() => {
     if (!queriesEnabled) return;
-    return subscribeSpacetimeDataChanges((event) => {
+    return subscribeRailwayDataChanges((event) => {
       if (!event.scopes.includes('events') && !event.scopes.includes('live')) {
         return;
       }
@@ -291,16 +338,15 @@ export default function HomeScreen() {
     }
     const unsubscribe = showChat
       ? subscribeGlobalChat('global', {
-        limit: 220,
-        windowMs: 24 * 60 * 60 * 1000,
-      })
+          limit: 220,
+          windowMs: 24 * 60 * 60 * 1000,
+        })
       : subscribeBootstrap();
     return () => {
       unsubscribe();
     };
   }, [queriesEnabled, showChat]);
 
-  // Handle deep link params
   useEffect(() => {
     if (params.openChat === 'true') {
       setShowChat(true);
@@ -320,9 +366,9 @@ export default function HomeScreen() {
           flex: 1,
         },
         scrollContent: {
-          paddingBottom: spacing.xl * 4,
+          paddingBottom: spacing.xl * 5,
           paddingHorizontal: spacing.lg,
-          gap: spacing.sm,
+          gap: spacing.md,
         },
       }),
     [],
@@ -445,15 +491,13 @@ export default function HomeScreen() {
       const dy = y - lastScrollY.current;
       lastScrollY.current = y;
 
-      // Dismiss keyboard when scrolling with sufficient movement (threshold prevents accidental dismiss)
       if (Math.abs(dy) > 5) {
         Keyboard.dismiss();
       }
 
-      // Toggle search on pull-down (overscroll at top)
       if (y < -60) {
         if (canToggleSearchRef.current) {
-          canToggleSearchRef.current = false; // Lock
+          canToggleSearchRef.current = false;
 
           if (searchVisibleRef.current) {
             closeSearch();
@@ -461,9 +505,7 @@ export default function HomeScreen() {
             openSearch();
           }
         }
-      }
-      // Reset toggle lock when back in normal range
-      else if (y > -20) {
+      } else if (y > -20) {
         canToggleSearchRef.current = true;
       }
     },
@@ -486,12 +528,11 @@ export default function HomeScreen() {
 
       if (friend.status === 'live' || friend.status === 'online') {
         const live = friend.liveId
-          ? lives.find((item) => item.id === friend.liveId)
+          ? displayLives.find((item) => item.id === friend.liveId)
           : undefined;
         if (!live) return;
 
-        // Other friends in this preview: only friends watching the same live room.
-        const others = activityFriends.filter(
+        const others = displayActivityFriends.filter(
           (f: Friend) =>
             (f.status === 'live' || f.status === 'online') &&
             f.id !== friend.id &&
@@ -504,15 +545,17 @@ export default function HomeScreen() {
         setFriendSheetVisible(true);
       }
     },
-    [activityFriends, lives],
+    [displayActivityFriends, displayLives],
   );
 
   return (
     <AppScreen noPadding>
-      {/* Sticky Header */}
-      <HomeStickyHeader searchAnim={searchAnim} searchText={searchText} onChangeSearchText={setSearchText} />
+      <HomeStickyHeader
+        searchAnim={searchAnim}
+        searchText={searchText}
+        onChangeSearchText={setSearchText}
+      />
 
-      {/* Scrollable Content */}
       <Animated.ScrollView
         ref={scrollRef}
         style={styles.scroll}
@@ -522,19 +565,19 @@ export default function HomeScreen() {
         onScroll={handleScroll}
       >
         <ActivitiesRow
-          friends={activityFriends}
+          friends={displayActivityFriends}
           onFriendPress={handleFriendPress}
           loading={friendsLoading}
         />
         <HomeWidgetStack
-          onOpenChat={() => setShowChat((current) => !current)}
+          onOpenChat={() => setShowChat(true)}
           onAnnounceWinner={handleWinnerAnnouncement}
           friends={friends}
           activePlayersNow={activePlayersNow}
           messageCount={globalChatNotificationCount}
           isChatOpen={showChat}
         />
-        <LiveSection lives={lives} />
+        <LiveSection lives={displayLives} />
       </Animated.ScrollView>
 
       <FloatingGoLiveButton
@@ -552,8 +595,6 @@ export default function HomeScreen() {
           setShowChat(false);
           setTargetMessageId(null);
           setReplyToMessageId(null);
-          // Clear params without reloading? Or just leave them.
-          // Better to clear so next time it works even if same id?
           router.setParams({
             openChat: undefined,
             messageId: undefined,
@@ -579,7 +620,6 @@ export default function HomeScreen() {
         }}
         currentUserDisplayName={currentUserDisplayName}
         currentUserId={userId}
-        isLoading={globalChatLoading}
       />
 
       <FriendLivePreviewSheet

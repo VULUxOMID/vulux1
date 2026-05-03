@@ -18,13 +18,20 @@
     ],
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.vulustudio.vulu",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Allow microphone access to record voice messages."
+        "NSMicrophoneUsageDescription": "Allow microphone access so you can speak in live rooms.",
+        "NSCameraUsageDescription": "Allow camera access so you can share video in live rooms."
       }
     },
     "android": {
       "package": "com.vulustudio.vulu",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#23272A"
@@ -39,6 +46,8 @@
     "plugins": [
       "expo-router",
       "expo-dev-client",
+      "expo-notifications",
+      "@config-plugins/react-native-webrtc",
       "expo-audio",
       "expo-font",
       [
@@ -48,7 +57,8 @@
           "cameraPermission": "Allow Vulu to access your camera so you can take a selfie.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true

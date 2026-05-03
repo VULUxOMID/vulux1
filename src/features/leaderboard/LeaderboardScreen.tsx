@@ -2,57 +2,49 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
-import { AppScreen, AppText } from '../../components';
-import { spacing } from '../../theme';
-import { useWallet } from '../../context';
+import { AppScreen } from '../../components';
 import { useProfile } from '../../context/ProfileContext';
 import { useAuth } from '../../context/AuthContext';
 import { useUserProfile } from '../../context/UserProfileContext';
-import { useFriendshipsRepo, useLeaderboardRepo } from '../../data/provider';
+import { useLeaderboardRepo } from '../../data/provider';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
+import { useAppIsActive } from '../../hooks/useAppIsActive';
+import {
+  getRailwayTelemetrySnapshot,
+  subscribeLeaderboard,
+  subscribeRailwayTelemetry,
+} from '../../lib/railwayRuntime';
+import { spacing } from '../../theme';
 import { hapticTap } from '../../utils/haptics';
 import type { LiveUser } from '../liveroom/types';
 import { LeaderboardEmptyState } from './components/LeaderboardEmptyState';
 import { LeaderboardItemRow } from './components/LeaderboardItemRow';
 import { LeaderboardListHeader } from './components/LeaderboardListHeader';
 import type { LeaderboardItem } from './types';
-import {
-  getSpacetimeTelemetrySnapshot,
-  subscribeBootstrap,
-  subscribeSpacetimeTelemetry,
-} from '../../lib/spacetime';
-import {
-  buildCurrentUserPreviewEntry,
-  buildVisibleLeaderboardItems,
-  deriveCurrentUserLabels,
-  getMeScopeSummary,
-} from './viewModel';
 
 type LeaderboardScope = 'all' | 'friends' | 'me';
-type EmptyStateConfig = {
-  iconName: React.ComponentProps<typeof LeaderboardEmptyState>['iconName'];
-  title: string;
-  message: string;
-  loading?: boolean;
-};
+type LeaderboardStatusTone = 'loading' | 'reconnect' | 'info' | null;
 
 export function LeaderboardScreen() {
   const { showProfile } = useProfile();
   const isFocused = useIsFocused();
-  const { user, initializing } = useAuth();
+  const isAppActive = useAppIsActive();
+  const { user } = useAuth();
+  const {
+    isLoaded: isAuthLoaded,
+    isSignedIn,
+    userId: sessionUserId,
+  } = useSessionAuth();
   const { userProfile } = useUserProfile();
-  const { cash } = useWallet();
-  const friendshipsRepo = useFriendshipsRepo();
   const leaderboardRepo = useLeaderboardRepo();
-  const [isPublic, setIsPublic] = useState(true);
+  const [telemetry, setTelemetry] = useState(getRailwayTelemetrySnapshot());
   const [scope, setScope] = useState<LeaderboardScope>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [telemetrySnapshot, setTelemetrySnapshot] = useState(() =>
-    getSpacetimeTelemetrySnapshot(),
-  );
-  const queriesEnabled = !initializing && !!user?.uid && isFocused;
+  const queriesEnabled = isAuthLoaded && isSignedIn && !!sessionUserId && isFocused && isAppActive;
+  const currentUserId = sessionUserId ?? user?.uid ?? userProfile.id;
 
-  useEffect(() => subscribeSpacetimeTelemetry(setTelemetrySnapshot), []);
+  useEffect(() => subscribeRailwayTelemetry(setTelemetry), []);
 
   useEffect(() => {
     if (!queriesEnabled) {
@@ -65,220 +57,174 @@ export function LeaderboardScreen() {
     if (!queriesEnabled) {
       return;
     }
-    return subscribeBootstrap();
+    return subscribeLeaderboard();
   }, [queriesEnabled]);
 
-  const acceptedFriendIds = useMemo(
-    () => new Set(queriesEnabled ? friendshipsRepo.listAcceptedFriendIds() : []),
-    [friendshipsRepo, queriesEnabled],
-  );
-
-  const rawLeaderboardData = useMemo(
+  const authoritativeRows = useMemo(
     () =>
       queriesEnabled
-        ? leaderboardRepo.listLeaderboardItems({ limit: 200, includeCurrentUser: true })
+        ? [...leaderboardRepo.listLeaderboardItems({ limit: 200, includeCurrentUser: true })].sort(
+            (left, right) => left.rank - right.rank,
+          )
         : [],
     [leaderboardRepo, queriesEnabled],
   );
 
   const leaderboardData = useMemo(() => {
-    const currentUserLabels = deriveCurrentUserLabels(user, userProfile);
-    return rawLeaderboardData.map((item) => {
-      const isCurrentUser =
-        item.isCurrentUser || item.id === user?.uid || item.id === userProfile.id;
-      if (!isCurrentUser) {
-        return {
-          ...item,
-          isFriend: item.isFriend ?? acceptedFriendIds.has(item.id),
-        };
+    return authoritativeRows.map((item) => {
+      const isCurrentUser = !!currentUserId && item.id === currentUserId;
+      if (!isCurrentUser && !item.isCurrentUser) {
+        return item;
       }
 
       return {
         ...item,
-        displayName: currentUserLabels.displayName,
-        username: currentUserLabels.username,
-        avatarUrl: currentUserLabels.avatarUrl || item.avatarUrl,
+        displayName:
+          item.displayName ||
+          userProfile.name ||
+          user?.displayName ||
+          userProfile.username ||
+          item.username ||
+          'You',
+        username: item.username || userProfile.username || '',
+        avatarUrl: item.avatarUrl || userProfile.avatarUrl || user?.photoURL || '',
         isCurrentUser: true,
-        isFriend: false,
       };
     });
   }, [
-    acceptedFriendIds,
-    cash,
-    rawLeaderboardData,
-    user,
-    userProfile,
+    authoritativeRows,
+    currentUserId,
+    user?.displayName,
+    user?.photoURL,
+    userProfile.avatarUrl,
+    userProfile.name,
+    userProfile.username,
   ]);
 
-  const currentUserEntry = useMemo(
+  const currentUserRow = useMemo(
     () =>
       leaderboardData.find(
-        (item) => item.isCurrentUser || item.id === user?.uid || item.id === userProfile.id,
+        (item) => item.isCurrentUser || (!!currentUserId && item.id === currentUserId),
       ) ?? null,
-    [leaderboardData, user?.uid, userProfile.id],
-  );
-  const currentUserPreview = useMemo(
-    () =>
-      buildCurrentUserPreviewEntry({
-        currentUserEntry,
-        user,
-        userProfile,
-        cashAmount: cash,
-      }),
-    [cash, currentUserEntry, user, userProfile],
+    [currentUserId, leaderboardData],
   );
 
   const filteredData = useMemo(() => {
-    return buildVisibleLeaderboardItems({
-      scope,
-      isPublic,
-      searchQuery,
-      leaderboardData,
-      currentUserPreview,
-      currentUserId: user?.uid ?? userProfile.id,
-      acceptedFriendIds,
-    });
-  }, [
-    acceptedFriendIds,
-    currentUserPreview,
-    isPublic,
-    leaderboardData,
-    scope,
-    searchQuery,
-    user?.uid,
-    userProfile.id,
-  ]);
+    const normalizedQuery = searchQuery.trim().toLowerCase();
 
-  const isConnecting =
-    telemetrySnapshot.connectionState === 'idle' ||
-    telemetrySnapshot.connectionState === 'connecting' ||
-    telemetrySnapshot.subscriptionState === 'idle' ||
-    telemetrySnapshot.subscriptionState === 'subscribing';
-  const hasConnectionError =
-    telemetrySnapshot.connectionState === 'disconnected' ||
-    telemetrySnapshot.connectionState === 'error' ||
-    telemetrySnapshot.subscriptionState === 'error';
-  const isInitialLoad = queriesEnabled && rawLeaderboardData.length === 0 && isConnecting;
-  const isReconnectState = queriesEnabled && rawLeaderboardData.length > 0 && !(
-    telemetrySnapshot.connectionState === 'connected' &&
-    telemetrySnapshot.subscriptionState === 'active'
+    return leaderboardData.filter((item) => {
+      if (scope === 'friends' && !item.isFriend) {
+        return false;
+      }
+      if (scope === 'me' && !item.isCurrentUser) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      return (
+        item.displayName.toLowerCase().includes(normalizedQuery) ||
+        item.username.toLowerCase().includes(normalizedQuery)
+      );
+    });
+  }, [leaderboardData, scope, searchQuery]);
+
+  const rankedCount = leaderboardData.length;
+  const friendRankedCount = useMemo(
+    () => leaderboardData.filter((item) => item.isFriend).length,
+    [leaderboardData],
   );
 
-  const summaryText = useMemo(() => {
-    if (scope === 'me') {
-      return getMeScopeSummary(currentUserPreview, isPublic);
-    }
+  const isLoading =
+    queriesEnabled &&
+    rankedCount === 0 &&
+    (telemetry.connectionState === 'connecting' ||
+      telemetry.subscriptionState === 'idle' ||
+      telemetry.subscriptionState === 'subscribing');
 
-    if (scope === 'friends') {
-      return filteredData.length === 1
-        ? '1 friend ranked right now.'
-        : `${filteredData.length} friends ranked right now.`;
-    }
+  const isReconnecting =
+    queriesEnabled &&
+    rankedCount > 0 &&
+    (telemetry.connectionState !== 'connected' || telemetry.subscriptionState !== 'active');
 
-    return filteredData.length === 1
-      ? '1 ranked profile in the current view.'
-      : `${filteredData.length} ranked profiles in the current view.`;
-  }, [currentUserPreview, filteredData.length, isPublic, scope]);
-
-  const statusLabel = useMemo(() => {
-    if (isReconnectState) {
-      return 'Leaderboard is reconnecting. Rows on screen are the latest hydrated snapshot.';
-    }
-    if (queriesEnabled && rawLeaderboardData.length === 0 && hasConnectionError) {
-      return 'Leaderboard connection dropped before rows arrived. Stay here and it will retry.';
-    }
-    return null;
-  }, [hasConnectionError, isReconnectState, queriesEnabled, rawLeaderboardData.length]);
-
-  const emptyState = useMemo<EmptyStateConfig>(() => {
-    if (isInitialLoad) {
+  const status = useMemo<{
+    tone: LeaderboardStatusTone;
+    title: string;
+    message: string;
+  }>(() => {
+    if (isLoading) {
       return {
-        iconName: 'sync-outline',
-        title: 'Syncing leaderboard',
-        message: 'Waiting for ranked profiles to hydrate from the live snapshot.',
-        loading: true,
+        tone: 'loading',
+        title: 'Loading live ranking',
+        message: 'Waiting for the ranked snapshot to hydrate on this device.',
       };
     }
 
-    if (queriesEnabled && rawLeaderboardData.length === 0 && hasConnectionError) {
+    if (isReconnecting) {
       return {
-        iconName: 'cloud-offline-outline',
-        title: 'Leaderboard reconnecting',
-        message: 'No leaderboard rows arrived before the connection dropped.',
+        tone: 'reconnect',
+        title: 'Reconnecting leaderboard',
+        message: 'Showing the last synced list while realtime catches back up.',
       };
     }
 
-    if (searchQuery.trim()) {
+    if (rankedCount > 0 && !currentUserRow && queriesEnabled) {
       return {
-        iconName: 'search-outline',
-        title: 'No matching players',
-        message: 'Try a different display name or username.',
-      };
-    }
-
-    if (scope === 'friends') {
-      return {
-        iconName: 'people-outline',
-        title: 'No ranked friends yet',
-        message: 'Friends will appear here as soon as they have leaderboard rows.',
-      };
-    }
-
-    if (scope === 'me') {
-      return {
-        iconName: 'person-outline',
-        title: isPublic ? 'Your rank is not available yet' : 'You are hidden from the leaderboard',
-        message: isPublic
-          ? 'Your personal row stays visible here while the authoritative rank finishes hydrating.'
-          : 'Turn Public Profile back on to show your row to other players. Your personal view stays here.',
+        tone: 'info',
+        title: 'Your row is still syncing',
+        message: 'The leaderboard is loaded, but your own rank row is not present yet.',
       };
     }
 
     return {
-      iconName: 'trophy-outline',
-      title: 'No leaderboard rows yet',
-      message: 'Ranked profiles will appear here when the snapshot is populated.',
+      tone: null,
+      title: '',
+      message: '',
     };
-  }, [
-    hasConnectionError,
-    isInitialLoad,
-    queriesEnabled,
-    rawLeaderboardData.length,
-    scope,
-    searchQuery,
-  ]);
+  }, [currentUserRow, isLoading, isReconnecting, queriesEnabled, rankedCount]);
 
   const handleItemPress = useCallback(
     (item: LeaderboardItem) => {
       hapticTap();
       const isSelfPreview =
-        item.isCurrentUser || item.id === user?.uid || item.id === userProfile.id;
+        item.isCurrentUser ||
+        (!!currentUserId && item.id === currentUserId) ||
+        item.id === userProfile.id;
+
       const liveUser: LiveUser = {
         id: item.id,
-        name: isSelfPreview
-          ? userProfile.name || user?.displayName || userProfile.username || item.displayName
-          : item.displayName,
-        username: isSelfPreview ? userProfile.username || item.username : item.username,
-        avatarUrl: isSelfPreview
-          ? userProfile.avatarUrl || user?.photoURL || item.avatarUrl
-          : item.avatarUrl,
+        name:
+          item.displayName ||
+          (isSelfPreview ? userProfile.name || user?.displayName || userProfile.username : '') ||
+          item.username ||
+          item.id,
+        username:
+          item.username ||
+          (isSelfPreview ? userProfile.username : '') ||
+          item.displayName ||
+          item.id,
+        avatarUrl:
+          item.avatarUrl ||
+          (isSelfPreview ? userProfile.avatarUrl || user?.photoURL || '' : ''),
         age: isSelfPreview ? userProfile.age : 0,
-        verified: Boolean(user?.emailVerified && isSelfPreview),
+        verified: false,
         country: isSelfPreview ? userProfile.country : '',
         bio: isSelfPreview ? userProfile.bio : '',
-        photos: isSelfPreview ? userProfile.photos.map((photo) => photo.uri) : undefined,
-        isFriend: acceptedFriendIds.has(item.id),
+        isFriend: item.isFriend,
         isSelfPreview,
+        photos: isSelfPreview
+          ? userProfile.photos
+              .map((photo) => photo.uri)
+              .filter((uri) => typeof uri === 'string' && uri.trim().length > 0)
+          : undefined,
       };
       showProfile(liveUser);
     },
     [
-      acceptedFriendIds,
+      currentUserId,
       showProfile,
       user?.displayName,
-      user?.emailVerified,
       user?.photoURL,
-      user?.uid,
       userProfile.age,
       userProfile.avatarUrl,
       userProfile.bio,
@@ -290,15 +236,6 @@ export function LeaderboardScreen() {
     ],
   );
 
-  const handleScopeChange = useCallback((value: string) => {
-    hapticTap();
-    setScope(value as LeaderboardScope);
-  }, []);
-  const handleTogglePrivacy = useCallback((value: boolean) => {
-    hapticTap();
-    setIsPublic(value);
-  }, []);
-
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
   }, []);
@@ -306,6 +243,72 @@ export function LeaderboardScreen() {
   const handleClearSearch = useCallback(() => {
     setSearchQuery('');
   }, []);
+
+  const handleScopeChange = useCallback((value: LeaderboardScope) => {
+    hapticTap();
+    setScope(value);
+  }, []);
+
+  const handleResetFilters = useCallback(() => {
+    setSearchQuery('');
+    setScope('all');
+  }, []);
+
+  const emptyState = useMemo(() => {
+    if (isLoading) {
+      return (
+        <LeaderboardEmptyState
+          loading
+          title="Loading leaderboard"
+          message="Waiting for ranked rows from the active signed-in snapshot."
+        />
+      );
+    }
+
+    if (searchQuery.trim().length > 0) {
+      return (
+        <LeaderboardEmptyState
+          icon="search-outline"
+          title="No matching players"
+          message="Try a different display name or username, or clear the search."
+          actionLabel="Clear search"
+          onAction={handleClearSearch}
+        />
+      );
+    }
+
+    if (scope === 'friends') {
+      return (
+        <LeaderboardEmptyState
+          icon="people-outline"
+          title="No ranked friends yet"
+          message="Friends will appear here once they have live leaderboard rows."
+          actionLabel="Show all"
+          onAction={handleResetFilters}
+        />
+      );
+    }
+
+    if (scope === 'me') {
+      return (
+        <LeaderboardEmptyState
+          icon="person-outline"
+          title="Your row is not on the board yet"
+          message="The leaderboard is live, but your own ranked row has not hydrated yet."
+          actionLabel="Show all"
+          onAction={handleResetFilters}
+        />
+      );
+    }
+
+    return (
+      <LeaderboardEmptyState
+        icon="trophy-outline"
+        title="No leaderboard rows yet"
+        message="Rankings appear here when the public leaderboard snapshot has data."
+      />
+    );
+  }, [handleClearSearch, handleResetFilters, isLoading, scope, searchQuery]);
 
   const renderItem = useCallback(
     ({ item }: { item: LeaderboardItem }) => (
@@ -317,57 +320,48 @@ export function LeaderboardScreen() {
   const headerComponent = useMemo(
     () => (
       <LeaderboardListHeader
-        isPublic={isPublic}
-        onToggle={handleTogglePrivacy}
-        scopeValue={scope}
+        rankedCount={rankedCount}
+        friendRankedCount={friendRankedCount}
+        currentRank={currentUserRow?.rank ?? null}
+        scope={scope}
         onScopeChange={handleScopeChange}
         searchValue={searchQuery}
         onSearchChange={handleSearchChange}
         onClearSearch={handleClearSearch}
-        summary={summaryText}
-        statusLabel={statusLabel}
+        statusTone={status.tone}
+        statusTitle={status.title}
+        statusMessage={status.message}
       />
     ),
     [
+      currentUserRow?.rank,
+      friendRankedCount,
       handleClearSearch,
       handleScopeChange,
       handleSearchChange,
-      handleTogglePrivacy,
-      isPublic,
+      rankedCount,
       scope,
       searchQuery,
-      statusLabel,
-      summaryText,
+      status.message,
+      status.title,
+      status.tone,
     ],
-  );
-
-  const emptyComponent = useMemo(
-    () => (
-      <LeaderboardEmptyState
-        iconName={emptyState.iconName}
-        title={emptyState.title}
-        message={emptyState.message}
-        loading={emptyState.loading}
-      />
-    ),
-    [emptyState.iconName, emptyState.loading, emptyState.message, emptyState.title],
   );
 
   return (
     <AppScreen noPadding style={styles.screen}>
-      <View style={styles.header}>
-        <AppText variant="h1">Leaderboard</AppText>
-      </View>
-
       <FlatList
         data={filteredData}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          styles.listContent,
+          filteredData.length === 0 && styles.listContentEmpty,
+        ]}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={headerComponent}
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={emptyComponent}
+        ListEmptyComponent={emptyState}
       />
     </AppScreen>
   );
@@ -377,12 +371,10 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
-  header: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
   listContent: {
     paddingBottom: spacing.xl * 4,
+  },
+  listContentEmpty: {
+    flexGrow: 1,
   },
 });

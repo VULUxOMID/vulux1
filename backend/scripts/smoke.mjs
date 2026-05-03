@@ -2,8 +2,8 @@
 
 import process from "node:process";
 
-const baseUrl = (process.env.SMOKE_BASE_URL ?? "http://localhost:3000").trim();
-const token = (process.env.SMOKE_CLERK_JWT ?? "").trim();
+const baseUrl = (process.env.SMOKE_BASE_URL ?? "http://127.0.0.1:8787").trim();
+const token = (process.env.SMOKE_BEARER_TOKEN ?? process.env.SMOKE_CLERK_JWT ?? "").trim();
 
 async function parseJson(response) {
   const text = await response.text();
@@ -16,7 +16,7 @@ async function parseJson(response) {
 }
 
 async function main() {
-  console.log(`Upload signer smoke test against ${baseUrl}`);
+  console.log(`Upload presign smoke test against ${baseUrl}`);
 
   const healthResponse = await fetch(new URL("/health", baseUrl));
   const healthBody = await parseJson(healthResponse);
@@ -46,7 +46,7 @@ async function main() {
   console.log("POST /presign rejects missing auth");
 
   if (!token) {
-    console.log("Skipping authenticated presign check because SMOKE_CLERK_JWT is not set.");
+    console.log("Skipping authenticated presign check because SMOKE_BEARER_TOKEN is not set.");
     return;
   }
 

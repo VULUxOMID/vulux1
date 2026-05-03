@@ -7,10 +7,10 @@ import {
 } from 'react';
 
 import {
-  useAuth as useSpacetimeAuth,
-  useUser as useSpacetimeUser,
-} from '../auth/spacetimeSession';
-import { spacetimeDb } from '../lib/spacetime';
+  useAuth as useRailwayAuth,
+  useUser as useRailwayUser,
+} from '../auth/clerkSession';
+import { upsertAccountState as upsertBackendAccountState } from '../data/adapters/backend/accountState';
 
 export type AppUser = {
   uid: string;
@@ -27,7 +27,7 @@ type AuthContextValue = {
   user: AppUser | null;
   initializing: boolean;
   vuluUserId: string | null;
-  clerkEmail: string | null;
+  authEmail: string | null;
   roles: string[];
   signOut: () => Promise<void>;
   updateUserPassword: (password: string) => Promise<void>;
@@ -41,7 +41,7 @@ const defaultAuthValue: AuthContextValue = {
   user: null,
   initializing: false,
   vuluUserId: null,
-  clerkEmail: null,
+  authEmail: null,
   roles: [],
   signOut: async () => { },
   updateUserPassword: async () => { },
@@ -59,9 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     emailAddress,
     emailVerified,
     roles,
+    getToken,
     signOut: signOutSession,
-  } = useSpacetimeAuth();
-  const { user: sessionUser } = useSpacetimeUser();
+  } = useRailwayAuth();
+  const { user: sessionUser } = useRailwayUser();
   const appUser = useMemo<AppUser | null>(() => {
     if (!userId) return null;
 
@@ -91,11 +92,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [signOutSession]);
 
   const updateUserPassword = useCallback(async (_password: string) => {
-    throw new Error('Password updates are managed by Clerk outside the current app flow.');
+    throw new Error('Password updates are not supported in the current app flow.');
   }, []);
 
   const updateUserEmail = useCallback(async (_email: string) => {
-    throw new Error('Email updates are managed by Clerk outside the current app flow.');
+    throw new Error('Email updates are not supported in the current app flow.');
   }, []);
 
   const deleteUserAccount = useCallback(async () => {
@@ -103,30 +104,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('No active user session.');
     }
 
-    try {
-      const reducers = spacetimeDb.reducers as any;
-      if (typeof reducers?.upsertAccountState === 'function') {
-        await reducers.upsertAccountState({
-          userId,
-          updates: JSON.stringify({
-            deletedAt: Date.now(),
-            deleted: true,
-          }),
-        });
-      }
-    } catch {
-      // Best-effort local cleanup only.
+    const deactivated = await upsertBackendAccountState(
+      null,
+      getToken,
+      {
+        account: {
+          deletedAt: Date.now(),
+          deleted: true,
+          updatedAt: Date.now(),
+        },
+      },
+      userId,
+    );
+
+    if (!deactivated) {
+      throw new Error('Unable to deactivate your account right now.');
     }
 
     await signOutSession();
-  }, [signOutSession, userId]);
+  }, [getToken, signOutSession, userId]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       user: appUser,
       initializing,
       vuluUserId: userId,
-      clerkEmail: emailAddress,
+      authEmail: emailAddress,
       roles,
       signOut,
       updateUserPassword,

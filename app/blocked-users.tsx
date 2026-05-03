@@ -1,9 +1,13 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
 
-import { AppScreen, AppText } from '../src/components';
+import { AppScreen, AppText, PageHeader } from '../src/components';
+import { Ionicons } from '@expo/vector-icons';
+import { toast } from '../src/components/Toast';
+import { apiClient } from '../src/data/api';
+import { useSocialRepo } from '../src/data/provider';
+import { requestBackendRefresh } from '../src/data/adapters/backend/refreshBus';
 import { colors, radius, spacing } from '../src/theme';
 import { normalizeImageUri } from '../src/utils/imageSource';
 
@@ -14,25 +18,55 @@ type BlockedUser = {
   avatarUrl: string;
 };
 
-function BlockedUsersHeader({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <View style={styles.header}>
-      <Pressable onPress={onBack} style={styles.backButton} hitSlop={12}>
-        <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
-      </Pressable>
-      <AppText variant="h3" style={styles.headerTitle}>{title}</AppText>
-      <View style={styles.headerRight} />
-    </View>
-  );
-}
-
 export default function BlockedUsersScreen() {
   const router = useRouter();
-  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const socialRepo = useSocialRepo();
+  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
 
-  const handleUnblock = (id: string) => {
-    setBlockedUsers(prev => prev.filter(u => u.id !== id));
-  };
+  useEffect(() => {
+    requestBackendRefresh({
+      scopes: ['social', 'friendships', 'notifications'],
+      source: 'manual',
+      reason: 'blocked_users_screen_opened',
+    });
+  }, []);
+
+  const blockedUsers = useMemo<BlockedUser[]>(
+    () =>
+      socialRepo
+        .listUsers({ limit: 300 })
+        .filter((user) => user.blockedByViewer === true)
+        .map((user) => ({
+          id: user.id,
+          name: user.username,
+          username: user.username,
+          avatarUrl: user.avatarUrl,
+        })),
+    [socialRepo],
+  );
+
+  const handleUnblock = useCallback(async (id: string) => {
+    if (pendingUserId) {
+      return;
+    }
+    setPendingUserId(id);
+    try {
+      await apiClient.post('/api/social/unblock', {
+        targetUserId: id,
+        updatedAtIsoUtc: new Date().toISOString(),
+      });
+      requestBackendRefresh({
+        scopes: ['social', 'friendships', 'notifications'],
+        source: 'manual',
+        reason: 'social_user_unblocked',
+      });
+      toast.success('User unblocked.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not unblock user.');
+    } finally {
+      setPendingUserId(null);
+    }
+  }, [pendingUserId]);
 
   const renderItem = ({ item }: { item: BlockedUser }) => {
     const avatarUri = normalizeImageUri(item.avatarUrl);
@@ -51,9 +85,14 @@ export default function BlockedUsersScreen() {
         </View>
         <Pressable
           style={styles.unblockButton}
-          onPress={() => handleUnblock(item.id)}
+          onPress={() => {
+            void handleUnblock(item.id);
+          }}
+          disabled={pendingUserId === item.id}
         >
-          <AppText style={styles.unblockText}>Unblock</AppText>
+          <AppText style={styles.unblockText}>
+            {pendingUserId === item.id ? 'Working...' : 'Unblock'}
+          </AppText>
         </Pressable>
       </View>
     );
@@ -61,10 +100,14 @@ export default function BlockedUsersScreen() {
 
   return (
     <AppScreen noPadding style={styles.container}>
-      <BlockedUsersHeader 
-        title="Blocked Users" 
-        onBack={() => router.back()} 
-      />
+      <View style={styles.headerWrap}>
+        <PageHeader
+          eyebrow="Moderation"
+          title="Blocked Users"
+          subtitle="People you have removed from your social surface."
+          onBack={() => router.back()}
+        />
+      </View>
 
       <FlatList
         data={blockedUsers}
@@ -85,39 +128,27 @@ export default function BlockedUsersScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  headerWrap: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  backButton: {
-    padding: spacing.xs,
-    marginLeft: -spacing.xs,
-  },
-  headerTitle: {
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  headerRight: {
-    width: 32,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   listContent: {
     padding: spacing.lg,
+    paddingBottom: spacing.xxxl,
+    gap: spacing.sm,
   },
   userRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: spacing.mdPlus,
     paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
+    backgroundColor: 'rgba(17,17,19,0.9)',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   userInfo: {
     flexDirection: 'row',
@@ -146,10 +177,10 @@ const styles = StyleSheet.create({
   unblockButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   unblockText: {
     color: colors.textPrimary,
@@ -159,7 +190,7 @@ const styles = StyleSheet.create({
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: spacing.xxxl,
+    paddingTop: spacing.xxxl * 2,
     gap: spacing.md,
   },
   emptyText: {

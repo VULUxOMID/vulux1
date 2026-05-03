@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { LiveUser, UserRole } from '../features/liveroom/types';
+import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
+import { LiveUser } from '../features/liveroom/types';
 
 interface ProfileContextType {
   selectedUser: LiveUser | null;
@@ -10,9 +10,14 @@ interface ProfileContextType {
 
 const ProfileContext = createContext<ProfileContextType | undefined>(undefined);
 
+function isPremiumProfileViewsPreviewEnabled(): boolean {
+  const value = process.env.EXPO_PUBLIC_QA_UNLOCK_PREMIUM_PROFILE_VIEWS?.trim().toLowerCase();
+  return __DEV__ && (value === '1' || value === 'true' || value === 'yes' || value === 'on');
+}
+
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const [selectedUser, setSelectedUser] = useState<LiveUser | null>(null);
-  const [isPremiumUser] = useState(true); // Set to true for testing
+  const isPremiumUser = useMemo(() => isPremiumProfileViewsPreviewEnabled(), []);
 
   const showProfile = (user: LiveUser) => {
     setSelectedUser(user);

@@ -27,12 +27,23 @@ export type MessageActionMenuProps = {
   visible: boolean;
   anchor: AnchorRect | null;
   isMine: boolean;
+  allowOwnMessageEdits?: boolean;
+  allowReactions?: boolean;
   onClose: () => void;
   onAction: (id: ActionId) => void;
   onReaction?: (emoji: string) => void;
 };
 
-export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, onReaction }: MessageActionMenuProps) {
+export function MessageActionMenu({
+  visible,
+  anchor,
+  isMine,
+  allowOwnMessageEdits = true,
+  allowReactions = true,
+  onClose,
+  onAction,
+  onReaction,
+}: MessageActionMenuProps) {
   const [mounted, setMounted] = useState(false);
   const anim = useRef(new Animated.Value(0)).current;
 
@@ -41,14 +52,14 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
       { id: 'reply', label: 'Reply', icon: 'return-up-back', tone: 'brand' },
       { id: 'copy', label: 'Copy', icon: 'copy-outline', tone: 'neutral' },
     ];
-    if (isMine) {
+    if (isMine && allowOwnMessageEdits) {
       base.push({ id: 'edit', label: 'Edit', icon: 'pencil-outline', tone: 'primary' });
       base.push({ id: 'delete', label: 'Delete', icon: 'trash-outline', tone: 'danger' });
     } else {
       base.push({ id: 'report', label: 'Report', icon: 'flag-outline', tone: 'danger' });
     }
     return base;
-  }, [isMine]);
+  }, [allowOwnMessageEdits, isMine]);
 
   useEffect(() => {
     if (visible) {
@@ -77,7 +88,9 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
   const { width: SW, height: SH } = Dimensions.get('window');
   const MENU_W = 220;
   const ITEM_H = 44;
-  const MENU_H = actions.length * ITEM_H + 12;
+  const reactionSectionHeight = allowReactions ? 56 : 0;
+  const separatorHeight = allowReactions ? 9 : 0;
+  const MENU_H = actions.length * ITEM_H + 12 + reactionSectionHeight + separatorHeight;
 
   const preferAbove = anchor.y > SH * 0.35;
   const top = preferAbove
@@ -124,22 +137,25 @@ export function MessageActionMenu({ visible, anchor, isMine, onClose, onAction, 
             },
           ]}
         >
-          {/* Reactions Row */}
-          <View style={styles.reactionsRow}>
-            {reactionEmojis.map((emoji) => (
-              <Pressable
-                key={emoji}
-                onPress={() => {
-                  onReaction?.(emoji);
-                  onClose();
-                }}
-                style={({ pressed }) => [styles.reactionItem, pressed && styles.reactionPressed]}
-              >
-                <AppText style={styles.reactionEmoji}>{emoji}</AppText>
-              </Pressable>
-            ))}
-          </View>
-          <View style={styles.separator} />
+          {allowReactions ? (
+            <>
+              <View style={styles.reactionsRow}>
+                {reactionEmojis.map((emoji) => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => {
+                      onReaction?.(emoji);
+                      onClose();
+                    }}
+                    style={({ pressed }) => [styles.reactionItem, pressed && styles.reactionPressed]}
+                  >
+                    <AppText style={styles.reactionEmoji}>{emoji}</AppText>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={styles.separator} />
+            </>
+          ) : null}
 
           {actions.map((a) => (
             <Pressable

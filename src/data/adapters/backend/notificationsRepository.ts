@@ -2,8 +2,10 @@ import type { NotificationsRepository } from '../../contracts';
 import { applyCursorPage } from './query';
 import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
-import { spacetimeDb } from '../../../lib/spacetime';
+import { getRailwayAuthSnapshot, railwayDb } from '../../../lib/railwayRuntime';
 import { requestBackendRefresh } from './refreshBus';
+import { readCurrentAuthAccessToken } from '../../../auth/currentAuthAccessToken';
+import { getConfiguredBackendBaseUrl } from '../../../config/backendBaseUrl';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -29,8 +31,57 @@ type UserDirectoryEntry = {
   updatedAt: number;
 };
 
-const locallyReadNotificationIds = new Set<string>();
-const locallyDeletedNotificationIds = new Set<string>();
+const locallyReadNotificationIdsByViewer = new Map<string, Set<string>>();
+const locallyDeletedNotificationIdsByViewer = new Map<string, Set<string>>();
+
+function notificationViewerKey(viewerUserId: string | null | undefined): string {
+  const normalized = viewerUserId?.trim();
+  return normalized && normalized.length > 0 ? normalized : '__anonymous__';
+}
+
+function getScopedNotificationIds(
+  store: Map<string, Set<string>>,
+  viewerUserId: string | null | undefined,
+): Set<string> {
+  const key = notificationViewerKey(viewerUserId);
+  const existing = store.get(key);
+  if (existing) {
+    return existing;
+  }
+  const next = new Set<string>();
+  store.set(key, next);
+  return next;
+}
+
+function normalizeBackendBaseUrl(): string {
+  return getConfiguredBackendBaseUrl().trim().replace(/\/+$/, '');
+}
+
+async function postSocialBackend(path: string, payload: UnknownRecord): Promise<void> {
+  const baseUrl = normalizeBackendBaseUrl();
+  const token = asString(await readCurrentAuthAccessToken());
+  if (!baseUrl || !token) {
+    throw new Error('Railway social backend is unavailable.');
+  }
+
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(getRailwayAuthSnapshot().userId
+        ? { 'X-Vulu-User-Id': getRailwayAuthSnapshot().userId as string }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(message || `Social backend write failed (${response.status})`);
+  }
+}
 
 function isFriendRemovalMessage(text: string | null | undefined): boolean {
   if (!text) return false;
@@ -162,73 +213,80 @@ function upsertUserDirectoryEntry(
 
 function buildKnownUserDirectory(
   fallbackUsers: Array<{ id: string; username?: string; avatarUrl?: string }> = [],
+  options: { includeRuntimeEvents?: boolean; includePublicProfileView?: boolean } = {},
 ): Map<string, UserDirectoryEntry> {
   const users = new Map<string, UserDirectoryEntry>();
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
+  const includeRuntimeEvents = options.includeRuntimeEvents !== false;
+  const includePublicProfileView = options.includePublicProfileView ?? fallbackUsers.length === 0;
 
-  const publicRows: any[] = Array.from(dbView?.publicProfileSummary?.iter?.() ?? []);
-  for (const row of publicRows) {
-    const userId = asString(row?.userId ?? row?.user_id);
-    if (!userId) continue;
-    const updatedAt = Date.now();
-    upsertUserDirectoryEntry(
-      users,
-      userId,
-      {
-        username: asString(row?.username) ?? undefined,
-        displayName: asString(row?.username) ?? undefined,
-        avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url) ?? undefined,
-      },
-      updatedAt,
-    );
-  }
-
-  const globalRows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
-  for (const row of globalRows) {
-    const item = parseJsonRecord(row?.item);
-    const eventType = asString(item.eventType);
-    const updatedAt = readTimestampMs(row?.createdAt ?? row?.created_at);
-
-    if (eventType === 'user_profile') {
-      const userId = asString(item.userId);
+  if (includePublicProfileView) {
+    const publicRows: any[] = Array.from(dbView?.publicProfileSummary?.iter?.() ?? []);
+    for (const row of publicRows) {
+      const userId = asString(row?.userId ?? row?.user_id);
       if (!userId) continue;
+      const updatedAt = Date.now();
       upsertUserDirectoryEntry(
         users,
         userId,
         {
-          username: asString(item.username) ?? undefined,
-          displayName: asString(item.displayName) ?? undefined,
-          avatarUrl: asString(item.avatarUrl) ?? undefined,
-        },
-        updatedAt,
-      );
-      continue;
-    }
-
-    const fromUserId = asString(item.fromUserId);
-    if (fromUserId) {
-      upsertUserDirectoryEntry(
-        users,
-        fromUserId,
-        {
-          username: asString(item.fromUserName) ?? undefined,
-          avatarUrl: asString(item.fromUserAvatar) ?? undefined,
+          username: asString(row?.username) ?? undefined,
+          displayName: asString(row?.username) ?? undefined,
+          avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url) ?? undefined,
         },
         updatedAt,
       );
     }
+  }
 
-    const toUserId = asString(item.toUserId);
-    if (toUserId) {
-      upsertUserDirectoryEntry(
-        users,
-        toUserId,
-        {
-          username: asString(item.toUserName) ?? undefined,
-          avatarUrl: asString(item.toUserAvatar) ?? undefined,
-        },
-        updatedAt,
-      );
+  if (includeRuntimeEvents) {
+    const globalRows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
+    for (const row of globalRows) {
+      const item = parseJsonRecord(row?.item);
+      const eventType = asString(item.eventType);
+      const updatedAt = readTimestampMs(row?.createdAt ?? row?.created_at);
+
+      if (eventType === 'user_profile') {
+        const userId = asString(item.userId);
+        if (!userId) continue;
+        upsertUserDirectoryEntry(
+          users,
+          userId,
+          {
+            username: asString(item.username) ?? undefined,
+            displayName: asString(item.displayName) ?? undefined,
+            avatarUrl: asString(item.avatarUrl) ?? undefined,
+          },
+          updatedAt,
+        );
+        continue;
+      }
+
+      const fromUserId = asString(item.fromUserId);
+      if (fromUserId) {
+        upsertUserDirectoryEntry(
+          users,
+          fromUserId,
+          {
+            username: asString(item.fromUserName) ?? undefined,
+            avatarUrl: asString(item.fromUserAvatar) ?? undefined,
+          },
+          updatedAt,
+        );
+      }
+
+      const toUserId = asString(item.toUserId);
+      if (toUserId) {
+        upsertUserDirectoryEntry(
+          users,
+          toUserId,
+          {
+            username: asString(item.toUserName) ?? undefined,
+            avatarUrl: asString(item.toUserAvatar) ?? undefined,
+          },
+          updatedAt,
+        );
+      }
     }
   }
 
@@ -288,7 +346,7 @@ function buildFriendRequestStateMap(
   userDirectory: Map<string, UserDirectoryEntry>,
 ): Map<string, FriendRequestState> {
   const map = new Map<string, FriendRequestState>();
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
   rows.sort(
     (a: any, b: any) =>
@@ -420,6 +478,41 @@ function getLatestFriendRequestStatesByPair(
   return Array.from(latestByPair.values());
 }
 
+function buildFriendRequestStateMapFromSnapshot(
+  notifications: BackendSnapshot['notifications'],
+  viewerUserId: string,
+): Map<string, FriendRequestState> {
+  const states = new Map<string, FriendRequestState>();
+  for (const notification of notifications) {
+    if (notification.type !== 'friend_request') continue;
+    const otherUserId = asString(notification.fromUser?.id);
+    if (!otherUserId) continue;
+    const direction = notification.direction ?? 'received';
+    const fromUserId = direction === 'sent' ? viewerUserId : otherUserId;
+    const toUserId = direction === 'sent' ? otherUserId : viewerUserId;
+    const pairKey = buildPairKey(fromUserId, toUserId);
+    states.set(notification.id, {
+      requestId: notification.id,
+      pairKey,
+      fromUserId,
+      toUserId,
+      status:
+        notification.status === 'accepted'
+          ? 'accepted'
+          : notification.status === 'declined'
+            ? 'declined'
+            : 'pending',
+      createdAt: notification.createdAt,
+      updatedAt: notification.createdAt,
+      fromUserName: direction === 'sent' ? undefined : notification.fromUser.name,
+      fromUserAvatar: direction === 'sent' ? undefined : notification.fromUser.avatar,
+      toUserName: direction === 'sent' ? notification.fromUser.name : undefined,
+      toUserAvatar: direction === 'sent' ? notification.fromUser.avatar : undefined,
+    });
+  }
+  return states;
+}
+
 function findFriendRequestStateInNotificationTable(
   notificationId: string,
   viewerUserId: string,
@@ -432,128 +525,17 @@ function findFriendRequestStateInNotificationTable(
   return null;
 }
 
-function readNotificationRowsFromTable(
-  viewerUserId: string | null,
-  userDirectory: Map<string, UserDirectoryEntry>,
-): BackendSnapshot['notifications'] {
-  const rows: any[] = Array.from(
-    (spacetimeDb.db as any)?.myNotifications?.iter?.() ??
-      (spacetimeDb.db as any)?.my_notifications?.iter?.() ??
-      [],
-  );
-  const mapped: BackendSnapshot['notifications'] = [];
+function findSnapshotNotificationById(
+  snapshot: BackendSnapshot,
+  notificationId: string,
+): BackendSnapshot['notifications'][number] | null {
+  return snapshot.notifications.find((item) => item.id === notificationId) ?? null;
+}
 
-  for (const row of rows) {
-    const item = parseJsonRecord(row?.item);
-    const id = asString(item.id) ?? asString(row?.id);
-    if (!id) continue;
-
-    const rowUserId = asString(row?.userId ?? row?.user_id);
-    if (viewerUserId && rowUserId && rowUserId !== viewerUserId) {
-      continue;
-    }
-
-    const type = asString(item.type);
-    if (!type) continue;
-
-    const createdAt = readTimestampMs(item.createdAt ?? row?.createdAt ?? row?.created_at);
-    const read = asBoolean(item.read) ?? false;
-
-    if (type === 'profile_view') {
-      const rawViewer = item.viewer as UnknownRecord | undefined;
-      const viewerId = asString(rawViewer?.id);
-      if (!viewerId) continue;
-
-      const resolvedViewerName = resolveUserName(
-        viewerId,
-        asString(rawViewer?.name),
-        undefined,
-        userDirectory,
-      );
-      const resolvedViewerAvatar = resolveUserAvatar(
-        viewerId,
-        asString(rawViewer?.avatar),
-        undefined,
-        userDirectory,
-      );
-      const viewCount = Math.max(1, Math.floor(asFiniteNumber(item.viewCount) ?? 1));
-      const lastViewed = readTimestampMs(item.lastViewed ?? item.createdAt ?? createdAt);
-
-      mapped.push({
-        id,
-        type: 'profile_view',
-        createdAt,
-        read,
-        viewer: {
-          id: viewerId,
-          name: resolvedViewerName,
-          avatar: resolvedViewerAvatar ?? undefined,
-          level: Math.max(0, Math.floor(asFiniteNumber(rawViewer?.level) ?? 0)),
-        },
-        viewCount,
-        lastViewed,
-      });
-      continue;
-    }
-
-    if (type === 'activity') {
-      const rawFromUser = item.fromUser as UnknownRecord | undefined;
-      const fromUserId = asString(rawFromUser?.id);
-      mapped.push({
-        id,
-        type: 'activity',
-        createdAt,
-        read,
-        activityType:
-          (asString(item.activityType) as
-            | 'mention'
-            | 'reply'
-            | 'event'
-            | 'money_received'
-            | 'live_invite'
-            | 'other') ?? 'other',
-        fromUser: fromUserId
-          ? {
-              id: fromUserId,
-              name: resolveUserName(
-                fromUserId,
-                asString(rawFromUser?.name),
-                undefined,
-                userDirectory,
-              ),
-              avatar: resolveUserAvatar(
-                fromUserId,
-                asString(rawFromUser?.avatar),
-                undefined,
-                userDirectory,
-              ),
-            }
-          : undefined,
-        message: asString(item.message) ?? '',
-        metadata:
-          item.metadata && typeof item.metadata === 'object'
-            ? (item.metadata as Record<string, unknown>)
-            : undefined,
-      });
-      continue;
-    }
-
-    if (type === 'announcement') {
-      mapped.push({
-        id,
-        type: 'announcement',
-        createdAt,
-        read,
-        title: asString(item.title) ?? 'Announcement',
-        message: asString(item.message) ?? '',
-        sourceName: asString(item.sourceName) ?? 'Vulu',
-        priority:
-          (asString(item.priority) as 'low' | 'medium' | 'high') ?? 'low',
-      });
-    }
-  }
-
-  return mapped;
+function isPersistableAppNotification(
+  notification: BackendSnapshot['notifications'][number] | null,
+): boolean {
+  return Boolean(notification && notification.type !== 'friend_request');
 }
 
 export function createBackendNotificationsRepository(
@@ -566,21 +548,33 @@ export function createBackendNotificationsRepository(
     username: user.username,
     avatarUrl: user.avatarUrl,
   }));
+  const locallyReadNotificationIds = getScopedNotificationIds(
+    locallyReadNotificationIdsByViewer,
+    viewerUserId,
+  );
+  const locallyDeletedNotificationIds = getScopedNotificationIds(
+    locallyDeletedNotificationIdsByViewer,
+    viewerUserId,
+  );
 
   return {
     listNotifications(request) {
-      const userDirectory = buildKnownUserDirectory(fallbackUsers);
+      const userDirectory = buildKnownUserDirectory(fallbackUsers, {
+        includeRuntimeEvents: !snapshot.socialReadLoaded,
+      });
       const snapshotItems = snapshot.notifications.filter((item) => {
         if (locallyDeletedNotificationIds.has(item.id)) return false;
         if (isFriendRemovalNotification(item)) return false;
         return true;
       });
-      const tableItems = readNotificationRowsFromTable(viewerUserId, userDirectory).filter(
-        (item) => !locallyDeletedNotificationIds.has(item.id),
-      );
-      const statesByRequestId = buildFriendRequestStateMap(userDirectory);
+      const statesByRequestId =
+        snapshot.socialReadLoaded && viewerUserId
+          ? buildFriendRequestStateMapFromSnapshot(snapshotItems, viewerUserId)
+          : new Map<string, FriendRequestState>();
       const friendRequestStates =
-        viewerUserId ? getLatestFriendRequestStatesByPair(statesByRequestId, viewerUserId) : [];
+        snapshot.socialReadLoaded && viewerUserId
+          ? getLatestFriendRequestStatesByPair(statesByRequestId, viewerUserId)
+          : [];
       const latestRemovedPairKeys = new Set(
         friendRequestStates
           .filter((state) => state.status === 'removed')
@@ -629,9 +623,6 @@ export function createBackendNotificationsRepository(
       for (const item of snapshotItems) {
         byId.set(item.id, item);
       }
-      for (const item of tableItems) {
-        byId.set(item.id, item);
-      }
       for (const item of derivedItems) {
         byId.set(item.id, item);
       }
@@ -664,6 +655,15 @@ export function createBackendNotificationsRepository(
         );
       }
 
+      items = items.map((item) =>
+        locallyReadNotificationIds.has(item.id)
+          ? {
+              ...item,
+              read: true,
+            }
+          : item,
+      );
+
       if (request?.unreadOnly) {
         items = items.filter((item) => !item.read);
       }
@@ -675,18 +675,61 @@ export function createBackendNotificationsRepository(
     },
     async markRead(request) {
       if (!request.notificationId) return;
+      const existingSnapshotNotification = findSnapshotNotificationById(snapshot, request.notificationId);
+      const shouldPersist =
+        snapshot.socialReadLoaded && isPersistableAppNotification(existingSnapshotNotification);
+      const wasAlreadyRead = locallyReadNotificationIds.has(request.notificationId);
       locallyReadNotificationIds.add(request.notificationId);
       requestBackendRefresh({
         scopes: ['notifications', 'counts'],
         source: 'manual',
         reason: 'notification_mark_read_local',
       });
+      if (!shouldPersist) {
+        return;
+      }
+      try {
+        await postSocialBackend('/api/social/notifications/read', {
+          notificationId: request.notificationId,
+          updatedAtIsoUtc: new Date().toISOString(),
+        });
+      } catch (error) {
+        if (!wasAlreadyRead) {
+          locallyReadNotificationIds.delete(request.notificationId);
+          requestBackendRefresh({
+            scopes: ['notifications', 'counts'],
+            source: 'manual',
+            reason: 'notification_mark_read_rollback',
+          });
+        }
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to persist notification read via backend', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to persist notification read.');
+      }
     },
     async markAllRead() {
-      const states = buildFriendRequestStateMap(buildKnownUserDirectory(fallbackUsers));
-      for (const state of states.values()) {
-        if (state.fromUserId === viewerUserId || state.toUserId === viewerUserId) {
-          locallyReadNotificationIds.add(state.requestId);
+      const newlyReadIds: string[] = [];
+      if (snapshot.socialReadLoaded) {
+        for (const item of snapshot.notifications) {
+          if (!locallyReadNotificationIds.has(item.id)) {
+            newlyReadIds.push(item.id);
+          }
+          locallyReadNotificationIds.add(item.id);
+        }
+      } else {
+        const states = buildFriendRequestStateMap(
+          buildKnownUserDirectory(fallbackUsers, {
+            includeRuntimeEvents: !snapshot.socialReadLoaded,
+          }),
+        );
+        for (const state of states.values()) {
+          if (state.fromUserId === viewerUserId || state.toUserId === viewerUserId) {
+            if (!locallyReadNotificationIds.has(state.requestId)) {
+              newlyReadIds.push(state.requestId);
+            }
+            locallyReadNotificationIds.add(state.requestId);
+          }
         }
       }
       requestBackendRefresh({
@@ -694,73 +737,121 @@ export function createBackendNotificationsRepository(
         source: 'manual',
         reason: 'notification_mark_all_read_local',
       });
+      if (!snapshot.socialReadLoaded) {
+        return;
+      }
+      const persistableIds = snapshot.notifications
+        .filter((item) => item.type !== 'friend_request' && !locallyDeletedNotificationIds.has(item.id))
+        .map((item) => item.id);
+      if (persistableIds.length === 0) {
+        return;
+      }
+      try {
+        await postSocialBackend('/api/social/notifications/read-all', {
+          notificationIds: persistableIds,
+          updatedAtIsoUtc: new Date().toISOString(),
+        });
+      } catch (error) {
+        for (const id of newlyReadIds) {
+          locallyReadNotificationIds.delete(id);
+        }
+        requestBackendRefresh({
+          scopes: ['notifications', 'counts'],
+          source: 'manual',
+          reason: 'notification_mark_all_read_rollback',
+        });
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to persist mark-all-read via backend', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to persist mark-all-read.');
+      }
     },
     async deleteNotification(request) {
       if (!request.notificationId) return;
+      const existingSnapshotNotification = findSnapshotNotificationById(snapshot, request.notificationId);
+      const shouldPersist =
+        snapshot.socialReadLoaded && isPersistableAppNotification(existingSnapshotNotification);
+      const wasAlreadyDeleted = locallyDeletedNotificationIds.has(request.notificationId);
       locallyDeletedNotificationIds.add(request.notificationId);
       requestBackendRefresh({
         scopes: ['notifications', 'counts'],
         source: 'manual',
         reason: 'notification_delete_local',
       });
+      if (!shouldPersist) {
+        return;
+      }
+      try {
+        await postSocialBackend('/api/social/notifications/delete', {
+          notificationId: request.notificationId,
+          deletedAtIsoUtc: new Date().toISOString(),
+        });
+      } catch (error) {
+        if (!wasAlreadyDeleted) {
+          locallyDeletedNotificationIds.delete(request.notificationId);
+          requestBackendRefresh({
+            scopes: ['notifications', 'counts'],
+            source: 'manual',
+            reason: 'notification_delete_rollback',
+          });
+        }
+        if (__DEV__) {
+          console.warn('[data/notifications] Failed to persist notification delete via backend', error);
+        }
+        throw error instanceof Error ? error : new Error('Failed to persist notification delete.');
+      }
     },
     async respondToFriendRequest(request) {
       if (!request.notificationId || !viewerUserId) {
         throw new Error('Viewer identity is required to respond to a friend request.');
       }
 
-      const userDirectory = buildKnownUserDirectory(fallbackUsers);
+      const userDirectory = buildKnownUserDirectory(fallbackUsers, {
+        includeRuntimeEvents: !snapshot.socialReadLoaded,
+      });
       const actorProfile = userDirectory.get(viewerUserId);
       const state =
-        buildFriendRequestStateMap(userDirectory).get(request.notificationId) ??
+        (snapshot.socialReadLoaded
+          ? buildFriendRequestStateMapFromSnapshot(snapshot.notifications, viewerUserId).get(
+              request.notificationId,
+            )
+          : buildFriendRequestStateMap(userDirectory).get(request.notificationId)) ??
         findFriendRequestStateInNotificationTable(request.notificationId, viewerUserId, userDirectory);
       if (!state) {
-        throw new Error('Friend request state was not found in SpacetimeDB.');
+        throw new Error('Friend request state was not found in Railway.');
       }
 
       const toUserId = state.fromUserId === viewerUserId ? state.toUserId : state.fromUserId;
+      const backendPayload = {
+        notificationId: state.requestId,
+        requestId: state.requestId,
+        pairKey: state.pairKey,
+        fromUserId: viewerUserId,
+        toUserId,
+        status: request.status,
+        fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
+        fromUserAvatar: actorProfile?.avatarUrl ?? null,
+        toUserName:
+          toUserId === state.toUserId ? state.toUserName ?? null : state.fromUserName ?? null,
+        toUserAvatar:
+          toUserId === state.toUserId ? state.toUserAvatar ?? null : state.fromUserAvatar ?? null,
+        updatedAtIsoUtc: new Date().toISOString(),
+      } satisfies UnknownRecord;
+
       try {
-        const reducers = spacetimeDb.reducers as any;
-        const id = `friend-response-${state.requestId}-${Date.now()}`;
-        if (typeof reducers?.respondToFriendRequest === 'function') {
-          await reducers.respondToFriendRequest({
-            id,
-            requestId: state.requestId,
-            pairKey: state.pairKey,
-            fromUserId: viewerUserId,
-            toUserId,
-            status: request.status,
-            fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
-            fromUserAvatar: actorProfile?.avatarUrl ?? null,
-          });
-        } else {
-          await reducers.sendGlobalMessage({
-            id,
-            roomId: `friend:${state.pairKey}`,
-            item: JSON.stringify({
-              eventType: 'friend_response',
-              requestId: state.requestId,
-              pairKey: state.pairKey,
-              fromUserId: viewerUserId,
-              toUserId,
-              status: request.status,
-              fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? undefined,
-              fromUserAvatar: actorProfile?.avatarUrl ?? undefined,
-            }),
-          });
-        }
-        requestBackendRefresh({
-          scopes: ['notifications', 'friendships', 'social', 'counts'],
-          source: 'manual',
-          reason: 'friend_request_response_spacetimedb',
-        });
-        return;
+        await postSocialBackend('/api/social/friend-response', backendPayload);
       } catch (error) {
         if (__DEV__) {
-          console.warn('[data/notifications] Failed to respond to friend request via SpacetimeDB', error);
+          console.warn('[data/notifications] Failed to persist friend response via backend', error);
         }
-        throw error instanceof Error ? error : new Error('Failed to respond to friend request.');
+        throw error instanceof Error ? error : new Error('Failed to persist friend response.');
       }
+      requestBackendRefresh({
+        scopes: ['notifications', 'friendships', 'social', 'counts'],
+        source: 'manual',
+        reason: 'friend_request_response_backend_only',
+      });
+      return;
     },
     async sendFriendRequest(request) {
       if (!request.toUserId) return;
@@ -771,10 +862,15 @@ export function createBackendNotificationsRepository(
       }
 
       const pairKey = buildPairKey(fromUserId, request.toUserId);
-      const userDirectory = buildKnownUserDirectory(fallbackUsers);
+      const userDirectory = buildKnownUserDirectory(fallbackUsers, {
+        includeRuntimeEvents: !snapshot.socialReadLoaded,
+      });
       const actorProfile = userDirectory.get(fromUserId);
       const targetProfile = userDirectory.get(request.toUserId);
-      const statesByRequestId = buildFriendRequestStateMap(userDirectory);
+      const statesByRequestId =
+        snapshot.socialReadLoaded
+          ? buildFriendRequestStateMapFromSnapshot(snapshot.notifications, fromUserId)
+          : buildFriendRequestStateMap(userDirectory);
       const latestForPair = Array.from(statesByRequestId.values())
         .filter((state) => state.pairKey === pairKey)
         .sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -795,45 +891,33 @@ export function createBackendNotificationsRepository(
         return;
       }
       const requestId = `friend-request-${fromUserId}-${request.toUserId}-${Date.now()}`;
+      const backendPayload = {
+        id: requestId,
+        requestId,
+        pairKey,
+        fromUserId,
+        toUserId: request.toUserId,
+        fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
+        fromUserAvatar: actorProfile?.avatarUrl ?? null,
+        toUserName: targetProfile?.displayName ?? targetProfile?.username ?? null,
+        toUserAvatar: targetProfile?.avatarUrl ?? null,
+        createdAt: new Date().toISOString(),
+      } satisfies UnknownRecord;
+
       try {
-        const reducers = spacetimeDb.reducers as any;
-        if (typeof reducers?.sendFriendRequest === 'function') {
-          await reducers.sendFriendRequest({
-            id: requestId,
-            fromUserId,
-            toUserId: request.toUserId,
-            fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
-            fromUserAvatar: actorProfile?.avatarUrl ?? null,
-          });
-        } else {
-          await reducers.sendGlobalMessage({
-            id: requestId,
-            roomId: `friend:${pairKey}`,
-            item: JSON.stringify({
-              eventType: 'friend_request',
-              requestId,
-              pairKey,
-              fromUserId,
-              fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? undefined,
-              fromUserAvatar: actorProfile?.avatarUrl ?? undefined,
-              toUserId: request.toUserId,
-              toUserName: targetProfile?.displayName ?? targetProfile?.username ?? undefined,
-              toUserAvatar: targetProfile?.avatarUrl ?? undefined,
-            }),
-          });
-        }
-        requestBackendRefresh({
-          scopes: ['notifications', 'friendships', 'counts'],
-          source: 'manual',
-          reason: 'friend_request_sent_spacetimedb',
-        });
-        return;
+        await postSocialBackend('/api/social/friend-request', backendPayload);
       } catch (error) {
         if (__DEV__) {
-          console.warn('[data/notifications] Failed to send friend request via SpacetimeDB', error);
+          console.warn('[data/notifications] Failed to persist friend request via backend', error);
         }
-        throw error instanceof Error ? error : new Error('Failed to send friend request.');
+        throw error instanceof Error ? error : new Error('Failed to persist friend request.');
       }
+      requestBackendRefresh({
+        scopes: ['notifications', 'friendships', 'counts'],
+        source: 'manual',
+        reason: 'friend_request_sent_backend_only',
+      });
+      return;
     },
     async removeFriendRelationship(request) {
       if (!request.otherUserId) return;
@@ -844,11 +928,17 @@ export function createBackendNotificationsRepository(
       }
 
       const pairKey = buildPairKey(actorUserId, request.otherUserId);
-      const userDirectory = buildKnownUserDirectory(fallbackUsers);
+      const userDirectory = buildKnownUserDirectory(fallbackUsers, {
+        includeRuntimeEvents: !snapshot.socialReadLoaded,
+      });
       const actorProfile = userDirectory.get(actorUserId);
       const targetProfile = userDirectory.get(request.otherUserId);
       const relatedRequests = Array.from(
-        buildFriendRequestStateMap(userDirectory).values(),
+        (
+          snapshot.socialReadLoaded
+            ? buildFriendRequestStateMapFromSnapshot(snapshot.notifications, actorUserId)
+            : buildFriendRequestStateMap(userDirectory)
+        ).values(),
       )
         .filter((state) => state.pairKey === pairKey)
         .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -860,50 +950,35 @@ export function createBackendNotificationsRepository(
         relatedRequests[0];
       const canceledPendingRequestId =
         relatedRequest?.status === 'pending' ? relatedRequest.requestId : null;
+      const backendPayload = {
+        requestId: relatedRequest?.requestId ?? null,
+        pairKey,
+        fromUserId: actorUserId,
+        toUserId: request.otherUserId,
+        fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
+        fromUserAvatar: actorProfile?.avatarUrl ?? null,
+        toUserName: targetProfile?.displayName ?? targetProfile?.username ?? null,
+        toUserAvatar: targetProfile?.avatarUrl ?? null,
+        updatedAtIsoUtc: new Date().toISOString(),
+      } satisfies UnknownRecord;
+
       try {
-        const reducers = spacetimeDb.reducers as any;
-        const id = `friend-remove-${pairKey}-${Date.now()}`;
-        if (typeof reducers?.removeFriendRelationship === 'function') {
-          await reducers.removeFriendRelationship({
-            id,
-            pairKey,
-            fromUserId: actorUserId,
-            toUserId: request.otherUserId,
-            fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? null,
-            fromUserAvatar: actorProfile?.avatarUrl ?? null,
-          });
-        } else {
-          await reducers.sendGlobalMessage({
-            id,
-            roomId: `friend:${pairKey}`,
-            item: JSON.stringify({
-              eventType: 'friend_removed',
-              requestId: relatedRequest?.requestId ?? undefined,
-              pairKey,
-              fromUserId: actorUserId,
-              fromUserName: actorProfile?.displayName ?? actorProfile?.username ?? undefined,
-              fromUserAvatar: actorProfile?.avatarUrl ?? undefined,
-              toUserId: request.otherUserId,
-              toUserName: targetProfile?.displayName ?? targetProfile?.username ?? undefined,
-              toUserAvatar: targetProfile?.avatarUrl ?? undefined,
-            }),
-          });
-        }
-        if (canceledPendingRequestId) {
-          locallyDeletedNotificationIds.add(canceledPendingRequestId);
-        }
-        requestBackendRefresh({
-          scopes: ['notifications', 'friendships', 'social', 'counts'],
-          source: 'manual',
-          reason: 'friend_relationship_removed_spacetimedb',
-        });
-        return;
+        await postSocialBackend('/api/social/friend-remove', backendPayload);
       } catch (error) {
         if (__DEV__) {
-          console.warn('[data/notifications] Failed to remove friend relationship via SpacetimeDB', error);
+          console.warn('[data/notifications] Failed to persist friend removal via backend', error);
         }
-        throw error instanceof Error ? error : new Error('Failed to remove friend relationship.');
+        throw error instanceof Error ? error : new Error('Failed to persist friend removal.');
       }
+      if (canceledPendingRequestId) {
+        locallyDeletedNotificationIds.add(canceledPendingRequestId);
+      }
+      requestBackendRefresh({
+        scopes: ['notifications', 'friendships', 'social', 'counts'],
+        source: 'manual',
+        reason: 'friend_relationship_removed_backend_only',
+      });
+      return;
     },
   };
 }

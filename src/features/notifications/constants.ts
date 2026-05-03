@@ -1,0 +1,1 @@
+export const NOTIFICATION_FEED_LIMIT = 240;

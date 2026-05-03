@@ -11,6 +11,9 @@ import { createBackendVideoRepository } from './videoRepository';
 import {
   BACKEND_PATCHABLE_SCOPES,
   EMPTY_BACKEND_SNAPSHOT,
+  loadBackendMediaSnapshot,
+  loadBackendMessagesSnapshot,
+  loadBackendSocialSnapshotForUser,
   mergeBackendSnapshot,
   type BackendSnapshot,
   loadBackendSnapshot,
@@ -22,6 +25,9 @@ import type { BackendHttpClient } from './httpClient';
 export {
   BACKEND_PATCHABLE_SCOPES,
   EMPTY_BACKEND_SNAPSHOT,
+  loadBackendMediaSnapshot,
+  loadBackendMessagesSnapshot,
+  loadBackendSocialSnapshotForUser,
   loadBackendSnapshot,
   loadBackendSnapshotForUser,
   loadBackendSnapshotPatchForUser,

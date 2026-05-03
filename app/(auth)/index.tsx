@@ -1,5 +1,5 @@
-import { SpacetimeAuthScreen } from '../../src/features/auth/SpacetimeAuthScreen';
+import { Redirect } from 'expo-router';
 
 export default function WelcomeScreen() {
-  return <SpacetimeAuthScreen mode="welcome" />;
+  return <Redirect href="/onboarding" />;
 }

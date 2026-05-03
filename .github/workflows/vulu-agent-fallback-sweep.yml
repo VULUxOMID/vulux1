@@ -9,16 +9,15 @@ jobs:
   fallback-sweep:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger runner fallback sweep
+      - name: Trigger runner sweep
         env:
-          RUNNER_URL: ${{ vars.VULU_AGENT_RUNNER_URL }}
+          VULU_AGENT_RUNNER_URL: ${{ vars.VULU_AGENT_RUNNER_URL }}
           VULU_AGENT_INTERNAL_TOKEN: ${{ secrets.VULU_AGENT_INTERNAL_TOKEN }}
         run: |
-          if [ -z "$RUNNER_URL" ]; then
-            echo "VULU_AGENT_RUNNER_URL is not configured"
-            exit 1
+          if [ -z "$VULU_AGENT_RUNNER_URL" ] || [ -z "$VULU_AGENT_INTERNAL_TOKEN" ]; then
+            exit 0
           fi
-          curl -sS -X POST "${RUNNER_URL}/internal/fallback-sweep" \
-            -H "Authorization: Bearer ${VULU_AGENT_INTERNAL_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data '{}'
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $VULU_AGENT_INTERNAL_TOKEN" \
+            "$VULU_AGENT_RUNNER_URL/internal/sweep"

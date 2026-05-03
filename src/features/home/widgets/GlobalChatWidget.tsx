@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../../components';
-import { colors } from '../../../theme';
+import { colors, spacing } from '../../../theme';
 import { HomePillCard } from './HomePillCard';
 
 export function GlobalChatWidget({
@@ -66,10 +66,12 @@ export function GlobalChatWidget({
   };
 
   const rightContent = (
-    <View style={[styles.badgePill, !hasUnread && messageCount === 0 && { opacity: 0 }]}>
-      <AppText variant="small" style={styles.badgePillText}>
-        {messageCount > 99 ? '99+' : messageCount}
-      </AppText>
+    <View style={styles.rightCluster}>
+      <View style={[styles.badgePill, !hasUnread && messageCount === 0 && { opacity: 0 }]}>
+        <AppText variant="small" style={styles.badgePillText}>
+          {messageCount > 99 ? '99+' : messageCount}
+        </AppText>
+      </View>
     </View>
   );
 
@@ -78,10 +80,13 @@ export function GlobalChatWidget({
       <HomePillCard
         title="Global chat"
         leftIcon="planet"
+        leftIconSize={20}
         onPress={handleOpen}
         onPressIn={runPop}
         rightContent={rightContent}
-        showChevron={true}
+        showChevron={false}
+        density="compact"
+        headerHeight={48}
       />
       <View
         style={[styles.persistentBorder, { borderColor: baseBorderColor }, styles.pointerEventsNone]}
@@ -98,12 +103,13 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   badgePill: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.accentDanger,
+    minWidth: 24,
+    height: 18,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255, 68, 88, 0.92)',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
     ...Platform.select({
       web: {
         boxShadow: `0px 2px 4px ${colors.accentDanger}4D`,
@@ -119,17 +125,22 @@ const styles = StyleSheet.create({
   badgePillText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 11,
+    fontSize: 10,
+  },
+  rightCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
   persistentBorder: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: 1,
-    borderRadius: 18, // Matches HomePillCard radius
+    borderRadius: 16,
   },
   flashBorder: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: 1,
-    borderRadius: 18, // Matches HomePillCard radius
+    borderRadius: 16,
     borderColor: 'rgba(255,255,255,1)',
   },
   pointerEventsNone: {

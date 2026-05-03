@@ -18,27 +18,28 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
 
   const rankColors = useMemo(
     () => ({
-      background: getRankColor(item.rank > 0 ? item.rank : 4),
-      text: getRankTextColor(item.rank > 0 ? item.rank : 4),
+      background: getRankColor(item.rank),
+      text: getRankTextColor(item.rank),
     }),
     [item.rank],
   );
-  const rankLabel = item.rank > 0 ? String(item.rank) : '--';
 
   const formattedCash = useMemo(() => formatCash(item.cashAmount), [item.cashAmount]);
   const avatarUri = normalizeImageUri(item.avatarUrl);
-  const showFriendBadge = Boolean(item.isFriend) && !item.isCurrentUser;
+  const usernameLabel = item.username.trim().length > 0 ? `@${item.username}` : 'Open profile';
 
   return (
     <Pressable
-      style={[styles.container, item.isCurrentUser && styles.currentUser]}
+      style={({ pressed }) => [
+        styles.container,
+        item.isCurrentUser && styles.currentUser,
+        pressed && styles.pressed,
+      ]}
       onPress={handlePress}
-      accessibilityRole="button"
-      accessibilityLabel={`Open leaderboard profile for ${item.displayName}`}
     >
       <View style={[styles.rankBadge, { backgroundColor: rankColors.background }]}>
         <AppText variant="smallBold" style={{ color: rankColors.text }}>
-          {rankLabel}
+          {item.rank}
         </AppText>
       </View>
 
@@ -49,43 +50,38 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
       )}
 
       <View style={styles.infoContainer}>
-        <AppText variant="bodyBold" numberOfLines={1} style={styles.displayName}>
-          {item.displayName}
-        </AppText>
-        <AppText variant="small" secondary numberOfLines={1}>
-          @{item.username}
-        </AppText>
-        <View style={styles.metaRow}>
+        <View style={styles.titleRow}>
+          <AppText variant="bodyBold" numberOfLines={1} style={styles.displayName}>
+            {item.displayName || item.username || item.id}
+          </AppText>
           {item.isCurrentUser ? (
-            <View style={[styles.metaBadge, styles.selfBadge]}>
-              <AppText variant="micro" style={styles.selfBadgeText}>
+            <View style={[styles.tag, styles.currentUserTag]}>
+              <AppText variant="tinyBold" style={styles.currentUserTagText}>
                 YOU
               </AppText>
             </View>
           ) : null}
-          {showFriendBadge ? (
-            <View style={[styles.metaBadge, styles.friendBadge]}>
-              <AppText variant="micro" style={styles.friendBadgeText}>
+          {item.isFriend ? (
+            <View style={styles.tag}>
+              <AppText variant="tinyBold" style={styles.tagText}>
                 FRIEND
               </AppText>
             </View>
           ) : null}
         </View>
+        <AppText variant="small" secondary numberOfLines={1}>
+          {usernameLabel}
+        </AppText>
       </View>
 
-      <View style={styles.statsContainer}>
+      <View style={styles.trailingColumn}>
         <View style={styles.cashPill}>
           <CashIcon size={14} color={colors.accentCash} />
           <AppText variant="smallBold" style={styles.cashCount}>
             {formattedCash}
           </AppText>
         </View>
-        <Ionicons
-          name="chevron-forward"
-          size={18}
-          color={colors.textMuted}
-          style={styles.chevron}
-        />
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
       </View>
     </Pressable>
   );
@@ -104,24 +100,26 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.lg,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
+    gap: spacing.md,
+  },
+  pressed: {
+    opacity: 0.88,
   },
   currentUser: {
     borderColor: colors.accentPrimary,
     backgroundColor: colors.accentPrimarySubtle,
   },
   rankBadge: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: spacing.md,
   },
   avatar: {
-    width: 48,
-    height: 48,
+    width: 52,
+    height: 52,
     borderRadius: radius.full,
-    marginRight: spacing.md,
     backgroundColor: colors.surface,
   },
   avatarFallback: {
@@ -130,38 +128,38 @@ const styles = StyleSheet.create({
   },
   infoContainer: {
     flex: 1,
-    marginRight: spacing.sm,
+    gap: spacing.xxs,
   },
-  displayName: {
-    marginBottom: spacing.xxs,
-  },
-  metaRow: {
+  titleRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     flexWrap: 'wrap',
     gap: spacing.xs,
-    marginTop: spacing.xs,
   },
-  metaBadge: {
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.sm,
+  displayName: {
+    flexShrink: 1,
+  },
+  tag: {
+    paddingHorizontal: spacing.xsPlus,
     paddingVertical: spacing.xxs,
-  },
-  selfBadge: {
-    backgroundColor: colors.accentPrimary,
-  },
-  selfBadgeText: {
-    color: colors.textOnLight,
-  },
-  friendBadge: {
-    backgroundColor: colors.overlayRankGoldSubtle,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.borderRankGoldSubtle,
+    borderColor: colors.borderSubtle,
   },
-  friendBadgeText: {
-    color: colors.accentRankGold,
+  currentUserTag: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
   },
-  statsContainer: {
+  tagText: {
+    color: colors.textSecondary,
+  },
+  currentUserTagText: {
+    color: colors.textPrimary,
+  },
+  trailingColumn: {
     alignItems: 'flex-end',
+    gap: spacing.xs,
   },
   cashPill: {
     flexDirection: 'row',
@@ -174,8 +172,5 @@ const styles = StyleSheet.create({
   },
   cashCount: {
     color: colors.accentCash,
-  },
-  chevron: {
-    marginTop: spacing.sm,
   },
 });

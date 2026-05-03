@@ -1,72 +1,170 @@
 import React, { memo, useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
-import { AppText, PillTabs, type PillTabItem } from '../../../components';
+import { AppText, PillTabs } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
-import { PrivacyToggleCard } from './PrivacyToggleCard';
 import { LeaderboardSearchBar } from './LeaderboardSearchBar';
-import { LeaderboardTitle } from './LeaderboardTitle';
+
+type LeaderboardScope = 'all' | 'friends' | 'me';
+type LeaderboardStatusTone = 'loading' | 'reconnect' | 'info' | null;
 
 type LeaderboardListHeaderProps = {
-  isPublic: boolean;
-  onToggle: (value: boolean) => void;
-  scopeValue: string;
-  onScopeChange: (value: string) => void;
+  rankedCount: number;
+  friendRankedCount: number;
+  currentRank: number | null;
+  scope: LeaderboardScope;
+  onScopeChange: (value: LeaderboardScope) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onClearSearch: () => void;
-  summary: string;
-  statusLabel?: string | null;
+  statusTone: LeaderboardStatusTone;
+  statusTitle: string;
+  statusMessage: string;
 };
 
-const SCOPE_ITEMS: PillTabItem[] = [
-  { key: 'all', label: 'All', icon: 'globe-outline' },
-  { key: 'friends', label: 'Friends', icon: 'people-outline' },
-  { key: 'me', label: 'Me', icon: 'person-outline' },
-];
+function formatRank(value: number | null): string {
+  if (!value || value <= 0) {
+    return '--';
+  }
+  return `#${value}`;
+}
 
 function LeaderboardListHeaderComponent({
-  isPublic,
-  onToggle,
-  scopeValue,
+  rankedCount,
+  friendRankedCount,
+  currentRank,
+  scope,
   onScopeChange,
   searchValue,
   onSearchChange,
   onClearSearch,
-  summary,
-  statusLabel,
+  statusTone,
+  statusTitle,
+  statusMessage,
 }: LeaderboardListHeaderProps) {
-  const statusStyles = useMemo(
-    () => (statusLabel ? [styles.statusCard, styles.statusCardWarning] : null),
-    [statusLabel],
+  const scopeItems = useMemo(
+    () => [
+      { key: 'all', label: 'All', icon: 'trophy-outline' as const },
+      { key: 'friends', label: 'Friends', icon: 'people-outline' as const },
+      { key: 'me', label: 'Me', icon: 'person-outline' as const },
+    ],
+    [],
   );
+
+  const statusMeta = useMemo(() => {
+    switch (statusTone) {
+      case 'loading':
+        return {
+          borderColor: colors.accentPrimarySubtle,
+          icon: 'sync-outline' as keyof typeof Ionicons.glyphMap,
+          iconColor: colors.accentPrimary,
+          backgroundColor: colors.surfaceAlt,
+          loading: true,
+        };
+      case 'reconnect':
+        return {
+          borderColor: colors.overlayAccentDangerSubtle,
+          icon: 'refresh-circle-outline' as keyof typeof Ionicons.glyphMap,
+          iconColor: colors.accentWarning,
+          backgroundColor: colors.surfaceAlt,
+          loading: false,
+        };
+      case 'info':
+        return {
+          borderColor: colors.borderSubtle,
+          icon: 'information-circle-outline' as keyof typeof Ionicons.glyphMap,
+          iconColor: colors.textSecondary,
+          backgroundColor: colors.surfaceAlt,
+          loading: false,
+        };
+      default:
+        return null;
+    }
+  }, [statusTone]);
 
   return (
     <View style={styles.container}>
-      <LeaderboardTitle />
-      <AppText variant="small" secondary style={styles.summary}>
-        {summary}
-      </AppText>
-      <PrivacyToggleCard isPublic={isPublic} onToggle={onToggle} />
-      <PillTabs
-        items={SCOPE_ITEMS}
-        value={scopeValue}
-        onChange={onScopeChange}
-        style={styles.scopeTabs}
-      />
+      <View style={styles.heroCard}>
+        <View style={styles.heroHeader}>
+          <View style={styles.heroCopy}>
+            <AppText variant="micro" style={styles.eyebrow}>
+              LEADERBOARD
+            </AppText>
+            <AppText variant="h1">Ranking that stays drillable</AppText>
+            <AppText variant="small" secondary>
+              Realtime cash ranking with scope filters and direct profile drill-in from each row.
+            </AppText>
+          </View>
+          <View style={styles.heroIconWrap}>
+            <Ionicons name="trophy" size={24} color={colors.accentWarning} />
+          </View>
+        </View>
+
+        <View style={styles.statsRow}>
+          <LeaderboardStatCard label="Ranked" value={`${rankedCount}`} />
+          <LeaderboardStatCard label="Friends" value={`${friendRankedCount}`} />
+          <LeaderboardStatCard label="Your rank" value={formatRank(currentRank)} accent />
+        </View>
+      </View>
+
       <LeaderboardSearchBar
         value={searchValue}
         onChangeText={onSearchChange}
         onClear={onClearSearch}
       />
-      {statusLabel ? (
-        <View style={statusStyles}>
-          <View style={styles.statusDot} />
-          <AppText variant="tinyBold" style={styles.statusText}>
-            {statusLabel}
-          </AppText>
+
+      <PillTabs
+        items={scopeItems}
+        value={scope}
+        onChange={(value) => onScopeChange(value as LeaderboardScope)}
+        style={styles.scopeTabs}
+      />
+
+      {statusMeta && statusTitle && statusMessage ? (
+        <View style={[
+          styles.statusBanner,
+          {
+            borderColor: statusMeta.borderColor,
+            backgroundColor: statusMeta.backgroundColor,
+          },
+        ]}>
+          <View style={styles.statusIconWrap}>
+            {statusMeta.loading ? (
+              <ActivityIndicator size="small" color={statusMeta.iconColor} />
+            ) : (
+              <Ionicons name={statusMeta.icon} size={18} color={statusMeta.iconColor} />
+            )}
+          </View>
+          <View style={styles.statusCopy}>
+            <AppText variant="smallBold">{statusTitle}</AppText>
+            <AppText variant="small" secondary>
+              {statusMessage}
+            </AppText>
+          </View>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+function LeaderboardStatCard({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <View style={[styles.statCard, accent && styles.statCardAccent]}>
+      <AppText variant="micro" style={[styles.statLabel, accent && styles.statLabelAccent]}>
+        {label}
+      </AppText>
+      <AppText variant="bodyBold" style={accent ? styles.statValueAccent : undefined}>
+        {value}
+      </AppText>
     </View>
   );
 }
@@ -76,35 +174,88 @@ export const LeaderboardListHeader = memo(LeaderboardListHeaderComponent);
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: spacing.lg,
-    marginBottom: spacing.md,
+    paddingTop: spacing.md,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
   },
-  summary: {
-    textAlign: 'center',
-    marginBottom: spacing.md,
+  heroCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  heroCopy: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  eyebrow: {
+    color: colors.accentPrimary,
+    letterSpacing: 1.2,
+  },
+  heroIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.overlayRankGoldSubtle,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  statCard: {
+    flex: 1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    gap: spacing.xs,
+  },
+  statCardAccent: {
+    borderColor: colors.accentPrimarySubtle,
+    backgroundColor: colors.surfaceAlt,
+  },
+  statLabel: {
+    color: colors.textMuted,
+  },
+  statLabelAccent: {
+    color: colors.accentPrimary,
+  },
+  statValueAccent: {
+    color: colors.accentPrimary,
   },
   scopeTabs: {
-    marginBottom: spacing.md,
+    paddingHorizontal: spacing.xs,
   },
-  statusCard: {
+  statusBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    borderRadius: radius.md,
+    gap: spacing.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.smPlus,
+    padding: spacing.md,
   },
-  statusCardWarning: {
-    backgroundColor: colors.overlayAccentDangerSubtle,
-    borderColor: colors.accentDanger,
+  statusIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentDanger,
-  },
-  statusText: {
+  statusCopy: {
     flex: 1,
+    gap: spacing.xxs,
   },
 });

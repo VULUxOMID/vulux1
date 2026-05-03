@@ -9,13 +9,18 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { useAuth as useSessionAuth } from '../auth/clerkSession';
+import {
+  fetchAccountState as fetchBackendAccountState,
+  upsertAccountState as upsertBackendAccountState,
+} from '../data/adapters/backend/accountState';
 import { UserRole } from '../features/liveroom/types';
-import { useUser as useSessionUser } from '../auth/spacetimeSession';
-import { clearPendingSignUpIdentity, readPendingSignUpIdentity } from '../features/auth/pendingSignUpIdentity';
-import { spacetimeDb, subscribeSpacetimeDataChanges } from '../lib/spacetime';
+import { railwayDb, subscribeRailwayDataChanges } from '../lib/railwayRuntime';
+import { deriveAgeFromBirthDate, formatBirthDate, parseBirthDate } from '../utils/birthDate';
 import { useAuth as useAppAuth } from './AuthContext';
 
 export type PresenceStatus = 'online' | 'busy' | 'offline';
+export type UserProfileGender = 'male' | 'female' | 'non_binary' | 'prefer_not_to_say';
 
 export type UserProfilePhoto = {
   id: string;
@@ -29,10 +34,13 @@ export interface UserProfile {
   name: string;
   username: string;
   age: number;
+  birthDate: string;
+  genderIdentity?: UserProfileGender;
   country: string;
   bio: string;
   avatarUrl: string;
   photos: UserProfilePhoto[];
+  verificationPhotoUri?: string;
   roles?: UserRole[];
   isFriend?: boolean;
   presenceStatus: PresenceStatus;
@@ -40,6 +48,7 @@ export interface UserProfile {
 }
 
 interface UserProfileContextType {
+  isProfileReady: boolean;
   userProfile: UserProfile;
   updateUserProfile: (updates: Partial<UserProfile>) => void;
   updateAvatar: (newAvatarUrl: string) => void;
@@ -52,15 +61,19 @@ const defaultProfile: UserProfile = {
   name: '',
   username: '',
   age: 0,
+  birthDate: '',
+  genderIdentity: undefined,
   country: '',
   bio: '',
   avatarUrl: '',
   photos: defaultPhotos,
+  verificationPhotoUri: '',
   roles: [],
   isFriend: false,
   presenceStatus: 'offline',
 };
 const PROFILE_PERSIST_RETRY_MS = 2_000;
+const PROFILE_READY_FALLBACK_MS = 2_250;
 const PROFILE_LOCAL_CACHE_KEY_PREFIX = '@vulu.profile.snapshot:';
 const PROFILE_DIAGNOSTIC_THROTTLE_MS = 15_000;
 const profileDiagnosticLastLogAt: Record<string, number> = {};
@@ -134,24 +147,48 @@ function normalizePresenceStatus(
   return null;
 }
 
+function normalizeGenderIdentity(value: unknown): UserProfileGender | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === 'male' ||
+    normalized === 'female' ||
+    normalized === 'non_binary' ||
+    normalized === 'prefer_not_to_say'
+  ) {
+    return normalized;
+  }
+
+  if (normalized === 'non-binary') {
+    return 'non_binary';
+  }
+
+  if (normalized === 'prefer-not-to-say') {
+    return 'prefer_not_to_say';
+  }
+
+  return undefined;
+}
+
 function hasMeaningfulProfileData(profile: UserProfile): boolean {
   return Boolean(
     profile.name.trim() ||
     profile.username.trim() ||
     profile.avatarUrl.trim() ||
     profile.photos.length > 0 ||
-    (profile.statusMessage?.trim() ?? '').length > 0,
+    (profile.statusMessage?.trim() ?? '').length > 0 ||
+    profile.presenceStatus !== 'offline',
   );
 }
 
-function hasMeaningfulProfilePatchData(profile: Partial<UserProfile>): boolean {
-  return Boolean(
-    profile.name?.trim() ||
-    profile.username?.trim() ||
-    profile.avatarUrl?.trim() ||
-    (profile.photos?.length ?? 0) > 0 ||
-    (profile.statusMessage?.trim() ?? '').length > 0,
-  );
+export function createResolvedUserProfile(resolvedUserId: string): UserProfile {
+  return {
+    ...defaultProfile,
+    id: resolvedUserId,
+  };
 }
 
 function normalizePhotos(value: unknown): UserProfilePhoto[] {
@@ -237,10 +274,13 @@ function toCachedProfilePayload(profile: UserProfile, updatedAtMs: number): stri
       name: profile.name,
       username: profile.username,
       age: profile.age,
+      birthDate: profile.birthDate,
+      genderIdentity: profile.genderIdentity ?? '',
       country: profile.country,
       bio: profile.bio,
       avatarUrl: profile.avatarUrl,
       photos: profile.photos,
+      verificationPhotoUri: profile.verificationPhotoUri ?? '',
       presenceStatus: profile.presenceStatus,
       statusMessage: profile.statusMessage ?? '',
     },
@@ -262,18 +302,32 @@ function parseCachedProfilePayload(raw: string | null): { profile: Partial<UserP
     const source = isRecord(parsed.profile) ? parsed.profile : {};
     const photos = normalizePhotos(source.photos);
     const presenceStatus = normalizePresenceStatus(source.presenceStatus);
+    const birthDate =
+      (() => {
+        const parsed =
+          parseBirthDate(asString(source.birthDate)) ??
+          parseBirthDate(asString(source.dateOfBirth)) ??
+          parseBirthDate(asString(source.birthday));
+        return parsed ? formatBirthDate(parsed) : '';
+      })();
+    const derivedAge = deriveAgeFromBirthDate(birthDate);
 
     const profile: Partial<UserProfile> = {
       name: asString(source.name) ?? '',
       username: asString(source.username) ?? '',
       age:
-        typeof source.age === 'number' && Number.isFinite(source.age)
+        derivedAge ??
+        (typeof source.age === 'number' && Number.isFinite(source.age)
           ? source.age
-          : 0,
+          : 0),
+      birthDate,
+      genderIdentity:
+        normalizeGenderIdentity(source.genderIdentity) ?? normalizeGenderIdentity(source.gender),
       country: asString(source.country) ?? '',
       bio: asString(source.bio) ?? '',
       avatarUrl: asString(source.avatarUrl) ?? photos[0]?.uri ?? '',
       photos,
+      verificationPhotoUri: asString(source.verificationPhotoUri) ?? '',
       presenceStatus: presenceStatus ?? 'offline',
       statusMessage: asString(source.statusMessage) ?? '',
     };
@@ -284,16 +338,13 @@ function parseCachedProfilePayload(raw: string | null): { profile: Partial<UserP
   }
 }
 
-function extractProfileFromAccountState(dbView: any): AccountStateProfileSnapshot | null {
-  const rows: any[] = Array.from(
-    dbView?.myAccountState?.iter?.() ?? dbView?.my_account_state?.iter?.() ?? [],
-  );
-  const row = rows[0];
-  if (!row) {
+export function extractProfileFromStateRecord(
+  state: Record<string, unknown> | null | undefined,
+): AccountStateProfileSnapshot | null {
+  if (!isRecord(state)) {
     return null;
   }
 
-  const state = parseJsonRecord(row.state);
   const profileSource = isRecord(state.profile) ? state.profile : null;
   if (!profileSource) {
     return null;
@@ -301,6 +352,15 @@ function extractProfileFromAccountState(dbView: any): AccountStateProfileSnapsho
 
   const photos = normalizePhotos(profileSource.photos);
   const profilePatch: Partial<UserProfile> = {};
+  const birthDate =
+    (() => {
+      const parsed =
+        parseBirthDate(asString(profileSource.birthDate)) ??
+        parseBirthDate(asString(profileSource.dateOfBirth)) ??
+        parseBirthDate(asString(profileSource.birthday));
+      return parsed ? formatBirthDate(parsed) : '';
+    })();
+  const derivedAge = deriveAgeFromBirthDate(birthDate);
 
   const name = asString(profileSource.displayName) ?? asString(profileSource.name);
   if (name !== null) {
@@ -312,8 +372,20 @@ function extractProfileFromAccountState(dbView: any): AccountStateProfileSnapsho
     profilePatch.username = username;
   }
 
-  if (typeof profileSource.age === 'number' && Number.isFinite(profileSource.age)) {
+  if (birthDate) {
+    profilePatch.birthDate = birthDate;
+  }
+
+  if (derivedAge !== null) {
+    profilePatch.age = derivedAge;
+  } else if (typeof profileSource.age === 'number' && Number.isFinite(profileSource.age)) {
     profilePatch.age = profileSource.age;
+  }
+
+  const genderIdentity =
+    normalizeGenderIdentity(profileSource.genderIdentity) ?? normalizeGenderIdentity(profileSource.gender);
+  if (genderIdentity !== undefined) {
+    profilePatch.genderIdentity = genderIdentity;
   }
 
   const country = asString(profileSource.country);
@@ -330,8 +402,13 @@ function extractProfileFromAccountState(dbView: any): AccountStateProfileSnapsho
   if (avatarUrl !== null) {
     profilePatch.avatarUrl = avatarUrl;
   }
-  if (photos.length > 0) {
+  if ('photos' in profileSource) {
     profilePatch.photos = photos;
+  }
+
+  const verificationPhotoUri = asString(profileSource.verificationPhotoUri);
+  if (verificationPhotoUri !== null) {
+    profilePatch.verificationPhotoUri = verificationPhotoUri;
   }
 
   const presenceStatus =
@@ -358,18 +435,11 @@ function extractProfileFromAccountState(dbView: any): AccountStateProfileSnapsho
 }
 
 function readCurrentProfileRow(): HydratedProfilePatch | null {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(dbView?.myProfile?.iter?.() ?? dbView?.my_profile?.iter?.() ?? []);
   const row = rows[0];
-  const accountStateSnapshot = extractProfileFromAccountState(dbView);
-  const accountStateProfile = accountStateSnapshot?.profile;
   if (!row) {
-    return accountStateProfile
-      ? {
-        ...accountStateProfile,
-        __updatedAtMs: accountStateSnapshot?.updatedAtMs ?? 0,
-      }
-      : null;
+    return null;
   }
 
   const profile = parseJsonRecord(row.profile);
@@ -377,93 +447,88 @@ function readCurrentProfileRow(): HydratedProfilePatch | null {
     readTimestampMs(profile.updatedAt) ??
     readTimestampMs(row.updatedAt) ??
     0;
-  const preferAccountStateProfile =
-    Boolean(accountStateSnapshot) &&
-    (accountStateSnapshot?.updatedAtMs ?? 0) > 0 &&
-    (accountStateSnapshot?.updatedAtMs ?? -1) >= profileUpdatedAtMs;
-  const latestProfilePatch = preferAccountStateProfile ? accountStateProfile ?? null : null;
-  const staleProfilePatch = preferAccountStateProfile ? null : accountStateProfile ?? null;
   const userId = asString(row.userId ?? row.user_id) ?? asString(profile.userId) ?? undefined;
   const socialRow = userId ? dbView?.socialUserItem?.userId?.find?.(userId) : null;
   const social = parseJsonRecord(socialRow?.item);
   const profilePhotos = normalizePhotos(profile.photos);
-  const latestPhotos = latestProfilePatch?.photos;
-  const stalePhotos = staleProfilePatch?.photos;
-  const photos =
-    (latestPhotos?.length ?? 0) > 0
-      ? latestPhotos ?? []
-      : (profilePhotos.length > 0
-        ? profilePhotos
-        : stalePhotos ?? []);
+  const photos = profilePhotos.length > 0 ? profilePhotos : [];
+  const birthDate =
+    (() => {
+      const parsed =
+        parseBirthDate(asString(profile.birthDate)) ??
+        parseBirthDate(asString(profile.dateOfBirth)) ??
+        parseBirthDate(asString(profile.birthday));
+      return parsed ? formatBirthDate(parsed) : '';
+    })();
+  const derivedAge = deriveAgeFromBirthDate(birthDate);
   const avatarUrl =
-    latestProfilePatch?.avatarUrl ??
     asString(profile.avatarUrl) ??
     photos[0]?.uri ??
-    staleProfilePatch?.avatarUrl ??
     '';
   const presenceStatus =
-    latestProfilePatch?.presenceStatus ??
     normalizePresenceStatus(profile.presenceStatus) ??
     normalizePresenceStatus(social.status) ??
     normalizePresenceStatus(social.presenceStatus) ??
     normalizePresenceStatus(social.accountStatus) ??
-    staleProfilePatch?.presenceStatus ??
     'online';
-
-  const mergedUpdatedAtMs = Math.max(
-    profileUpdatedAtMs,
-    accountStateSnapshot?.updatedAtMs ?? 0,
-  );
 
   return {
     id: userId,
     name:
-      latestProfilePatch?.name ??
       asString(profile.displayName) ??
       asString(profile.name) ??
-      staleProfilePatch?.name ??
       '',
     username:
-      latestProfilePatch?.username ??
       asString(profile.username) ??
-      staleProfilePatch?.username ??
       '',
     age:
-      latestProfilePatch?.age ??
+      derivedAge ??
       (typeof profile.age === 'number' && Number.isFinite(profile.age)
         ? profile.age
-        : staleProfilePatch?.age ?? 0),
+        : 0),
+    birthDate,
+    genderIdentity:
+      normalizeGenderIdentity(profile.genderIdentity) ?? normalizeGenderIdentity(profile.gender),
     country:
-      latestProfilePatch?.country ??
       asString(profile.country) ??
-      staleProfilePatch?.country ??
       '',
     bio:
-      latestProfilePatch?.bio ??
       asString(profile.bio) ??
-      staleProfilePatch?.bio ??
       '',
     avatarUrl,
     photos,
+    verificationPhotoUri:
+      asString(profile.verificationPhotoUri) ??
+      '',
     presenceStatus,
     statusMessage:
-      latestProfilePatch?.statusMessage ??
       asString(profile.statusMessage) ??
       asString(profile.statusText) ??
       asString(social.statusMessage) ??
       asString(social.statusText) ??
-      staleProfilePatch?.statusMessage ??
       '',
-    __updatedAtMs: mergedUpdatedAtMs,
+    __updatedAtMs: profileUpdatedAtMs,
   };
 }
 
-function mergeUserProfile(prev: UserProfile, updates: Partial<UserProfile>): UserProfile {
+export function mergeUserProfile(prev: UserProfile, updates: Partial<UserProfile>): UserProfile {
   const next = { ...prev, ...updates };
+  if ('birthDate' in updates) {
+    const parsedBirthDate = parseBirthDate(updates.birthDate);
+    next.birthDate = parsedBirthDate ? formatBirthDate(parsedBirthDate) : '';
+  }
+
+  const derivedAge = deriveAgeFromBirthDate(next.birthDate);
+  if (derivedAge !== null) {
+    next.age = derivedAge;
+  }
 
   if (updates.photos) {
     if (updates.photos.length === 0) {
-      next.avatarUrl = '';
+      next.avatarUrl =
+        typeof updates.avatarUrl === 'string' && updates.avatarUrl.trim().length > 0
+          ? updates.avatarUrl.trim()
+          : '';
     } else {
       const requestedAvatar = updates.avatarUrl ?? next.avatarUrl;
       if (!requestedAvatar || !updates.photos.some((photo) => photo.uri === requestedAvatar)) {
@@ -483,22 +548,30 @@ function mergeUserProfile(prev: UserProfile, updates: Partial<UserProfile>): Use
 
 export function UserProfileProvider({ children }: { children: ReactNode }) {
   const { user } = useAppAuth();
-  const { user: sessionUser } = useSessionUser();
-  const resolvedUserId = user?.uid ?? defaultProfile.id;
+  const {
+    getToken,
+    isLoaded: isAuthLoaded,
+    isSignedIn,
+    userId: sessionUserId,
+  } = useSessionAuth();
+  const resolvedUserId = sessionUserId ?? user?.uid ?? defaultProfile.id;
   const localMutationVersionRef = useRef(0);
   const latestProfileVersionMsRef = useRef(0);
   const pendingPersistRef = useRef<{ userId: string; profileJson: string } | null>(null);
   const persistInFlightRef = useRef(false);
   const persistRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushPendingPersistRef = useRef<() => void>(() => { });
+  const getTokenRef = useRef(getToken);
   const userProfileRef = useRef<UserProfile>({
     ...defaultProfile,
     id: resolvedUserId,
   });
+  const lastResolvedUserIdRef = useRef(resolvedUserId);
   const [userProfile, setUserProfile] = useState<UserProfile>(() => ({
     ...defaultProfile,
     id: resolvedUserId,
   }));
+  const [isProfileReady, setIsProfileReady] = useState(() => !isSignedIn || resolvedUserId === defaultProfile.id);
 
   const persistProfileLocally = useCallback((userId: string, profile: UserProfile, updatedAtMs: number) => {
     if (!userId || userId === defaultProfile.id) {
@@ -513,6 +586,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       warnProfileDiagnosticThrottled('cache_profile_locally_failed');
     });
   }, []);
+
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
 
   const clearPersistRetryTimer = useCallback(() => {
     if (!persistRetryTimerRef.current) {
@@ -533,51 +610,21 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
-        const reducers = spacetimeDb.reducers as any;
         const parsedProfile = parseJsonRecord(pending.profileJson);
-        let persistedViaAnyReducer = false;
-        const reducerErrors: string[] = [];
+        const wroteToBackend = await upsertBackendAccountState(
+          null,
+          getTokenRef.current,
+          {
+            profile: {
+              ...parsedProfile,
+              updatedAt: Date.now(),
+            },
+          },
+          pending.userId,
+        );
 
-        if (typeof reducers?.createUserProfile === 'function') {
-          try {
-            await reducers.createUserProfile({
-              userId: pending.userId,
-              profile: pending.profileJson,
-            });
-            persistedViaAnyReducer = true;
-          } catch (error) {
-            reducerErrors.push(`createUserProfile: ${describeError(error)}`);
-          }
-        }
-
-        if (typeof reducers?.upsertAccountState === 'function') {
-          try {
-            await reducers.upsertAccountState({
-              userId: pending.userId,
-              updates: JSON.stringify({
-                profile: {
-                  ...parsedProfile,
-                  updatedAt: Date.now(),
-                },
-              }),
-            });
-            persistedViaAnyReducer = true;
-          } catch (error) {
-            reducerErrors.push(`upsertAccountState: ${describeError(error)}`);
-          }
-        }
-
-        if (!persistedViaAnyReducer) {
-          const fallbackMessage =
-            reducerErrors.length > 0
-              ? reducerErrors.join(' | ')
-              : 'SpacetimeDB reducers are unavailable.';
-          throw new Error(fallbackMessage);
-        }
-        if (reducerErrors.length > 0) {
-          warnProfileDiagnosticThrottled('partial_profile_persistence_failure', {
-            reducerErrorCount: reducerErrors.length,
-          });
+        if (!wroteToBackend) {
+          throw new Error('Profile write did not reach authoritative Railway storage.');
         }
 
         if (
@@ -587,8 +634,9 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
           pendingPersistRef.current = null;
         }
       } catch (error) {
-        void error;
-        warnProfileDiagnosticThrottled('persist_profile_via_spacetimedb_failed');
+        warnProfileDiagnosticThrottled('persist_profile_via_railway_failed', {
+          error: describeError(error),
+        });
         if (!persistRetryTimerRef.current) {
           warnProfileDiagnosticThrottled('persist_profile_retry_scheduled');
           persistRetryTimerRef.current = setTimeout(() => {
@@ -619,6 +667,16 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     persistInFlightRef.current = false;
   }, [clearPersistRetryTimer]);
 
+  useEffect(() => {
+    if (lastResolvedUserIdRef.current === resolvedUserId) {
+      return;
+    }
+
+    clearPersistRetryTimer();
+    pendingPersistRef.current = null;
+    lastResolvedUserIdRef.current = resolvedUserId;
+  }, [clearPersistRetryTimer, resolvedUserId]);
+
   const queueProfilePersist = useCallback((userId: string, profile: UserProfile) => {
     if (!userId || userId === defaultProfile.id) {
       return;
@@ -635,11 +693,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         username: profile.username,
         displayName: profile.name,
         name: profile.name,
-        age: profile.age,
+        age: deriveAgeFromBirthDate(profile.birthDate) ?? profile.age,
+        birthDate: profile.birthDate,
+        genderIdentity: profile.genderIdentity ?? '',
         country: profile.country,
         bio: profile.bio,
         avatarUrl: profile.avatarUrl,
         photos: profile.photos,
+        verificationPhotoUri: profile.verificationPhotoUri ?? '',
         presenceStatus: profile.presenceStatus,
         statusMessage: profile.statusMessage ?? '',
         updatedAt: updatedAtMs,
@@ -657,12 +718,21 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    setUserProfile((prev) => {
-      const next = mergeUserProfile(prev, { id: resolvedUserId });
+    setUserProfile(() => {
+      const next = createResolvedUserProfile(resolvedUserId);
       userProfileRef.current = next;
       return next;
     });
   }, [resolvedUserId]);
+
+  useEffect(() => {
+    if (!isAuthLoaded || !isSignedIn || !resolvedUserId || resolvedUserId === defaultProfile.id) {
+      setIsProfileReady(true);
+      return;
+    }
+
+    setIsProfileReady(false);
+  }, [isAuthLoaded, isSignedIn, resolvedUserId]);
 
   useEffect(() => {
     if (!resolvedUserId || resolvedUserId === defaultProfile.id) {
@@ -675,11 +745,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.getItem(buildProfileLocalCacheKey(resolvedUserId)),
       );
       if (!cached || cancelled) {
-        return;
-      }
-
-      if (!hasMeaningfulProfilePatchData(cached.profile)) {
-        void AsyncStorage.removeItem(buildProfileLocalCacheKey(resolvedUserId)).catch(() => {});
         return;
       }
 
@@ -719,96 +784,46 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   }, [queueProfilePersist, resolvedUserId]);
 
   useEffect(() => {
-    if (!resolvedUserId || resolvedUserId === defaultProfile.id) {
-      return;
-    }
-
     let cancelled = false;
-    void (async () => {
-      const pendingIdentity = await readPendingSignUpIdentity();
-      if (!pendingIdentity || cancelled) {
-        return;
+    const readyFallbackTimer = setTimeout(() => {
+      if (!cancelled) {
+        setIsProfileReady(true);
       }
+    }, PROFILE_READY_FALLBACK_MS);
 
-      const currentEmail = user?.email?.trim().toLowerCase() ?? '';
-      if (currentEmail && pendingIdentity.email !== currentEmail) {
-        return;
-      }
-
-      setUserProfile((prev) => {
-        const updates: Partial<UserProfile> = { id: resolvedUserId };
-        if (!prev.name.trim()) {
-          updates.name = pendingIdentity.displayName;
-        }
-        if (!prev.username.trim()) {
-          updates.username = pendingIdentity.username;
-        }
-        if (Object.keys(updates).length === 1) {
-          return prev;
-        }
-
-        localMutationVersionRef.current += 1;
-        const next = mergeUserProfile(prev, updates);
-        userProfileRef.current = next;
-        persistProfileSnapshot(resolvedUserId, next);
-        void clearPendingSignUpIdentity();
-        return next;
-      });
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [persistProfileSnapshot, resolvedUserId, user?.email]);
-
-  useEffect(() => {
-    if (!resolvedUserId || resolvedUserId === defaultProfile.id) {
-      return;
-    }
-
-    const sessionName = sessionUser?.fullName?.trim() ?? '';
-    const sessionUsername = sessionUser?.username?.trim() ?? '';
-    const sessionAvatarUrl = sessionUser?.imageUrl?.trim() ?? '';
-
-    if (!sessionName && !sessionUsername && !sessionAvatarUrl) {
-      return;
-    }
-
-    setUserProfile((prev) => {
-      const updates: Partial<UserProfile> = { id: resolvedUserId };
-
-      if (!prev.name.trim() && sessionName) {
-        updates.name = sessionName;
-      }
-      if (!prev.username.trim() && sessionUsername) {
-        updates.username = sessionUsername;
-      }
-      if (!prev.avatarUrl.trim() && sessionAvatarUrl) {
-        updates.avatarUrl = sessionAvatarUrl;
-      }
-
-      if (Object.keys(updates).length === 1) {
-        return prev;
-      }
-
-      localMutationVersionRef.current += 1;
-      const next = mergeUserProfile(prev, updates);
-      userProfileRef.current = next;
-      persistProfileSnapshot(resolvedUserId, next);
-      return next;
-    });
-  }, [
-    persistProfileSnapshot,
-    resolvedUserId,
-    sessionUser?.fullName,
-    sessionUser?.imageUrl,
-    sessionUser?.username,
-  ]);
-
-  useEffect(() => {
-    const syncFromSpacetime = () => {
+    const syncFromAuthoritativeProfile = async () => {
       const hydrateStartMutationVersion = localMutationVersionRef.current;
-      const nextProfile = readCurrentProfileRow();
+      let nextProfile: HydratedProfilePatch | null = null;
+
+      if (isAuthLoaded && isSignedIn && resolvedUserId && resolvedUserId !== defaultProfile.id) {
+        try {
+          const backendState = await fetchBackendAccountState(
+            null,
+            getTokenRef.current,
+            resolvedUserId,
+          );
+          if (!cancelled) {
+            const backendSnapshot = extractProfileFromStateRecord(backendState);
+            if (backendSnapshot) {
+              nextProfile = {
+                ...backendSnapshot.profile,
+                __updatedAtMs: backendSnapshot.updatedAtMs,
+              };
+            }
+          }
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('[profile][diag] backend_profile_hydration_failed', {
+              error: describeError(error),
+            });
+          }
+        }
+      }
+
+      if (!nextProfile) {
+        nextProfile = readCurrentProfileRow();
+      }
+
       if (!nextProfile) {
         return;
       }
@@ -836,29 +851,36 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         }
         return merged;
       });
+      if (!cancelled) {
+        setIsProfileReady(true);
+      }
     };
 
-    syncFromSpacetime();
+    void syncFromAuthoritativeProfile();
     const warmupTimers = [350, 1_000, 2_000].map((delayMs) =>
-      setTimeout(syncFromSpacetime, delayMs),
+      setTimeout(() => {
+        void syncFromAuthoritativeProfile();
+      }, delayMs),
     );
 
-    const unsubscribe = subscribeSpacetimeDataChanges((event) => {
+    const unsubscribe = subscribeRailwayDataChanges((event) => {
       if (
         event.scopes.includes('profile') ||
         event.scopes.includes('social') ||
         event.scopes.includes('wallet') ||
         event.scopes.includes('identity')
       ) {
-        syncFromSpacetime();
+        void syncFromAuthoritativeProfile();
       }
     });
 
     return () => {
+      cancelled = true;
+      clearTimeout(readyFallbackTimer);
       warmupTimers.forEach((timer) => clearTimeout(timer));
       unsubscribe();
     };
-  }, [persistProfileLocally, resolvedUserId]);
+  }, [isAuthLoaded, isSignedIn, persistProfileLocally, resolvedUserId]);
 
   const updateUserProfile = useCallback(
     (updates: Partial<UserProfile>) => {
@@ -907,7 +929,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <UserProfileContext.Provider value={{ userProfile, updateUserProfile, updateAvatar }}>
+    <UserProfileContext.Provider value={{ isProfileReady, userProfile, updateUserProfile, updateAvatar }}>
       {children}
     </UserProfileContext.Provider>
   );

@@ -14,14 +14,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppScreen, AppText, Avatar } from '../../src/components';
 import { useFriends } from '../../src/context';
 import { colors, radius, spacing, typography } from '../../src/theme';
-import { hapticConfirm, hapticTap } from '../../src/utils/haptics';
+import { hapticTap, hapticSuccess } from '../../src/utils/haptics';
 import { toast } from '../../src/components/Toast';
+import { useAuth } from '../../src/auth/clerkSession';
+import { createGroupChatRoom } from '../../src/features/messages/groupChatApi';
 
 export default function NewGroupScreen() {
     const router = useRouter();
+    const { userId } = useAuth();
     const { friends, loading: friendsLoading } = useFriends();
     const [searchQuery, setSearchQuery] = useState('');
+    const [groupTitle, setGroupTitle] = useState('');
     const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Group friends by the first letter of their name for alphabetical sectioning (if desired later),
     // but for now we just filter based on search query.
@@ -56,16 +61,34 @@ export default function NewGroupScreen() {
         });
     };
 
-    const handleCreateGroup = () => {
+    const handleCreateGroup = async () => {
         if (selectedUserIds.size === 0) {
             toast.show('Select at least one member to create a group.');
             return;
         }
-        hapticConfirm();
-        toast.show('Group created successfully!');
-        // Real implementation would call backend and navigate to the new group ID
-        // For now, we simulate success and return to chat list
-        router.back();
+        if (!userId) {
+            toast.show('Sign in to create a group.');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            const room = await createGroupChatRoom({
+                title: groupTitle.trim() || undefined,
+                members: selectedFriends.map((friend) => ({
+                    userId: friend.id,
+                    displayName: friend.name,
+                    username: friend.username ?? undefined,
+                    avatarUrl: friend.avatarUrl || friend.imageUrl || undefined,
+                })),
+            });
+            hapticSuccess();
+            toast.show('Group created successfully!');
+            router.replace(`/chat/room/${encodeURIComponent(room.id)}`);
+        } catch (error) {
+            toast.show(error instanceof Error ? error.message : 'Could not create the group.');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
@@ -82,19 +105,21 @@ export default function NewGroupScreen() {
                     </AppText>
                 </View>
                 <Pressable
-                    onPress={handleCreateGroup}
+                    onPress={() => {
+                        void handleCreateGroup();
+                    }}
                     style={[
                         styles.createButton,
-                        selectedUserIds.size === 0 && styles.createButtonDisabled,
+                        (selectedUserIds.size === 0 || isSubmitting) && styles.createButtonDisabled,
                     ]}
                 >
                     <AppText
                         style={[
                             styles.createText,
-                            selectedUserIds.size === 0 && styles.createTextDisabled,
+                            (selectedUserIds.size === 0 || isSubmitting) && styles.createTextDisabled,
                         ]}
                     >
-                        Create
+                        {isSubmitting ? 'Saving' : 'Create'}
                     </AppText>
                 </Pressable>
             </View>
@@ -105,6 +130,16 @@ export default function NewGroupScreen() {
             >
                 {/* Search & Selected Chips Area */}
                 <View style={styles.searchSection}>
+                    <View style={styles.titleInputContainer}>
+                        <Ionicons name="chatbubbles-outline" size={18} color={colors.textMuted} />
+                        <TextInput
+                            value={groupTitle}
+                            onChangeText={setGroupTitle}
+                            placeholder="Group name (optional)"
+                            placeholderTextColor={colors.textMuted}
+                            style={styles.titleInput}
+                        />
+                    </View>
                     <View style={styles.searchInputContainer}>
                         <Ionicons name="search" size={20} color={colors.textMuted} />
                         <ScrollView
@@ -119,7 +154,11 @@ export default function NewGroupScreen() {
                                     style={styles.chip}
                                     onPress={() => toggleUser(f.id)}
                                 >
-                                    <Avatar uri={f.avatarUrl || f.imageUrl} name={f.name} size="xs" />
+                                    <Avatar
+                                        uri={f.avatarUrl || f.imageUrl}
+                                        name={f.name}
+                                        customSize={20}
+                                    />
                                     <AppText style={styles.chipText} numberOfLines={1}>
                                         {f.name}
                                     </AppText>
@@ -242,6 +281,23 @@ const styles = StyleSheet.create({
     searchSection: {
         padding: spacing.lg,
         paddingBottom: spacing.sm,
+        gap: spacing.sm,
+    },
+    titleInputContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.surfaceAlt,
+        borderRadius: radius.md,
+        minHeight: 44,
+        paddingHorizontal: spacing.md,
+        borderWidth: 1,
+        borderColor: colors.borderSubtle,
+        gap: spacing.sm,
+    },
+    titleInput: {
+        flex: 1,
+        color: colors.textPrimary,
+        fontSize: 15,
     },
     searchInputContainer: {
         flexDirection: 'row',
@@ -265,7 +321,7 @@ const styles = StyleSheet.create({
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: colors.surfaceAlt,
+        backgroundColor: colors.playSurfaceHighlight,
         borderRadius: radius.full,
         padding: 4,
         paddingRight: 10,

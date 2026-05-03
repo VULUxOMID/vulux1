@@ -9,10 +9,10 @@ import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
 import { requestBackendRefresh } from './refreshBus';
 import {
-  isSpacetimeViewActive,
-  isSpacetimeViewRequested,
-  spacetimeDb,
-} from '../../../lib/spacetime';
+  isRailwayViewActive,
+  isRailwayViewRequested,
+  railwayDb,
+} from '../../../lib/railwayRuntime';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -41,6 +41,7 @@ type UserDirectoryEntry = {
 const globalMessagesCacheByRoom = new Map<string, GlobalChatMessage[]>();
 const conversationsCacheByViewer = new Map<string, Conversation[]>();
 const threadMessagesCacheByConversation = new Map<string, ThreadSeedMessage[]>();
+const MENTION_HANDLE_REGEX = /@([a-zA-Z0-9_.-]{2,30})/g;
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -59,7 +60,7 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
-function readSpacetimeTimestampMs(value: unknown): number {
+function readRailwayTimestampMs(value: unknown): number {
   const directNumber = toFiniteNumber(value);
   if (directNumber !== null) {
     return directNumber;
@@ -133,6 +134,24 @@ function buildConversationKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join('::');
 }
 
+function extractMentionHandles(text: string): string[] {
+  const normalizedText = text.trim();
+  if (!normalizedText) {
+    return [];
+  }
+
+  const handles = new Set<string>();
+  let match: RegExpExecArray | null;
+  MENTION_HANDLE_REGEX.lastIndex = 0;
+  // eslint-disable-next-line no-cond-assign
+  while ((match = MENTION_HANDLE_REGEX.exec(normalizedText)) !== null) {
+    const handle = match[1]?.trim().toLowerCase();
+    if (!handle) continue;
+    handles.add(handle);
+  }
+  return Array.from(handles);
+}
+
 function isIdentityLikeName(userId: string, value: string | null | undefined): boolean {
   if (!value) return true;
   const trimmed = value.trim();
@@ -162,77 +181,99 @@ function upsertUserDirectoryEntry(
   }
 }
 
-function buildKnownUserDirectory(globalRows?: any[]): Map<string, UserDirectoryEntry> {
+function buildKnownUserDirectory(
+  snapshot: BackendSnapshot,
+  globalRows?: any[],
+): Map<string, UserDirectoryEntry> {
   const users = new Map<string, UserDirectoryEntry>();
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
 
-  const publicRows: any[] = Array.from(
-    dbView?.publicProfileSummary?.iter?.() ?? dbView?.public_profile_summary?.iter?.() ?? [],
-  );
-  for (const row of publicRows) {
-    const userId = asString(row?.userId ?? row?.user_id);
+  for (const user of snapshot.socialUsers) {
+    const userId = asString(user.id);
     if (!userId) continue;
-    const updatedAt = Date.now();
     upsertUserDirectoryEntry(
       users,
       userId,
       {
-        username: asString(row?.username) ?? undefined,
-        displayName:
-          asString(row?.displayName ?? row?.display_name) ??
-          asString(row?.username) ??
-          undefined,
-        avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url) ?? undefined,
+        username: asString(user.username) ?? undefined,
+        displayName: asString(user.username) ?? undefined,
+        avatarUrl: asString(user.avatarUrl) ?? undefined,
       },
-      updatedAt,
+      Date.now(),
     );
   }
 
-  const rows = globalRows ?? getGlobalRowsSortedAsc();
-  for (const row of rows) {
-    const item = parseJsonRecord(row?.item);
-    const eventType = asString(item.eventType);
-    const updatedAt = readSpacetimeTimestampMs(row?.createdAt ?? row?.created_at);
-
-    if (eventType === 'user_profile') {
-      const userId = asString(item.userId);
+  if (!snapshot.socialReadLoaded) {
+    const publicRows: any[] = Array.from(
+      dbView?.publicProfileSummary?.iter?.() ?? dbView?.public_profile_summary?.iter?.() ?? [],
+    );
+    for (const row of publicRows) {
+      const userId = asString(row?.userId ?? row?.user_id);
       if (!userId) continue;
+      const updatedAt = Date.now();
       upsertUserDirectoryEntry(
         users,
         userId,
         {
-          username: asString(item.username) ?? undefined,
-          displayName: asString(item.displayName) ?? undefined,
-          avatarUrl: asString(item.avatarUrl) ?? undefined,
-        },
-        updatedAt,
-      );
-      continue;
-    }
-
-    const fromUserId = asString(item.fromUserId);
-    if (fromUserId) {
-      upsertUserDirectoryEntry(
-        users,
-        fromUserId,
-        {
-          username: asString(item.fromUserName) ?? undefined,
-          avatarUrl: asString(item.fromUserAvatar) ?? undefined,
+          username: asString(row?.username) ?? undefined,
+          displayName:
+            asString(row?.displayName ?? row?.display_name) ??
+            asString(row?.username) ??
+            undefined,
+          avatarUrl: asString(row?.avatarUrl ?? row?.avatar_url) ?? undefined,
         },
         updatedAt,
       );
     }
+  }
 
-    const senderId = asString(item.senderId);
-    if (senderId) {
-      upsertUserDirectoryEntry(
-        users,
-        senderId,
-        {
-          username: asString(item.user) ?? undefined,
-        },
-        updatedAt,
-      );
+  if (!snapshot.socialReadLoaded) {
+    const rows = globalRows ?? getGlobalRowsSortedAsc();
+    for (const row of rows) {
+      const item = parseJsonRecord(row?.item);
+      const eventType = asString(item.eventType);
+      const updatedAt = readRailwayTimestampMs(row?.createdAt ?? row?.created_at);
+
+      if (eventType === 'user_profile') {
+        const userId = asString(item.userId);
+        if (!userId) continue;
+        upsertUserDirectoryEntry(
+          users,
+          userId,
+          {
+            username: asString(item.username) ?? undefined,
+            displayName: asString(item.displayName) ?? undefined,
+            avatarUrl: asString(item.avatarUrl) ?? undefined,
+          },
+          updatedAt,
+        );
+        continue;
+      }
+
+      const fromUserId = asString(item.fromUserId);
+      if (fromUserId) {
+        upsertUserDirectoryEntry(
+          users,
+          fromUserId,
+          {
+            username: asString(item.fromUserName) ?? undefined,
+            avatarUrl: asString(item.fromUserAvatar) ?? undefined,
+          },
+          updatedAt,
+        );
+      }
+
+      const senderId = asString(item.senderId);
+      if (senderId) {
+        upsertUserDirectoryEntry(
+          users,
+          senderId,
+          {
+            username: asString(item.user) ?? undefined,
+          },
+          updatedAt,
+        );
+      }
     }
   }
 
@@ -284,7 +325,7 @@ function parseGlobalMessageRow(
   const senderId = asString(parsedItem.senderId);
   const user = resolveUserDisplayName(senderId, asString(parsedItem.user), userDirectory);
   const payloadCreatedAt = toFiniteNumber(parsedItem.createdAt);
-  const rowCreatedAt = readSpacetimeTimestampMs(msgRow?.createdAt ?? msgRow?.created_at);
+  const rowCreatedAt = readRailwayTimestampMs(msgRow?.createdAt ?? msgRow?.created_at);
   const createdAt = payloadCreatedAt ?? rowCreatedAt;
   const normalizedRoomId =
     asString(msgRow?.roomId) ??
@@ -323,20 +364,20 @@ function parseGlobalMessageRow(
 }
 
 function getGlobalRowsSortedAsc(): any[] {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(
     dbView?.globalMessageItem?.iter?.() ?? dbView?.global_message_item?.iter?.() ?? [],
   );
   rows.sort(
     (a, b) =>
-      readSpacetimeTimestampMs(a?.createdAt ?? a?.created_at) -
-      readSpacetimeTimestampMs(b?.createdAt ?? b?.created_at),
+      readRailwayTimestampMs(a?.createdAt ?? a?.created_at) -
+      readRailwayTimestampMs(b?.createdAt ?? b?.created_at),
   );
   return rows;
 }
 
 function getMyConversationRows(): { rows: any[]; available: boolean } {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const fromCamel = dbView?.myConversations?.iter?.();
   if (fromCamel) {
     return { rows: Array.from(fromCamel), available: true };
@@ -351,7 +392,7 @@ function getMyConversationRows(): { rows: any[]; available: boolean } {
 }
 
 function getMyConversationMessageRows(): { rows: any[]; available: boolean } {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const fromCamel = dbView?.myConversationMessages?.iter?.();
   if (fromCamel) {
     return { rows: Array.from(fromCamel), available: true };
@@ -557,31 +598,6 @@ function dedupeAndSortThreadMessages(messages: ThreadSeedMessage[]): ThreadSeedM
   });
 }
 
-function dedupeAndSortGlobalMessages(messages: GlobalChatMessage[]): GlobalChatMessage[] {
-  const uniqueByMessageId = new Map<string, GlobalChatMessage>();
-  for (const message of messages) {
-    const normalizedRoomId = (message.roomId ?? '').trim().toLowerCase();
-    const dedupeKey = `${normalizedRoomId}::${message.id}`;
-    const existing = uniqueByMessageId.get(dedupeKey);
-    if (!existing) {
-      uniqueByMessageId.set(dedupeKey, message);
-      continue;
-    }
-    if (
-      message.createdAt > existing.createdAt ||
-      (message.createdAt === existing.createdAt && message.text.length >= existing.text.length)
-    ) {
-      uniqueByMessageId.set(dedupeKey, message);
-    }
-  }
-
-  return Array.from(uniqueByMessageId.values()).sort((left, right) => {
-    const byCreatedAt = left.createdAt - right.createdAt;
-    if (byCreatedAt !== 0) return byCreatedAt;
-    return left.id.localeCompare(right.id);
-  });
-}
-
 function parseConversationFromRow(row: any, viewerUserId: string): Conversation | null {
   const ownerUserId = asString(row?.ownerUserId ?? row?.owner_user_id);
   const otherUserId = asString(row?.otherUserId ?? row?.other_user_id);
@@ -596,7 +612,7 @@ function parseConversationFromRow(row: any, viewerUserId: string): Conversation 
       : {};
   const createdAtRaw =
     readTimestampOrIsoMs(lastMessageRaw.createdAt) ??
-    readSpacetimeTimestampMs(row?.updatedAt ?? row?.updated_at);
+    readRailwayTimestampMs(row?.updatedAt ?? row?.updated_at);
   const createdAtIso = new Date(createdAtRaw).toISOString();
   const lastMessageSenderId =
     normalizeSenderForViewer(asString(lastMessageRaw.senderId) ?? otherUserId, viewerUserId);
@@ -821,70 +837,267 @@ function parsePositiveLimit(value: unknown): number | null {
   return Math.floor(value);
 }
 
-type ViewHydrationStateReader = {
-  isViewRequested?: (viewName: string) => boolean;
-  isViewActive?: (viewName: string) => boolean;
-};
+function buildMentionUsers(snapshot: BackendSnapshot): BackendSnapshot['mentionUsers'] {
+  if (snapshot.mentionUsers.length > 0) {
+    return snapshot.mentionUsers;
+  }
+
+  return snapshot.socialUsers.map((user) => ({
+    id: user.id,
+    name: user.username,
+  }));
+}
 
 export function createBackendMessagesRepository(
   snapshot: BackendSnapshot,
-  _client: BackendHttpClient | null,
+  client: BackendHttpClient | null,
   viewerUserId: string | null = null,
-  viewStateReader: ViewHydrationStateReader = {},
 ): MessagesRepository {
   const normalizeSenderId = (senderId: string) =>
     viewerUserId && senderId === viewerUserId ? 'me' : senderId;
-  const isViewRequested = viewStateReader.isViewRequested ?? isSpacetimeViewRequested;
-  const isViewActive = viewStateReader.isViewActive ?? isSpacetimeViewActive;
+
+  const writeBackendThreadReplyNotification = async (params: {
+    messageId: string;
+    conversationKey: string;
+    fromUserId: string;
+    targetUserId: string;
+    messageText: string;
+    fromUserName: string;
+    createdAt: number;
+    replyToMessageId?: string;
+  }): Promise<boolean> => {
+    if (!client) {
+      return false;
+    }
+
+    try {
+      await client.post('/api/social/thread-reply', {
+        id: `thread-reply:${params.messageId}`,
+        conversationKey: params.conversationKey,
+        messageId: params.messageId,
+        targetUserId: params.targetUserId,
+        fromUserId: params.fromUserId,
+        fromUserName: params.fromUserName,
+        messageText: params.messageText,
+        createdAt: params.createdAt,
+        replyToMessageId: params.replyToMessageId ?? null,
+        source: 'thread_message',
+      });
+      return true;
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[data/messages] Failed to write backend thread reply notification', error);
+      }
+      return false;
+    }
+  };
+
+  const writeBackendThreadDurability = async (params: {
+    messageId: string;
+    conversationKey: string;
+    fromUserId: string;
+    toUserId: string;
+    message: ThreadSeedMessage;
+    createdAt: number;
+  }): Promise<boolean> => {
+    if (!client) {
+      return false;
+    }
+
+    try {
+      await client.post('/api/messages/thread', {
+        id: params.messageId,
+        conversationKey: params.conversationKey,
+        fromUserId: params.fromUserId,
+        toUserId: params.toUserId,
+        message: params.message,
+        createdAt: params.createdAt,
+        source: 'thread_message',
+      });
+      return true;
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[data/messages] Failed to write backend thread durability', error);
+      }
+      return false;
+    }
+  };
+
+  const writeBackendConversationReadDurability = async (params: {
+    conversationKey: string;
+    readerUserId: string;
+    otherUserId: string;
+    readAt: number;
+  }): Promise<boolean> => {
+    if (!client) {
+      return false;
+    }
+
+    try {
+      await client.post('/api/messages/read', {
+        conversationKey: params.conversationKey,
+        readerUserId: params.readerUserId,
+        otherUserId: params.otherUserId,
+        readAt: params.readAt,
+        source: 'conversation_read',
+      });
+      return true;
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[data/messages] Failed to write backend conversation-read durability', error);
+      }
+      return false;
+    }
+  };
+
+  const writeBackendMentionNotifications = async (params: {
+    messageId: string;
+    messageText: string;
+    fromUserName: string;
+    createdAt: number;
+    conversationKey?: string;
+    roomId?: string;
+    source: 'thread_message' | 'global_message';
+  }): Promise<boolean> => {
+    if (!client) {
+      return false;
+    }
+
+    const handles = extractMentionHandles(params.messageText);
+    if (handles.length === 0) {
+      return false;
+    }
+
+    try {
+      await client.post('/api/social/mention', {
+        id: `mention:${params.messageId}`,
+        messageId: params.messageId,
+        handles,
+        messageText: params.messageText,
+        fromUserName: params.fromUserName,
+        createdAt: params.createdAt,
+        conversationKey: params.conversationKey ?? null,
+        roomId: params.roomId ?? null,
+        source: params.source,
+      });
+      return true;
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[data/messages] Failed to write backend mention notifications', error);
+      }
+      return false;
+    }
+  };
+
+  const writeBackendMoneyReceivedNotification = async (params: {
+    messageId: string;
+    conversationKey: string;
+    fromUserId: string;
+    targetUserId: string;
+    fromUserName: string;
+    amount: number;
+    createdAt: number;
+  }): Promise<boolean> => {
+    if (!client) {
+      return false;
+    }
+
+    if (!Number.isFinite(params.amount) || params.amount <= 0) {
+      return false;
+    }
+
+    try {
+      await client.post('/api/social/money-received', {
+        id: `money-received:${params.messageId}`,
+        conversationKey: params.conversationKey,
+        messageId: params.messageId,
+        targetUserId: params.targetUserId,
+        fromUserId: params.fromUserId,
+        fromUserName: params.fromUserName,
+        amount: Math.floor(params.amount),
+        createdAt: params.createdAt,
+        source: 'cash_message',
+      });
+      return true;
+    } catch (error) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.warn('[data/messages] Failed to write backend money-received notification', error);
+      }
+      return false;
+    }
+  };
 
   return {
     listConversations(request) {
       const viewerKey = viewerUserId ?? '__anon__';
-      const globalRows = getGlobalRowsSortedAsc();
-      const { rows: conversationRows, available: conversationRowsAvailable } = getMyConversationRows();
-      const conversationViewRequested = isViewRequested('my_conversations');
-      const conversationViewActive = isViewActive('my_conversations');
-      const shouldUseAuthoritativeConversationRows =
-        Boolean(viewerUserId) &&
-        conversationRowsAvailable &&
-        (conversationViewRequested || conversationViewActive || conversationRows.length > 0);
-      const spacetimeConversations =
-        viewerUserId ? buildConversationFromEvents(globalRows, viewerUserId) : [];
-      const byOtherUser = new Map<string, Conversation>();
-      for (const conversation of snapshot.conversations) {
-        byOtherUser.set(conversation.otherUserId, {
+      if (viewerUserId && snapshot.messagesReadLoaded) {
+        const snapshotConversations = snapshot.conversations.map((conversation) => ({
           ...conversation,
           lastMessage: {
             ...conversation.lastMessage,
             senderId: normalizeSenderId(conversation.lastMessage.senderId),
           },
-        });
-      }
-      for (const conversation of spacetimeConversations) {
-        byOtherUser.set(conversation.otherUserId, conversation);
+        }));
+        conversationsCacheByViewer.set(viewerKey, snapshotConversations);
+        const searched = filterByQuery(snapshotConversations, request?.query, [
+          (conversation) => conversation.otherUserId,
+          (conversation) => conversation.lastMessage.text,
+        ]);
+        return applyCursorPage(searched, request);
       }
 
-      const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
-        const aTs = Date.parse(a.lastMessage.createdAt);
-        const bTs = Date.parse(b.lastMessage.createdAt);
-        return bTs - aTs;
-      });
+      const globalRows = getGlobalRowsSortedAsc();
+      const { rows: conversationRows, available: conversationRowsAvailable } = getMyConversationRows();
+      const conversationViewRequested = isRailwayViewRequested('my_conversations');
+      const conversationViewActive = isRailwayViewActive('my_conversations');
+      const shouldUseAuthoritativeConversationRows =
+        Boolean(viewerUserId) &&
+        conversationRowsAvailable &&
+        (conversationViewRequested || conversationViewActive || conversationRows.length > 0);
 
-      if (mergedConversations.length > 0) {
-        conversationsCacheByViewer.set(viewerKey, mergedConversations);
-      }
-      const fallbackConversations =
-        mergedConversations.length > 0
-          ? mergedConversations
-          : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
+      let sourceConversations: Conversation[] = [];
 
-      let sourceConversations = fallbackConversations;
       if (shouldUseAuthoritativeConversationRows && viewerUserId) {
         const authoritativeConversations = buildConversationsFromRows(conversationRows, viewerUserId);
         if (authoritativeConversations.length > 0) {
           conversationsCacheByViewer.set(viewerKey, authoritativeConversations);
           sourceConversations = authoritativeConversations;
+        } else if (!conversationViewActive) {
+          sourceConversations = conversationsCacheByViewer.get(viewerKey) ?? [];
+        } else {
+          conversationsCacheByViewer.delete(viewerKey);
+          sourceConversations = [];
         }
+      } else {
+        const railwayConversations =
+          viewerUserId ? buildConversationFromEvents(globalRows, viewerUserId) : [];
+        const byOtherUser = new Map<string, Conversation>();
+        for (const conversation of snapshot.conversations) {
+          byOtherUser.set(conversation.otherUserId, {
+            ...conversation,
+            lastMessage: {
+              ...conversation.lastMessage,
+              senderId: normalizeSenderId(conversation.lastMessage.senderId),
+            },
+          });
+        }
+        for (const conversation of railwayConversations) {
+          byOtherUser.set(conversation.otherUserId, conversation);
+        }
+
+        const mergedConversations = Array.from(byOtherUser.values()).sort((a, b) => {
+          const aTs = Date.parse(a.lastMessage.createdAt);
+          const bTs = Date.parse(b.lastMessage.createdAt);
+          return bTs - aTs;
+        });
+
+        if (mergedConversations.length > 0) {
+          conversationsCacheByViewer.set(viewerKey, mergedConversations);
+        }
+        sourceConversations =
+          mergedConversations.length > 0
+            ? mergedConversations
+            : conversationsCacheByViewer.get(viewerKey) ?? mergedConversations;
       }
 
       const searched = filterByQuery(sourceConversations, request?.query, [
@@ -897,21 +1110,19 @@ export function createBackendMessagesRepository(
       const requestedRoomId = request?.roomId?.trim();
       const requestedRoomIdLower = requestedRoomId?.toLowerCase();
       const globalRows = getGlobalRowsSortedAsc();
-      const userDirectory = buildKnownUserDirectory(globalRows);
+      const userDirectory = buildKnownUserDirectory(snapshot, globalRows);
       const stMessages = globalRows
         .map((msgRow: any) => parseGlobalMessageRow(msgRow, userDirectory))
         .filter((msg): msg is GlobalChatMessage => !!msg);
 
-      const filtered = dedupeAndSortGlobalMessages(
-        stMessages.filter((message) => {
-          const messageRoomId = typeof message.roomId === 'string' ? message.roomId.trim() : '';
-          const messageRoomIdLower = messageRoomId.toLowerCase();
-          if (requestedRoomId) {
-            return messageRoomIdLower === requestedRoomIdLower;
-          }
-          return messageRoomId.length === 0 || messageRoomIdLower === 'global';
-        }),
-      );
+      const filtered = stMessages.filter((message) => {
+        const messageRoomId = typeof message.roomId === 'string' ? message.roomId.trim() : '';
+        const messageRoomIdLower = messageRoomId.toLowerCase();
+        if (requestedRoomId) {
+          return messageRoomIdLower === requestedRoomIdLower;
+        }
+        return messageRoomId.length === 0 || messageRoomIdLower === 'global';
+      });
       const roomCacheKey = requestedRoomIdLower ?? '__global_default__';
       if (filtered.length > 0) {
         globalMessagesCacheByRoom.set(roomCacheKey, filtered);
@@ -931,7 +1142,7 @@ export function createBackendMessagesRepository(
       if (sourceMessages.length <= limit) {
         return sourceMessages;
       }
-      if (__DEV__) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.log(
           `[data/messages] global chat rows=${sourceMessages.length}, returning latest=${limit}`,
         );
@@ -939,7 +1150,8 @@ export function createBackendMessagesRepository(
       return sourceMessages.slice(sourceMessages.length - limit);
     },
     listMentionUsers(request) {
-      const searched = filterByQuery(snapshot.mentionUsers, request?.query, [
+      const mentionUsers = buildMentionUsers(snapshot);
+      const searched = filterByQuery(mentionUsers, request?.query, [
         (user) => user.name,
       ]);
       return applyCursorPage(searched, request);
@@ -947,10 +1159,26 @@ export function createBackendMessagesRepository(
     listThreadSeedMessages(userId) {
       const cacheKey = viewerUserId ? `${viewerUserId}::${userId}` : `__anon__::${userId}`;
       const globalRows = getGlobalRowsSortedAsc();
-      const userDirectory = buildKnownUserDirectory(globalRows);
+      const userDirectory = buildKnownUserDirectory(snapshot, globalRows);
+      if (viewerUserId && snapshot.messagesReadLoaded) {
+        const rawMessages = snapshot.threadSeedMessagesByUserId[userId] ?? [];
+        const snapshotMessages = rawMessages.map((message) =>
+          normalizeThreadMessageFromRecord(
+            message as unknown as UnknownRecord,
+            viewerUserId,
+            asString(message.senderId) ?? userId,
+            userId,
+            userDirectory,
+          ),
+        );
+        const normalizedMessages = dedupeAndSortThreadMessages(snapshotMessages);
+        threadMessagesCacheByConversation.set(cacheKey, normalizedMessages);
+        return normalizedMessages;
+      }
+
       const { rows: threadRows, available: threadRowsAvailable } = getMyConversationMessageRows();
-      const threadViewRequested = isViewRequested('my_conversation_messages');
-      const threadViewActive = isViewActive('my_conversation_messages');
+      const threadViewRequested = isRailwayViewRequested('my_conversation_messages');
+      const threadViewActive = isRailwayViewActive('my_conversation_messages');
       const shouldUseAuthoritativeThreadRows =
         Boolean(viewerUserId) &&
         threadRowsAvailable &&
@@ -979,20 +1207,25 @@ export function createBackendMessagesRepository(
           return [];
         }
 
-        if (threadRows.length > 0) {
-          threadMessagesCacheByConversation.delete(cacheKey);
-          return [];
+        if (!threadViewActive) {
+          const cached = threadMessagesCacheByConversation.get(cacheKey);
+          if (cached && cached.length > 0) {
+            return cached;
+          }
         }
+
+        threadMessagesCacheByConversation.delete(cacheKey);
+        return [];
       }
 
-      const spacetimeMessages =
+      const railwayMessages =
         viewerUserId && userId
           ? buildThreadMessagesFromEvents(globalRows, viewerUserId, userId, userDirectory)
           : [];
 
-      if (spacetimeMessages.length > 0) {
-        threadMessagesCacheByConversation.set(cacheKey, spacetimeMessages);
-        return spacetimeMessages;
+      if (railwayMessages.length > 0) {
+        threadMessagesCacheByConversation.set(cacheKey, railwayMessages);
+        return railwayMessages;
       }
 
       const cached = threadMessagesCacheByConversation.get(cacheKey);
@@ -1051,8 +1284,28 @@ export function createBackendMessagesRepository(
         },
       };
 
+      const backendDurabilityRequired = Boolean(client);
+      const wroteThreadDurability = await writeBackendThreadDurability({
+        messageId: clientId,
+        conversationKey,
+        fromUserId: resolvedSenderId,
+        toUserId: recipientId,
+        message: eventPayload.message as ThreadSeedMessage,
+        createdAt,
+      });
+      if (backendDurabilityRequired && !wroteThreadDurability) {
+        throw new Error('Failed to write backend thread durability.');
+      }
+      if (wroteThreadDurability) {
+        requestBackendRefresh({
+          scopes: ['messages', 'conversations'],
+          source: 'manual',
+          reason: 'thread_message_written_backend',
+        });
+      }
+
       try {
-        const reducers = spacetimeDb.reducers as any;
+        const reducers = railwayDb.reducers as any;
         if (typeof reducers?.sendThreadMessage === 'function') {
           await reducers.sendThreadMessage({
             id: clientId,
@@ -1071,15 +1324,71 @@ export function createBackendMessagesRepository(
         requestBackendRefresh({
           scopes: ['messages', 'conversations', 'counts'],
           source: 'manual',
-          reason: 'thread_message_sent_spacetimedb',
+          reason: 'thread_message_sent_railway',
         });
-        return;
       } catch (error) {
-        if (__DEV__) {
-          console.warn('[data/messages] Failed to send thread message via SpacetimeDB', error);
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[data/messages] Failed to send thread message via Railway', error);
         }
-        throw error instanceof Error ? error : new Error('Failed to send thread message.');
+        if (!wroteThreadDurability) {
+          throw error instanceof Error ? error : new Error('Failed to send thread message.');
+        }
       }
+
+      const wroteReplyNotification = await writeBackendThreadReplyNotification({
+        messageId: clientId,
+        conversationKey,
+        fromUserId: resolvedSenderId,
+        targetUserId: recipientId,
+        messageText: asString(eventPayload.message.text) ?? '',
+        fromUserName: asString(eventPayload.message.user) ?? resolvedSenderId,
+        createdAt,
+        replyToMessageId: eventPayload.message.replyTo?.id,
+      });
+      if (wroteReplyNotification) {
+        requestBackendRefresh({
+          scopes: ['notifications', 'social', 'counts'],
+          source: 'manual',
+          reason: 'thread_reply_notification_written_backend',
+        });
+      }
+      const wroteMoneyReceivedNotification =
+        eventPayload.message.type === 'cash' &&
+        typeof eventPayload.message.amount === 'number' &&
+        eventPayload.message.amount > 0
+          ? await writeBackendMoneyReceivedNotification({
+              messageId: clientId,
+              conversationKey,
+              fromUserId: resolvedSenderId,
+              targetUserId: recipientId,
+              fromUserName: asString(eventPayload.message.user) ?? resolvedSenderId,
+              amount: eventPayload.message.amount,
+              createdAt,
+            })
+          : false;
+      if (wroteMoneyReceivedNotification) {
+        requestBackendRefresh({
+          scopes: ['notifications', 'social', 'counts'],
+          source: 'manual',
+          reason: 'money_received_notification_written_backend',
+        });
+      }
+      const wroteMentionNotifications = await writeBackendMentionNotifications({
+        messageId: clientId,
+        messageText: asString(eventPayload.message.text) ?? '',
+        fromUserName: asString(eventPayload.message.user) ?? resolvedSenderId,
+        createdAt,
+        conversationKey,
+        source: 'thread_message',
+      });
+      if (wroteMentionNotifications) {
+        requestBackendRefresh({
+          scopes: ['notifications', 'social', 'counts'],
+          source: 'manual',
+          reason: 'mention_notification_written_backend',
+        });
+      }
+      return;
     },
     async markConversationRead(request) {
       if (!request.userId) return;
@@ -1087,9 +1396,27 @@ export function createBackendMessagesRepository(
       const readerUserId = asString(request.readerUserId) ?? viewerUserId;
       if (readerUserId) {
         const conversationKey = buildConversationKey(readerUserId, request.userId);
+        const backendDurabilityRequired = Boolean(client);
+        const readAt = Date.now();
+        const wroteReadDurability = await writeBackendConversationReadDurability({
+          conversationKey,
+          readerUserId,
+          otherUserId: request.userId,
+          readAt,
+        });
+        if (backendDurabilityRequired && !wroteReadDurability) {
+          throw new Error('Failed to write backend conversation-read durability.');
+        }
+        if (wroteReadDurability) {
+          requestBackendRefresh({
+            scopes: ['messages', 'conversations', 'counts'],
+            source: 'manual',
+            reason: 'conversation_read_written_backend',
+          });
+        }
+
         try {
-          const reducers = spacetimeDb.reducers as any;
-          const readAt = Date.now();
+          const reducers = railwayDb.reducers as any;
           if (typeof reducers?.markConversationRead === 'function') {
             await reducers.markConversationRead({
               id: `read-${conversationKey}-${readAt}`,
@@ -1114,12 +1441,15 @@ export function createBackendMessagesRepository(
           requestBackendRefresh({
             scopes: ['messages', 'conversations', 'counts'],
             source: 'manual',
-            reason: 'conversation_mark_read_spacetimedb',
+            reason: 'conversation_mark_read_railway',
           });
           return;
         } catch (error) {
-          if (__DEV__) {
-            console.warn('[data/messages] Failed to mark conversation as read via SpacetimeDB', error);
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            console.warn('[data/messages] Failed to mark conversation as read via Railway', error);
+          }
+          if (!wroteReadDurability) {
+            throw error instanceof Error ? error : new Error('Failed to mark conversation as read.');
           }
         }
       }
@@ -1129,7 +1459,7 @@ export function createBackendMessagesRepository(
       const roomId = request.roomId?.trim() || 'global';
       const senderId = asString(request.message.senderId) ?? viewerUserId ?? undefined;
       const requestedUserLabel = asString(request.message.user);
-      const userDirectory = buildKnownUserDirectory();
+      const userDirectory = buildKnownUserDirectory(snapshot);
       const senderLabel = resolveUserDisplayName(senderId ?? null, requestedUserLabel, userDirectory);
       const normalizedUserLabel =
         requestedUserLabel &&
@@ -1165,7 +1495,7 @@ export function createBackendMessagesRepository(
             : Date.now(),
       });
 
-      await (spacetimeDb.reducers as any).sendGlobalMessage({
+      await (railwayDb.reducers as any).sendGlobalMessage({
         id: clientId,
         roomId,
         item: itemPayload,
@@ -1173,8 +1503,26 @@ export function createBackendMessagesRepository(
       requestBackendRefresh({
         scopes: ['global_messages'],
         source: 'manual',
-        reason: 'global_message_sent_spacetimedb',
+        reason: 'global_message_sent_railway',
       });
+      const wroteMentionNotifications = await writeBackendMentionNotifications({
+        messageId: clientId ?? `global-${Date.now()}`,
+        messageText: request.message.text,
+        fromUserName: normalizedUserLabel,
+        createdAt:
+          typeof request.message.createdAt === 'number' && Number.isFinite(request.message.createdAt)
+            ? request.message.createdAt
+            : Date.now(),
+        roomId,
+        source: 'global_message',
+      });
+      if (wroteMentionNotifications) {
+        requestBackendRefresh({
+          scopes: ['notifications', 'social', 'counts'],
+          source: 'manual',
+          reason: 'mention_notification_written_backend',
+        });
+      }
     },
     async editGlobalMessage(request) {
       const messageId = asString(request.messageId);
@@ -1183,9 +1531,9 @@ export function createBackendMessagesRepository(
         throw new Error('A message id and non-empty text are required.');
       }
 
-      const reducers = spacetimeDb.reducers as any;
+      const reducers = railwayDb.reducers as any;
       if (typeof reducers.editGlobalMessage !== 'function') {
-        throw new Error('SpacetimeDB reducers are unavailable.');
+        throw new Error('Railway reducers are unavailable.');
       }
 
       await reducers.editGlobalMessage({
@@ -1195,7 +1543,7 @@ export function createBackendMessagesRepository(
       requestBackendRefresh({
         scopes: ['global_messages'],
         source: 'manual',
-        reason: 'global_message_edited_spacetimedb',
+        reason: 'global_message_edited_railway',
       });
     },
     async deleteGlobalMessage(request) {
@@ -1204,9 +1552,9 @@ export function createBackendMessagesRepository(
         throw new Error('A message id is required.');
       }
 
-      const reducers = spacetimeDb.reducers as any;
+      const reducers = railwayDb.reducers as any;
       if (typeof reducers.deleteGlobalMessage !== 'function') {
-        throw new Error('SpacetimeDB reducers are unavailable.');
+        throw new Error('Railway reducers are unavailable.');
       }
 
       await reducers.deleteGlobalMessage({
@@ -1215,7 +1563,7 @@ export function createBackendMessagesRepository(
       requestBackendRefresh({
         scopes: ['global_messages'],
         source: 'manual',
-        reason: 'global_message_deleted_spacetimedb',
+        reason: 'global_message_deleted_railway',
       });
     },
   };

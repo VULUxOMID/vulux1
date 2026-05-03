@@ -28,7 +28,7 @@ export function FloatingGoLiveButton({ visible, bottomInset, onPress }: Floating
         styles.wrap,
         visible ? styles.pointerEventsAuto : styles.pointerEventsNone,
         {
-          bottom: NAV_BAR_HEIGHT + bottomInset + spacing.md,
+          bottom: NAV_BAR_HEIGHT + bottomInset - spacing.md,
           opacity: anim,
           transform: [
             {
@@ -66,19 +66,19 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   button: {
-    width: '60%',
-    maxWidth: 260,
+    width: '48%',
+    maxWidth: 208,
     borderRadius: radius.xl,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
     ...Platform.select({
       web: {
-        boxShadow: `0px 0px 12px ${colors.accentDanger}66`,
+        boxShadow: `0px 14px 28px ${colors.accentDanger}4D`,
       },
       default: {
         shadowColor: colors.accentDanger,
         shadowOpacity: 0.4,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 0 },
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 10 },
       },
     }),
   },

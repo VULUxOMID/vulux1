@@ -7,6 +7,7 @@ export * from './Avatar';
 export * from './CurrencyPill';
 export * from './SectionCard';
 export * from './PillTabs';
+export * from './PageHeader';
 export * from './ToggleRow';
 export * from './StatRow';
 export * from './GradientHeader';

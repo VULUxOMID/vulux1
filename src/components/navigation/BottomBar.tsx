@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { usePathname, useRouter } from 'expo-router';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -57,12 +58,19 @@ export function BottomBar({
       style={[
         styles.container,
         {
-          height: NAV_BAR_HEIGHT + 8,
-          bottom: insets.bottom > 0 ? insets.bottom - 16 : 8,
+          height: NAV_BAR_HEIGHT + 16,
+          bottom: insets.bottom > 0 ? Math.max(insets.bottom - 10, 10) : 10,
           paddingBottom: 0,
         },
       ]}
     >
+      <LinearGradient
+        colors={['rgba(18, 18, 20, 0.96)', 'rgba(8, 8, 10, 0.9)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.backdrop}
+      />
+
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Home"
@@ -71,7 +79,7 @@ export function BottomBar({
             emitHomeScrollTop();
             return;
           }
-          router.push('/(tabs)');
+          router.replace('/(tabs)');
         }}
         style={styles.iconButton}
       >
@@ -97,7 +105,7 @@ export function BottomBar({
         accessibilityRole="button"
         accessibilityLabel="Notifications"
         onPress={() => {
-          router.push('/(tabs)/notifications');
+          router.replace('/(tabs)/notifications');
         }}
         style={styles.iconButton}
       >
@@ -123,7 +131,7 @@ export function BottomBar({
         accessibilityRole="button"
         accessibilityLabel="Messages"
         onPress={() => {
-          router.push('/(tabs)/messages');
+          router.replace('/(tabs)/messages');
         }}
         style={styles.iconButton}
       >
@@ -149,7 +157,7 @@ export function BottomBar({
         accessibilityRole="button"
         accessibilityLabel="Profile"
         onPress={() => {
-          router.replace('/profile');
+          router.replace('/(tabs)/profile');
         }}
         style={styles.iconButton}
       >
@@ -189,69 +197,93 @@ const styles = StyleSheet.create({
     left: spacing.md,
     right: spacing.md,
     flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: 'rgba(10, 10, 12, 0.92)',
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     borderRadius: radius.full,
+    paddingHorizontal: spacing.xsPlus,
+    overflow: 'hidden',
     zIndex: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.34,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 16,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
   },
   iconButton: {
-    padding: spacing.sm,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.smPlus,
   },
   iconWrapper: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 32,
-    height: 32,
+    width: 46,
+    height: 40,
+    borderRadius: radius.full,
+    borderWidth: 1,
   },
   iconWrapperInactive: {
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.06)',
   },
   iconWrapperActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 10,
+    backgroundColor: 'rgba(0, 230, 118, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 230, 118, 0.42)',
+    shadowColor: colors.accentPrimary,
+    shadowOpacity: 0.24,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
   avatarContainer: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
+    borderWidth: 1,
   },
   avatarWrapperInactive: {
-    borderWidth: 0,
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
   },
   avatarWrapperActive: {
-    borderWidth: 0,
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(0, 230, 118, 0.46)',
+    backgroundColor: 'rgba(0, 230, 118, 0.12)',
+    shadowColor: colors.accentPrimary,
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
     padding: 0,
   },
   avatar: {
     width: '100%',
     height: '100%',
-    borderRadius: 17,
+    borderRadius: 20,
   },
   avatarPlaceholder: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   statusDot: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: -1,
+    right: -1,
     width: 12,
     height: 12,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: colors.surface,
+    borderColor: '#0B0B0D',
   },
   badge: {
     position: 'absolute',
@@ -273,14 +305,19 @@ const styles = StyleSheet.create({
   tabColumn: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: NAV_BAR_HEIGHT,
+    height: NAV_BAR_HEIGHT + 8,
+    width: '100%',
   },
   activeDot: {
     position: 'absolute',
-    bottom: 4,
-    width: 4,
+    bottom: 0,
+    width: 22,
     height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.textPrimary,
+    borderRadius: 999,
+    backgroundColor: colors.accentPrimary,
+    shadowColor: colors.accentPrimary,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
   },
 });

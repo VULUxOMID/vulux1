@@ -1,19 +1,14 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { Platform } from 'react-native';
+import { getConfiguredUploadSignerBaseUrl } from '../config/backendBaseUrl';
 import { getBackendToken } from './backendToken';
 import { getBackendTokenTemplate } from '../config/backendToken';
-import { recordUploadedMediaAsset } from './spacetimePersistence';
-import {
-  readUploadBlob,
-  resolveUploadSignerBaseUrl,
-  shouldUseWebUploadFallback,
-  uploadBlobToSignedUrl,
-} from './webUploadFallback';
+import { recordUploadedMediaAsset } from './railwayPersistence';
 
 type BackendGetToken = (options?: { template?: string }) => Promise<string | null>;
 
 type UploadMediaKind =
   | 'profile'
+  | 'verification'
   | 'chat'
   | 'image'
   | 'audio'
@@ -37,26 +32,33 @@ type UploadMediaResult = {
 
 type UploadTargetResponse = {
   url: string;
-  webUploadUrl?: string | null;
   objectKey: string;
   publicUrl?: string | null;
   requiredHeaders?: Record<string, string>;
 };
 
 const MEDIA_UPLOAD_TIMEOUT_MS = 60_000;
+const isWebUploadRuntime =
+  typeof window !== 'undefined' &&
+  typeof document !== 'undefined';
 
-function trim(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
+function isDevRuntime(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__;
+}
+
+function logUploadDiagnostic(message: string, details?: Record<string, unknown>): void {
+  if (!isDevRuntime()) {
+    return;
+  }
+  if (details) {
+    console.log(message, details);
+    return;
+  }
+  console.log(message);
 }
 
 function getUploadSignerBaseUrl(): string {
-  const configured = trim(process.env.EXPO_PUBLIC_UPLOAD_SIGNER_URL) ?? '';
-  const currentHostname =
-    typeof window !== 'undefined' && window.location?.hostname
-      ? window.location.hostname
-      : undefined;
-  return resolveUploadSignerBaseUrl(configured, currentHostname);
+  return getConfiguredUploadSignerBaseUrl().trim();
 }
 
 async function parseSignerJson(response: Response): Promise<any> {
@@ -85,7 +87,7 @@ async function requestSignedUploadTarget(
   }
 
   const presignUrl = `${baseUrl.replace(/\/+$/, '')}/presign`;
-  console.log('[upload] presign -> requesting');
+  logUploadDiagnostic('[upload] presign -> requesting', { mediaType, size });
   let response: Response;
   try {
     response = await fetch(
@@ -107,7 +109,7 @@ async function requestSignedUploadTarget(
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Unknown network error';
     throw new Error(
-      `Could not reach upload signer at ${presignUrl}. Start backend signer and confirm your phone can access your Mac on port 3000. (${reason})`,
+      `Could not reach upload signer at ${presignUrl}. Confirm your backend upload route is reachable from this device. (${reason})`,
     );
   }
 
@@ -116,6 +118,8 @@ async function requestSignedUploadTarget(
     const message =
       payload && typeof payload.error === 'string'
         ? payload.error
+        : payload && typeof payload.message === 'string'
+          ? payload.message
         : `Upload signer request failed (${response.status})`;
     throw new Error(message);
   }
@@ -124,15 +128,25 @@ async function requestSignedUploadTarget(
     throw new Error('Upload signer returned an invalid response');
   }
 
-  console.log('[upload] presign -> ready');
+  logUploadDiagnostic('[upload] presign -> ready', { objectKey: payload.objectKey });
 
   return payload as UploadTargetResponse;
 }
 
 async function getFileSizeBytes(uri: string): Promise<number> {
-  if (shouldUseWebUploadFallback(Platform.OS, FileSystem)) {
-    const blob = await readUploadBlob(uri);
-    return blob.size;
+  if (isWebUploadRuntime) {
+    const response = await fetch(uri);
+    if (!response.ok) {
+      throw new Error('Selected file is no longer available');
+    }
+
+    const blob = await response.blob();
+    const normalizedSize = Math.max(0, Math.floor(blob.size));
+    if (normalizedSize <= 0) {
+      throw new Error('Could not determine upload size');
+    }
+
+    return normalizedSize;
   }
 
   const info = await FileSystem.getInfoAsync(uri, { size: true } as any);
@@ -161,15 +175,44 @@ async function uploadFileUriToSignedUrl(
     ...(!requiredHeaders?.['Content-Type'] ? { 'Content-Type': contentType } : {}),
   };
 
-  if (shouldUseWebUploadFallback(Platform.OS, FileSystem)) {
-    console.log('[upload] put -> uploading (web)');
-    const blob = await readUploadBlob(fileUri);
-    await uploadBlobToSignedUrl(url, blob, normalizedHeaders, onProgress);
-    console.log('[upload] put -> uploaded');
+  if (isWebUploadRuntime) {
+    onProgress?.(5);
+    const fileResponse = await fetch(fileUri);
+    if (!fileResponse.ok) {
+      throw new Error('Selected file is no longer available');
+    }
+
+    const blob = await fileResponse.blob();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, MEDIA_UPLOAD_TIMEOUT_MS);
+
+    try {
+      const uploadResponse = await fetch(url, {
+        method: 'PUT',
+        headers: normalizedHeaders,
+        body: blob,
+        signal: controller.signal,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`Failed to upload file to storage (${uploadResponse.status})`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Storage upload timed out');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    onProgress?.(100);
     return;
   }
 
-  console.log('[upload] put -> uploading');
+  logUploadDiagnostic('[upload] put -> uploading');
   const uploadTask = FileSystem.createUploadTask(
     url,
     fileUri,
@@ -212,7 +255,7 @@ async function uploadFileUriToSignedUrl(
     throw new Error(`Failed to upload file to storage (${result.status})`);
   }
 
-  console.log('[upload] put -> uploaded');
+  logUploadDiagnostic('[upload] put -> uploaded');
   onProgress?.(100);
 }
 
@@ -230,21 +273,13 @@ export async function uploadMediaAsset({
   }
 
   const uploadTarget = await requestSignedUploadTarget(token, contentType, mediaType, size);
-  const useWebProxy = shouldUseWebUploadFallback(Platform.OS, FileSystem) && !!uploadTarget.webUploadUrl;
-  const uploadUrl = useWebProxy ? uploadTarget.webUploadUrl ?? uploadTarget.url : uploadTarget.url;
-  const uploadHeaders = useWebProxy
-    ? {
-        ...(uploadTarget.requiredHeaders ?? {}),
-        Authorization: `Bearer ${token}`,
-      }
-    : uploadTarget.requiredHeaders;
 
   await uploadFileUriToSignedUrl(
-    uploadUrl,
+    uploadTarget.url,
     uri,
     contentType,
     onProgress,
-    uploadHeaders,
+    uploadTarget.requiredHeaders,
   );
 
   const publicUrl = uploadTarget.publicUrl ?? uploadTarget.url.split('?')[0];
@@ -253,18 +288,18 @@ export async function uploadMediaAsset({
   }
 
   try {
-    console.log('[upload] spacetime -> recording metadata');
+    logUploadDiagnostic('[upload] metadata -> recording');
     await recordUploadedMediaAsset({
       objectKey: uploadTarget.objectKey,
       publicUrl,
       contentType,
       mediaType,
       size,
+      authToken: token,
     });
-    console.log('[upload] spacetime -> metadata recorded');
+    logUploadDiagnostic('[upload] metadata -> recorded', { objectKey: uploadTarget.objectKey });
   } catch (error) {
-    console.warn('[upload] spacetime -> metadata recording failed', error);
-    throw error instanceof Error ? error : new Error('Failed to record upload metadata');
+    console.warn('[upload] railway -> metadata recording failed', error);
   }
 
   return {

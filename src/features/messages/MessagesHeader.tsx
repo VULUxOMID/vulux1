@@ -23,7 +23,7 @@ function MessagesHeaderComponent({
 }: MessagesHeaderProps) {
   return (
     <View style={styles.stickyHeader}>
-      <TopBar title={title} actions={<View />} />
+      <TopBar title={title} actions={<View />} variant="page" />
 
       <MessagesSearchBar onPress={onPressSearch} />
 
@@ -42,8 +42,9 @@ const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.md,
     zIndex: 10,
+    gap: spacing.sm,
   },
 });

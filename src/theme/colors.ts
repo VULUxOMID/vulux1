@@ -17,7 +17,7 @@ export const colors = {
   textOnDarkDim: 'rgba(255, 255, 255, 0.2)',
 
   // Accents
-  accentPrimary: '#00E676', // SpacetimeDB Neon Green
+  accentPrimary: '#00E676', // Railway Neon Green
   accentPrimarySoft: '#00B359',
   accentPayPal: '#003087', // PayPal Blue
   accentPremium: '#BE38F3', // Gemstone Purple

@@ -61,6 +61,7 @@ export function LiveInputBar({ onSend, onRaiseHandRequest, isHost, bottomInset =
           <Pressable 
             style={styles.handWaveButton}
             onPress={handleRaiseHand}
+            testID="live-raise-hand-button"
           >
             <Ionicons name="hand-right" size={24} color="#fff" />
           </Pressable>

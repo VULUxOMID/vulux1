@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,7 +12,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -27,21 +26,12 @@ import {
 } from '../src/utils/webRuntimeCompat';
 import { useWallet } from '../src/context/WalletContext';
 import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
-import { hasAuthoritativeWallet } from '../src/context/walletHydration';
-import {
-  buildRefuelPendingReceipt,
-  IDLE_REFUEL_RECEIPT,
-  runRefuelAction,
-  type RefuelReceiptState,
-} from '../src/features/liveroom/refuelFlow';
-import { FUEL_COSTS, FuelFillAmount } from '../src/features/liveroom/types';
-import { buildFailureReceipt } from '../src/features/shop/shopReceipts';
+import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
-import { useAppIsActive } from '../src/hooks/useAppIsActive';
-import { subscribeBootstrap } from '../src/lib/spacetime';
-import { requestBackendRefresh } from '../src/data/adapters/backend/refreshBus';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
+import { purchaseFuelPack } from '../src/data/adapters/backend/walletMutations';
+import { submitGoLiveStart } from '../src/features/live/goLiveStartSubmission';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -49,22 +39,18 @@ const LIVE_TITLE_MAX_LENGTH = 80;
 
 export default function GoLiveScreen() {
   const router = useRouter();
-  const isFocused = useIsFocused();
-  const isAppActive = useAppIsActive();
   const insets = useSafeAreaInsets();
-  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useSessionAuth();
-  const { startLive, activeLive, liveRoom } = useLive();
-  const { fuel, gems, cash, walletHydrated, walletStateAvailable } = useWallet();
+  const { userId } = useSessionAuth();
+  const { startLive } = useLive();
+  const { fuel, gems, cash, walletStateAvailable } = useWallet();
 
   const [title, setTitle] = useState('');
   const [inviteOnly, setInviteOnly] = useState(false);
   const [showFuelSheet, setShowFuelSheet] = useState(false);
-  const [refuelReceipt, setRefuelReceipt] = useState<RefuelReceiptState>(IDLE_REFUEL_RECEIPT);
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const pendingStartRef = useRef(false);
   const normalizedTitle = title.trim();
-  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
-  const walletReady = hasAuthoritativeWallet(walletHydrated, walletStateAvailable);
   const isOutOfFuel = walletStateAvailable && fuel <= 0;
   const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
   const canStartLive = hasValidTitle && !isOutOfFuel && !pendingStart;
@@ -86,37 +72,14 @@ export default function GoLiveScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!queriesEnabled) {
-      return;
-    }
-    requestBackendRefresh();
-  }, [queriesEnabled]);
-
-  useEffect(() => {
-    if (!queriesEnabled) {
-      return;
-    }
-    return subscribeBootstrap();
-  }, [queriesEnabled]);
-
   const openFuelSheet = () => {
     Keyboard.dismiss();
     blurActiveWebElement();
-    setRefuelReceipt(IDLE_REFUEL_RECEIPT);
     setShowFuelSheet(true);
   };
 
-  const closeFuelSheet = () => {
-    if (refuelReceipt.status === 'pending') {
-      return;
-    }
-    setShowFuelSheet(false);
-    setRefuelReceipt(IDLE_REFUEL_RECEIPT);
-  };
-
   const handleStartLive = async () => {
-    if (pendingStart) return;
+    if (pendingStartRef.current) return;
     hapticTap();
     if (isOutOfFuel) {
       openFuelSheet();
@@ -125,34 +88,48 @@ export default function GoLiveScreen() {
     if (!hasValidTitle) {
       return;
     }
-    setPendingStart(true);
-    setStartError(null);
-    try {
-      const startResult = await startLive(normalizedTitle, inviteOnly);
-      if (!startResult.ok) {
-        setPendingStart(false);
-        setStartError(startResult.message);
-        toast.error(startResult.message);
-      }
-    } catch {
-      setPendingStart(false);
-      const message = 'Unable to start live right now. Please try again.';
-      setStartError(message);
-      toast.error(message);
-    }
+    await submitGoLiveStart({
+      title: normalizedTitle,
+      inviteOnly,
+      pendingRef: pendingStartRef,
+      startLive,
+      setPendingStart,
+      setStartError,
+      showStartErrorToast: (message) => {
+        toast.error(message);
+      },
+      navigateToLive: (liveId) => {
+        router.replace({
+          pathname: '/live',
+          params: { id: liveId },
+        });
+      },
+    });
   };
 
   useEffect(() => {
-    if (!pendingStart) return;
-    if (!activeLive || !liveRoom) return;
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+    const shouldExposeQaBridge =
+      process.env.EXPO_PUBLIC_QA_SKIP_ONBOARDING?.trim().toLowerCase() === '1';
+    if (!shouldExposeQaBridge) {
+      return;
+    }
 
-    setPendingStart(false);
-    setStartError(null);
-    router.replace({
-      pathname: '/live',
-      params: { id: activeLive.id || liveRoom.id },
-    });
-  }, [activeLive, liveRoom, pendingStart, router]);
+    const target = window as typeof window & {
+      __VULU_QA_GO_LIVE__?: {
+        startLiveFromQa: () => Promise<void>;
+      };
+    };
+    target.__VULU_QA_GO_LIVE__ = {
+      startLiveFromQa: handleStartLive,
+    };
+
+    return () => {
+      delete target.__VULU_QA_GO_LIVE__;
+    };
+  }, [handleStartLive]);
 
   const handleClose = () => {
     hapticTap();
@@ -160,48 +137,35 @@ export default function GoLiveScreen() {
   };
 
   const handleFillFuel = async (amount: FuelFillAmount, paymentType: 'gems' | 'cash') => {
-    if (refuelReceipt.status === 'pending') {
-      return;
-    }
-
-    if (refuelReceipt.status === 'success') {
-      closeFuelSheet();
-      return;
-    }
-
-    if (!walletReady) {
-      setRefuelReceipt(
-        buildFailureReceipt('purchase_fuel', 'Wallet is still syncing from the server.'),
-      );
-      return;
-    }
-
     const cost = FUEL_COSTS[amount];
     const canAfford = paymentType === 'gems' ? gems >= cost.gems : cash >= cost.cash;
 
     if (!canAfford) {
-      setRefuelReceipt(
-        buildFailureReceipt(
-          'purchase_fuel',
-          `You need ${paymentType === 'gems' ? cost.gems : cost.cash} ${paymentType === 'gems' ? 'Gems' : 'Cash'} to buy this fuel pack.`,
-        ),
-      );
+      toast.warning(`You need ${paymentType === 'gems' ? cost.gems : cost.cash} ${paymentType === 'gems' ? 'Gems' : 'Cash'}.`);
       return;
     }
 
     if (!userId) {
-      setRefuelReceipt(buildFailureReceipt('purchase_fuel', 'Sign in required to refuel.'));
+      toast.error('Sign in required to refuel.');
       return;
     }
 
-    setRefuelReceipt(buildRefuelPendingReceipt(amount));
-    const nextReceipt = await runRefuelAction({
-      userId,
-      amount,
-      paymentType,
-      source: 'go_live_refuel',
-    });
-    setRefuelReceipt(nextReceipt);
+    if (fuel < MAX_FUEL_MINUTES) {
+      const result = await purchaseFuelPack(
+        userId,
+        amount,
+        paymentType,
+        'go_live_refuel',
+      );
+
+      if (result.ok) {
+        setShowFuelSheet(false);
+      } else if (result.code === 'insufficient_balance') {
+        toast.warning('Not enough balance to refuel.');
+      } else {
+        toast.error(result.message ?? 'Refuel failed. Please try again.');
+      }
+    }
   };
 
   return (
@@ -387,13 +351,11 @@ export default function GoLiveScreen() {
       </KeyboardAvoidingView>
       <FuelSheet
         visible={showFuelSheet}
-        onClose={closeFuelSheet}
+        onClose={() => setShowFuelSheet(false)}
         onFill={handleFillFuel}
         currentFuel={fuel}
         userGems={gems}
         userCash={cash}
-        receipt={refuelReceipt}
-        walletReady={walletReady}
       />
     </View>
   );

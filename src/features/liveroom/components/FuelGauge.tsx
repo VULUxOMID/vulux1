@@ -5,7 +5,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 import { hapticTap } from '../../../utils/haptics';
-import { getFuelDisplayCapacity, MAX_FUEL_MINUTES } from '../types';
+import { MAX_FUEL_MINUTES } from '../types';
+import { getFuelGaugeAccessibilityLabel } from './fuelGaugeAccessibility';
 
 // Premium purple color
 const FUEL_PURPLE = colors.accentPremium;
@@ -21,7 +22,7 @@ type FuelGaugeProps = {
 
 export function FuelGauge({
   fuelMinutes,
-  maxFuel = getFuelDisplayCapacity(fuelMinutes),
+  maxFuel = MAX_FUEL_MINUTES,
   isDraining = false,
   labelOverride,
   onPress,
@@ -103,6 +104,8 @@ export function FuelGauge({
     return `${seconds}s`;
   };
 
+  const displayLabel = labelOverride ?? (isEmpty ? '0s' : formatFuel(fuelMinutes));
+
   return (
     <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
       <Pressable
@@ -110,6 +113,16 @@ export function FuelGauge({
           hapticTap();
           onPress?.();
         }}
+        disabled={!onPress}
+        accessibilityRole="button"
+        accessibilityLabel={getFuelGaugeAccessibilityLabel({
+          displayLabel,
+          isPlaceholder,
+          isLow,
+          isEmpty,
+          isDraining,
+        })}
+        accessibilityHint={onPress ? 'Opens fuel options.' : undefined}
       >
         <View style={[styles.container, isEmpty && styles.containerEmpty]}>
           {/* Fill Layer - Background acting as progress bar */}
@@ -142,7 +155,7 @@ export function FuelGauge({
               isEmpty && styles.timeTextEmpty,
               isLow && !isEmpty && styles.timeTextLow,
             ]}>
-              {labelOverride ?? (isEmpty ? '0s' : formatFuel(fuelMinutes))}
+              {displayLabel}
             </AppText>
           </View>
 

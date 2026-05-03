@@ -1,24 +1,26 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useRef, useEffect } from 'react';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../auth/clerkSession';
 
 import {
   fetchAccountState as fetchBackendAccountState,
 } from '../data/adapters/backend/accountState';
+import {
+  fetchWalletCashTransferHistory,
+  fetchWalletWithdrawalHistory,
+  requestWalletWithdrawal,
+  sendWalletCashTransfer,
+  spendCashBalance,
+  spendGemsBalance,
+  type WalletCashTransferRecord,
+  type WalletMutationResult,
+} from '../data/adapters/backend/walletMutations';
 import { subscribeBackendRefresh } from '../data/adapters/backend/refreshBus';
-import {
-  getSpacetimeTelemetrySnapshot,
-  subscribeSpacetimeDataChanges,
-  subscribeSpacetimeTelemetry,
-} from '../lib/spacetime';
-import {
-  fetchMyWalletBalance,
-} from '../data/adapters/backend/walletQueries';
+import { subscribeRailwayDataChanges } from '../lib/railwayRuntime';
 import {
   hasAuthoritativeWalletForUser,
-  resolveAuthoritativeWalletState,
+  selectAuthoritativeWalletHistory,
   shouldRefreshWalletFromBackendEvent,
-  shouldRefreshWalletFromSubscriptionActivation,
-  shouldRefreshWalletFromSpacetimeEvent,
+  shouldRefreshWalletFromRailwayEvent,
 } from './walletHydration';
 
 const WALLET_HYDRATION_RETRY_MS = 350;
@@ -62,55 +64,6 @@ function toNonNegativeNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-function toWithdrawalStatus(value: unknown): WithdrawalRequest['status'] {
-  if (value === 'pending' || value === 'processing' || value === 'completed' || value === 'declined') {
-    return value;
-  }
-  return 'pending';
-}
-
-function parseWithdrawalHistory(value: unknown): WithdrawalRequest[] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') return null;
-      const item = entry as Record<string, unknown>;
-      const details =
-        item.details && typeof item.details === 'object'
-          ? (item.details as Record<string, unknown>)
-          : {};
-
-      const id =
-        typeof item.id === 'string' && item.id.trim().length > 0
-          ? item.id
-          : `withdrawal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      return {
-        id,
-        amountGems: toNonNegativeNumber(item.amountGems),
-        amountRealMoney: toNonNegativeNumber(item.amountRealMoney),
-        status: toWithdrawalStatus(item.status),
-        date:
-          typeof item.date === 'string' && item.date.trim().length > 0
-            ? item.date
-            : new Date().toISOString(),
-        method:
-          typeof item.method === 'string' && item.method.trim().length > 0
-            ? item.method
-            : 'Unknown',
-        details: {
-          fullName:
-            typeof details.fullName === 'string' ? details.fullName : '',
-          email: typeof details.email === 'string' ? details.email : '',
-          phoneNumber:
-            typeof details.phoneNumber === 'string' ? details.phoneNumber : '',
-        },
-      };
-    })
-    .filter((item): item is WithdrawalRequest => Boolean(item));
-}
-
 export interface WithdrawalRequest {
   id: string;
   amountGems: number;
@@ -125,6 +78,14 @@ export interface WithdrawalRequest {
   };
 }
 
+export type CashTransferRequest = {
+  targetUserId?: string | null;
+  targetHandle?: string | null;
+  amountCash: number;
+  note?: string | null;
+  requestIdempotencyKey?: string | null;
+};
+
 interface WalletContextType {
   gems: number;
   cash: number;
@@ -134,13 +95,19 @@ interface WalletContextType {
   addCash: (amount: number) => void;
   exchangeGemsForCash: (gemsAmount: number) => boolean;
   exchangeCashForGems: (cashAmount: number) => boolean;
-  spendGems: (amount: number) => boolean;
-  spendCash: (amount: number) => boolean;
+  spendGems: (amount: number, options?: { reason?: string; source?: string }) => Promise<boolean>;
+  spendCash: (amount: number, options?: { reason?: string; source?: string }) => Promise<boolean>;
   fuel: number;
   addFuel: (minutes: number) => void;
   consumeFuel: (minutes: number) => boolean;
   withdrawalHistory: WithdrawalRequest[];
-  requestWithdrawal: (amountGems: number, details: WithdrawalRequest['details'], method: string) => boolean;
+  cashTransferHistory: WalletCashTransferRecord[];
+  requestWithdrawal: (
+    amountGems: number,
+    details: WithdrawalRequest['details'],
+    method: string
+  ) => Promise<boolean>;
+  sendCashToUser: (input: CashTransferRequest) => Promise<WalletMutationResult>;
   balance: { gems: number; cash: number };
   deductBalance: (amount: number, currency: 'gems' | 'cash') => Promise<boolean>;
 }
@@ -153,6 +120,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [cash, setCash] = useState(0);
   const [fuel, setFuel] = useState(0);
   const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalRequest[]>([]);
+  const [cashTransferHistory, setCashTransferHistory] = useState<WalletCashTransferRecord[]>([]);
   const [walletHydrated, setWalletHydrated] = useState(false);
   const [walletStateAvailable, setWalletStateAvailable] = useState(false);
   const [walletRefreshNonce, setWalletRefreshNonce] = useState(0);
@@ -161,11 +129,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const fuelRef = useRef(fuel);
   const gemsRef = useRef(gems);
   const cashRef = useRef(cash);
+  const withdrawalHistoryRef = useRef<WithdrawalRequest[]>([]);
+  const cashTransferHistoryRef = useRef<WalletCashTransferRecord[]>([]);
   const getTokenRef = useRef(getToken);
   const walletUserIdRef = useRef<string | null>(null);
   const walletHydratedRef = useRef(walletHydrated);
   const walletStateAvailableRef = useRef(walletStateAvailable);
-  const withdrawalHistoryRef = useRef<WithdrawalRequest[]>(withdrawalHistory);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -179,23 +148,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     walletStateAvailableRef.current = walletStateAvailable;
   }, [walletStateAvailable]);
 
-  useEffect(() => {
-    withdrawalHistoryRef.current = withdrawalHistory;
-  }, [withdrawalHistory]);
-
   // Keep refs in sync with state
   useEffect(() => { fuelRef.current = fuel; }, [fuel]);
   useEffect(() => { gemsRef.current = gems; }, [gems]);
   useEffect(() => { cashRef.current = cash; }, [cash]);
+  useEffect(() => { withdrawalHistoryRef.current = withdrawalHistory; }, [withdrawalHistory]);
+  useEffect(() => { cashTransferHistoryRef.current = cashTransferHistory; }, [cashTransferHistory]);
 
   useEffect(() => {
     if (!isAuthLoaded || !isSignedIn || !userId) {
       return;
     }
 
-    let lastSubscriptionState = getSpacetimeTelemetrySnapshot().subscriptionState;
-    const unsubscribeDataChanges = subscribeSpacetimeDataChanges((event) => {
-      if (shouldRefreshWalletFromSpacetimeEvent(event, walletHydratedRef.current)) {
+    const unsubscribeDataChanges = subscribeRailwayDataChanges((event) => {
+      if (shouldRefreshWalletFromRailwayEvent(event, walletHydratedRef.current)) {
         setWalletRefreshNonce((value) => value + 1);
       }
     });
@@ -206,22 +172,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    const unsubscribeTelemetry = subscribeSpacetimeTelemetry((snapshot) => {
-      const shouldRefresh = shouldRefreshWalletFromSubscriptionActivation({
-        subscriptionState: snapshot.subscriptionState,
-        previousSubscriptionState: lastSubscriptionState,
-        walletHydrated: walletHydratedRef.current,
-        walletStateAvailable: walletStateAvailableRef.current,
-      });
-      lastSubscriptionState = snapshot.subscriptionState;
-
-      if (shouldRefresh) {
-        setWalletRefreshNonce((value) => value + 1);
-      }
-    });
-
     return () => {
-      unsubscribeTelemetry();
       unsubscribeBackendRefresh();
       unsubscribeDataChanges();
     };
@@ -240,6 +191,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setCash(0);
       setFuel(0);
       setWithdrawalHistory([]);
+      setCashTransferHistory([]);
       setWalletStateAvailable(false);
       setWalletHydrated(true);
     };
@@ -276,13 +228,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       );
       if (!active) return;
 
-      const walletBalance = fetchMyWalletBalance();
-      const resolvedWalletState = resolveAuthoritativeWalletState(
-        accountState,
-        walletBalance,
-        userId,
-      );
-      const walletState = resolvedWalletState.walletState;
+      const walletState =
+        accountState?.wallet && typeof accountState.wallet === 'object'
+          ? (accountState.wallet as Record<string, unknown>)
+          : null;
       const hasWalletState = walletState !== null;
 
       if (!hasWalletState && attempt < WALLET_HYDRATION_MAX_RETRIES) {
@@ -300,7 +249,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      if (!accountState && !hasWalletState) {
+      if (!accountState) {
         if (
           hasAuthoritativeWalletForUser(
             walletUserIdRef.current,
@@ -334,17 +283,35 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      const priorWithdrawalHistory = selectAuthoritativeWalletHistory(
+        walletUserIdRef.current,
+        userId,
+        walletStateAvailableRef.current,
+        withdrawalHistoryRef.current,
+      );
+      const priorCashTransferHistory = selectAuthoritativeWalletHistory(
+        walletUserIdRef.current,
+        userId,
+        walletStateAvailableRef.current,
+        cashTransferHistoryRef.current,
+      );
+
       walletUserIdRef.current = userId;
-      setWalletStateAvailable(resolvedWalletState.walletStateAvailable);
+      setWalletStateAvailable(hasWalletState);
       const normalizedWalletState = walletState ?? {};
+      const [canonicalWithdrawalHistory, canonicalCashTransferHistory] = await Promise.all([
+        fetchWalletWithdrawalHistory(),
+        fetchWalletCashTransferHistory(),
+      ]);
+      if (!active) return;
 
       const nextGems = toNonNegativeNumber(normalizedWalletState.gems);
       const nextCash = toNonNegativeNumber(normalizedWalletState.cash);
       const nextFuel = toNonNegativeNumber(normalizedWalletState.fuel);
       const nextWithdrawalHistory =
-        resolvedWalletState.source === 'account_state'
-          ? parseWithdrawalHistory(normalizedWalletState.withdrawalHistory)
-          : withdrawalHistoryRef.current;
+        canonicalWithdrawalHistory ?? priorWithdrawalHistory;
+      const nextCashTransferHistory =
+        canonicalCashTransferHistory ?? priorCashTransferHistory;
 
       gemsRef.current = nextGems;
       cashRef.current = nextCash;
@@ -353,6 +320,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setCash(nextCash);
       setFuel(nextFuel);
       setWithdrawalHistory(nextWithdrawalHistory);
+      setCashTransferHistory(nextCashTransferHistory);
       setWalletHydrated(true);
     };
 
@@ -403,33 +371,113 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return false;
   }, [warnWalletMutationBlocked]);
 
-  const spendGems = useCallback((amount: number) => {
-    if (!Number.isFinite(amount) || amount <= 0) return false;
-    warnWalletMutationBlocked('spendGems');
-    return false;
-  }, [warnWalletMutationBlocked]);
+  const applyWalletSpendLocally = useCallback((amount: number, currency: 'gems' | 'cash') => {
+    if (currency === 'cash') {
+      const nextCash = Math.max(0, cashRef.current - amount);
+      cashRef.current = nextCash;
+      setCash(nextCash);
+      return;
+    }
+    const nextGems = Math.max(0, gemsRef.current - amount);
+    gemsRef.current = nextGems;
+    setGems(nextGems);
+  }, []);
 
-  const spendCash = useCallback((amount: number) => {
-    if (!Number.isFinite(amount) || amount <= 0) return false;
-    warnWalletMutationBlocked('spendCash');
-    return false;
-  }, [warnWalletMutationBlocked]);
+  const spendGemsAuthoritatively = useCallback(async (
+    amount: number,
+    options?: { reason?: string; source?: string },
+  ) => {
+    if (!Number.isFinite(amount) || amount <= 0 || !userId) return false;
+    const normalizedAmount = Math.max(0, Math.floor(amount));
+    if (gemsRef.current < normalizedAmount) {
+      return false;
+    }
+    const result = await spendGemsBalance(userId, normalizedAmount, options);
+    if (!result.ok) {
+      if (result.code !== 'insufficient_balance') {
+        warnWalletDiagnosticThrottled('wallet_spend_gems_failed', {
+          code: result.code ?? 'unknown',
+        });
+      }
+      return false;
+    }
+    applyWalletSpendLocally(normalizedAmount, 'gems');
+    return true;
+  }, [applyWalletSpendLocally, userId]);
+
+  const spendCashAuthoritatively = useCallback(async (
+    amount: number,
+    options?: { reason?: string; source?: string },
+  ) => {
+    if (!Number.isFinite(amount) || amount <= 0 || !userId) return false;
+    const normalizedAmount = Math.max(0, Math.floor(amount));
+    if (cashRef.current < normalizedAmount) {
+      return false;
+    }
+    const result = await spendCashBalance(userId, normalizedAmount, options);
+    if (!result.ok) {
+      if (result.code !== 'insufficient_balance') {
+        warnWalletDiagnosticThrottled('wallet_spend_cash_failed', {
+          code: result.code ?? 'unknown',
+        });
+      }
+      return false;
+    }
+    applyWalletSpendLocally(normalizedAmount, 'cash');
+    return true;
+  }, [applyWalletSpendLocally, userId]);
 
   const deductBalance = useCallback(async (amount: number, currency: 'gems' | 'cash') => {
     if (currency === 'gems') {
-      return spendGems(amount);
+      return spendGemsAuthoritatively(amount, {
+        source: 'locked_content_unlock',
+        reason: 'Locked content unlock',
+      });
     } else {
-      return spendCash(amount);
+      return spendCashAuthoritatively(amount, {
+        source: 'locked_content_unlock',
+        reason: 'Locked content unlock',
+      });
     }
-  }, [spendGems, spendCash]);
+  }, [spendCashAuthoritatively, spendGemsAuthoritatively]);
 
-  const requestWithdrawal = useCallback((amountGems: number, details: WithdrawalRequest['details'], method: string) => {
+  const requestWithdrawal = useCallback(async (
+    amountGems: number,
+    details: WithdrawalRequest['details'],
+    method: string,
+  ) => {
     if (!Number.isFinite(amountGems) || amountGems <= 0) return false;
-    void details;
-    void method;
-    warnWalletMutationBlocked('requestWithdrawal');
-    return false;
-  }, [warnWalletMutationBlocked]);
+
+    const result = await requestWalletWithdrawal(amountGems, details, method);
+    if (!result.ok) {
+      warnWalletDiagnosticThrottled('wallet_withdrawal_request_failed', {
+        code: result.code ?? 'unknown',
+      });
+      return false;
+    }
+
+    return true;
+  }, []);
+
+  const sendCashToUser = useCallback(async (input: CashTransferRequest) => {
+    if (!Number.isFinite(input.amountCash) || input.amountCash <= 0) {
+      return {
+        ok: false,
+        code: 'invalid_input',
+        message: 'Amount must be greater than zero.',
+      } satisfies WalletMutationResult;
+    }
+
+    if (!input.targetUserId && !input.targetHandle) {
+      return {
+        ok: false,
+        code: 'invalid_input',
+        message: 'A target user is required.',
+      } satisfies WalletMutationResult;
+    }
+
+    return await sendWalletCashTransfer(input);
+  }, []);
 
   return (
     <WalletContext.Provider
@@ -442,13 +490,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         addCash,
         exchangeGemsForCash,
         exchangeCashForGems,
-        spendGems,
-        spendCash,
+        spendGems: spendGemsAuthoritatively,
+        spendCash: spendCashAuthoritatively,
         fuel,
         addFuel,
         consumeFuel,
         withdrawalHistory,
+        cashTransferHistory,
         requestWithdrawal,
+        sendCashToUser,
         balance: { gems, cash },
         deductBalance
       }}
@@ -470,6 +520,7 @@ export function useWallet() {
       walletHydrated: false,
       walletStateAvailable: false,
       withdrawalHistory: [],
+      cashTransferHistory: [],
       balance: { gems: 0, cash: 0 },
       addCash: () => {
         warnWalletDiagnosticThrottled('wallet_add_cash_outside_provider');
@@ -477,15 +528,20 @@ export function useWallet() {
       addGems: () => {
         warnWalletDiagnosticThrottled('wallet_add_gems_outside_provider');
       },
-      spendCash: () => false,
-      spendGems: () => false,
+      spendCash: async () => false,
+      spendGems: async () => false,
       exchangeGemsForCash: () => false,
       exchangeCashForGems: () => false,
       addFuel: () => {
         warnWalletDiagnosticThrottled('wallet_add_fuel_outside_provider');
       },
       consumeFuel: () => false,
-      requestWithdrawal: () => false,
+      requestWithdrawal: async () => false,
+      sendCashToUser: async () => ({
+        ok: false,
+        code: 'unavailable',
+        message: 'Wallet provider is unavailable.',
+      }),
       deductBalance: async () => false,
     };
   }

@@ -2,145 +2,189 @@ name: Vulu Agent Dispatch
 
 on:
   repository_dispatch:
-    types:
-      - vulu-agent.run
-  pull_request:
-    types:
-      - ready_for_review
-      - synchronize
+    types: [vulu_agent_task]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Manual prompt for Codex
+        required: true
+        type: string
+      issue_id:
+        description: Optional Linear issue id
+        required: false
+        type: string
+      issue_identifier:
+        description: Optional Linear issue identifier
+        required: false
+        type: string
+      issue_url:
+        description: Optional Linear issue URL
+        required: false
+        type: string
   push:
-    branches-ignore:
-      - main
+    branches: [main]
+  pull_request:
+    types: [closed]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  normalize-completion-signal:
-    if: github.event_name != 'repository_dispatch'
+  codex-task:
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: "20"
           cache: npm
-          cache-dependency-path: tools/vulu-agent-runner/package-lock.json
 
-      - name: Install runner deps
-        run: npm install
-        working-directory: tools/vulu-agent-runner
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Dispatch Codex run from GitHub completion signal
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_DISPATCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          VULU_AGENT_RUNNER_CONFIG: ${{ vars.VULU_AGENT_CONFIG || 'tools/vulu-agent-runner/config.example.json' }}
-        run: npm run github-signal
-        working-directory: tools/vulu-agent-runner
-
-  run-codex:
-    if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: vulu-agent-${{ github.event.client_payload.runner.lockKey }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      - name: Install Codex CLI
-        run: npm install -g @openai/codex@0.115.0-alpha.9-linux-x64
-
-      - name: Prepare branch
-        env:
-          TARGET_BRANCH: ${{ github.event.client_payload.runner.branchName }}
+      - name: Build runner payload
         run: |
-          git config user.name "vulu-agent-runner"
-          git config user.email "actions@github.com"
-          git checkout -B "${TARGET_BRANCH}"
+          node <<'NODE'
+          const fs = require("node:fs");
+          const eventName = process.env.GITHUB_EVENT_NAME;
+          const payload =
+            eventName === "repository_dispatch"
+              ? process.env.REPOSITORY_PAYLOAD_JSON
+              : JSON.stringify({
+                  prompt: process.env.MANUAL_PROMPT,
+                  dedupeKey: `manual-${Date.now()}`,
+                  source: "manual_task",
+                  issue: process.env.MANUAL_ISSUE_ID
+                    ? {
+                        id: process.env.MANUAL_ISSUE_ID,
+                        identifier: process.env.MANUAL_ISSUE_IDENTIFIER || process.env.MANUAL_ISSUE_ID,
+                        title: process.env.MANUAL_ISSUE_IDENTIFIER || "Manual dispatch",
+                        url: process.env.MANUAL_ISSUE_URL || "",
+                        updatedAt: new Date().toISOString(),
+                      }
+                    : undefined,
+                  routing: {
+                    templateKey: "manualTask",
+                    safetyMode: "safe",
+                    reason: "workflow_dispatch manual task",
+                  },
+                });
 
-      - name: Write prompt
-        run: |
-          mkdir -p .tmp
-          cat <<'EOF' > .tmp/vulu-agent-prompt.txt
-          ${{ github.event.client_payload.runner.prompt }}
-          EOF
+          fs.writeFileSync("runner-payload.json", `${payload}\n`, "utf8");
+          const parsed = JSON.parse(payload);
+          fs.writeFileSync("codex-prompt.txt", parsed.prompt || "", "utf8");
+          NODE
+        env:
+          REPOSITORY_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          MANUAL_PROMPT: ${{ inputs.prompt }}
+          MANUAL_ISSUE_ID: ${{ inputs.issue_id }}
+          MANUAL_ISSUE_IDENTIFIER: ${{ inputs.issue_identifier }}
+          MANUAL_ISSUE_URL: ${{ inputs.issue_url }}
 
       - name: Run Codex
+        id: codex
+        continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          codex exec \
+          set +e
+          npx -y @openai/codex exec - \
             --dangerously-bypass-approvals-and-sandbox \
             -C "$GITHUB_WORKSPACE" \
-            -o .tmp/codex-last-message.txt \
-            - < .tmp/vulu-agent-prompt.txt
+            -o codex-last-message.txt < codex-prompt.txt
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
 
-      - name: Commit and push changes if present
-        id: commit_changes
-        env:
-          TARGET_BRANCH: ${{ github.event.client_payload.runner.branchName }}
+      - name: Prepare completion signal
+        if: always()
         run: |
-          if git diff --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          node <<'NODE'
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync("runner-payload.json", "utf8"));
+          const summary = fs.existsSync("codex-last-message.txt")
+            ? fs.readFileSync("codex-last-message.txt", "utf8").trim()
+            : "";
+
+          const signal = {
+            dedupeKey: payload.dedupeKey,
+            issueId: payload.issue?.id || null,
+            issueIdentifier: payload.issue?.identifier || null,
+            source: "github_actions",
+            status: process.env.CODEX_EXIT_CODE === "0" ? "success" : "failure",
+            runUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            summary: summary ? summary.slice(0, 8000) : null,
+            errorMessage:
+              process.env.CODEX_EXIT_CODE === "0" ? null : `Codex exited with code ${process.env.CODEX_EXIT_CODE}`,
+          };
+
+          fs.writeFileSync("completion-signal.json", `${JSON.stringify(signal)}\n`, "utf8");
+          NODE
+        env:
+          CODEX_EXIT_CODE: ${{ steps.codex.outputs.exit_code }}
+
+      - name: Upload agent output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-last-message
+          path: |
+            codex-last-message.txt
+            runner-payload.json
+            completion-signal.json
+          if-no-files-found: ignore
+
+      - name: Notify runner
+        if: always() && vars.VULU_AGENT_RUNNER_URL != ''
+        env:
+          VULU_AGENT_RUNNER_URL: ${{ vars.VULU_AGENT_RUNNER_URL }}
+          VULU_AGENT_INTERNAL_TOKEN: ${{ secrets.VULU_AGENT_INTERNAL_TOKEN }}
+        run: |
+          if [ -z "$VULU_AGENT_RUNNER_URL" ] || [ -z "$VULU_AGENT_INTERNAL_TOKEN" ]; then
             exit 0
           fi
-          git add -A
-          git commit -m "codex: ${{ github.event.client_payload.runner.issue.identifier }} agent update"
-          git push --set-upstream origin "${TARGET_BRANCH}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Create or update PR
-        if: steps.commit_changes.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_BRANCH: ${{ github.event.client_payload.runner.branchName }}
-          BASE_BRANCH: ${{ github.event.client_payload.runner.baseBranch }}
-          ISSUE_KEY: ${{ github.event.client_payload.runner.issue.identifier }}
-          ISSUE_TITLE: ${{ github.event.client_payload.runner.issue.title }}
-        run: |
-          if gh pr view "${TARGET_BRANCH}" >/dev/null 2>&1; then
-            gh pr edit "${TARGET_BRANCH}" --title "[${ISSUE_KEY}] ${ISSUE_TITLE}" --body "Automated Codex follow-up for ${ISSUE_KEY}."
-          else
-            gh pr create \
-              --head "${TARGET_BRANCH}" \
-              --base "${BASE_BRANCH}" \
-              --title "[${ISSUE_KEY}] ${ISSUE_TITLE}" \
-              --body "Automated Codex follow-up for ${ISSUE_KEY}."
-          fi
-
-      - name: Comment back to Linear
-        if: always() && github.event.client_payload.runner.issue.id != ''
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          ISSUE_ID: ${{ github.event.client_payload.runner.issue.id }}
-          ISSUE_KEY: ${{ github.event.client_payload.runner.issue.identifier }}
-          ISSUE_TITLE: ${{ github.event.client_payload.runner.issue.title }}
-          TARGET_BRANCH: ${{ github.event.client_payload.runner.branchName }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          CHANGED: ${{ steps.commit_changes.outputs.changed }}
-        run: |
-          if [ -z "$LINEAR_API_KEY" ]; then
-            exit 0
-          fi
-          if [ "$CHANGED" = "true" ]; then
-            BODY="Codex run completed for ${ISSUE_KEY}. Branch: ${TARGET_BRANCH}. Workflow: ${RUN_URL}."
-          else
-            BODY="Codex run completed for ${ISSUE_KEY} with no code changes. Workflow: ${RUN_URL}."
-          fi
-          curl -sS https://api.linear.app/graphql \
-            -H "Authorization: ${LINEAR_API_KEY}" \
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $VULU_AGENT_INTERNAL_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "$(jq -n --arg issueId "$ISSUE_ID" --arg body "$BODY" '{query:"mutation CommentCreate($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }", variables:{issueId:$issueId, body:$body}}')"
+            --data @completion-signal.json \
+            "$VULU_AGENT_RUNNER_URL/internal/github-signal"
+
+      - name: Fail if Codex failed
+        if: steps.codex.outputs.exit_code != '0'
+        run: exit 1
+
+  notify-runner:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send completion signal
+        env:
+          VULU_AGENT_RUNNER_URL: ${{ vars.VULU_AGENT_RUNNER_URL }}
+          VULU_AGENT_INTERNAL_TOKEN: ${{ secrets.VULU_AGENT_INTERNAL_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$VULU_AGENT_RUNNER_URL" ] || [ -z "$VULU_AGENT_INTERNAL_TOKEN" ]; then
+            exit 0
+          fi
+          node <<'NODE' > github-signal.json
+          const signal = {
+            dedupeKey: `${process.env.GITHUB_EVENT_NAME}:${process.env.GITHUB_RUN_ID}`,
+            status: "success",
+            source: process.env.GITHUB_EVENT_NAME,
+            runUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            summary: process.env.GITHUB_EVENT_NAME === "push"
+              ? `Push completed on ${process.env.GITHUB_REF_NAME}.`
+              : `Pull request completion signal received for #${process.env.PR_NUMBER || "unknown"}.`,
+          };
+          process.stdout.write(JSON.stringify(signal));
+          NODE
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $VULU_AGENT_INTERNAL_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @github-signal.json \
+            "$VULU_AGENT_RUNNER_URL/internal/github-signal"

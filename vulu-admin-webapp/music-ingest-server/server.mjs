@@ -1,6 +1,6 @@
 /**
  * Local / deployable admin helper:
- * Spotify track metadata search + automatic YouTube lookup via yt-dlp + upload to Cloudflare R2.
+ * Spotify track metadata search + automatic YouTube lookup via yt-dlp + upload to R2.
  *
  * Setup:
  *   cd vulu-admin-webapp/music-ingest-server && cp .env.example .env
@@ -238,6 +238,7 @@ function mapSpotifyTracks(payload) {
       album: track.album?.name ?? '',
       albumArt,
       durationMs: track.duration_ms ?? null,
+      popularity: typeof track.popularity === 'number' ? track.popularity : null,
       spotifyUrl: track.external_urls?.spotify ?? '',
       youtubeSearchHint,
     };
@@ -325,6 +326,7 @@ async function buildArtistCatalogTracks(artistId, includeGroupsRaw) {
           album: album.name,
           albumArt: album.images?.[0]?.url ?? '',
           durationMs: t.duration_ms ?? null,
+          explicit: typeof t.explicit === 'boolean' ? t.explicit : null,
           spotifyUrl: t.external_urls?.spotify ?? '',
           youtubeSearchHint: `${t.name || ''} ${artists}`.replace(/\s+/g, ' ').trim(),
           albumReleaseDate: album.release_date || '',
@@ -747,6 +749,13 @@ function topMap(map, limit = 8) {
     .map(([label, value]) => ({ label, value }));
 }
 
+function seriesMap(map, limit = 365) {
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-limit)
+    .map(([label, value]) => ({ label, value }));
+}
+
 async function buildMusicStats() {
   assertStorageConfigured();
   const keys = (await listAllKeysWithPrefix(R2_MUSIC_PREFIX)).filter(isLibraryObjectKey);
@@ -775,6 +784,7 @@ async function buildMusicStats() {
 
   const playMap = new Map();
   const searchArtistMap = new Map();
+  const searchSongMap = new Map();
   const storageArtistMap = new Map();
   const installSeriesMap = new Map();
   const playSeriesMap = new Map();
@@ -788,6 +798,8 @@ async function buildMusicStats() {
     incrementMap(playSeriesMap, isoDay(new Date(eventTimeMs(e) || Date.now())));
   }
   for (const e of searches) {
+    if (e.artistSearch && e.query) incrementMap(searchArtistMap, e.query);
+    if (!e.artistSearch && e.query) incrementMap(searchSongMap, e.query);
     for (const artist of e.artists || []) incrementMap(searchArtistMap, artist);
   }
   for (const e of installs) {
@@ -824,16 +836,29 @@ async function buildMusicStats() {
         last24h: countSince(searches, '24h', eventTimeMs),
         week: countSince(searches, 'week', eventTimeMs),
         month: countSince(searches, 'month', eventTimeMs),
+        year: countSince(searches, 'year', eventTimeMs),
         allTime: searches.length,
       },
       reuses: reuse.length,
     },
     charts: {
-      installsByDay: topMap(installSeriesMap, 30).sort((a, b) => a.label.localeCompare(b.label)),
-      playsByDay: topMap(playSeriesMap, 30).sort((a, b) => a.label.localeCompare(b.label)),
+      installsByDay: seriesMap(installSeriesMap),
+      playsByDay: seriesMap(playSeriesMap),
       storageByArtist: topMap(storageArtistMap, 8),
       topPlayedSongs: topMap(playMap, 10),
+      topSearchedSongs: topMap(searchSongMap, 10),
       mostSearchedArtists: topMap(searchArtistMap, 10),
+      recentSearches: searches
+        .slice()
+        .sort((a, b) => eventTimeMs(b) - eventTimeMs(a))
+        .slice(0, 20)
+        .map((e) => ({
+          at: e.at,
+          query: String(e.query || '').slice(0, 160),
+          mode: e.artistSearch ? 'artist' : 'track',
+          resultCount: Number(e.resultCount) || 0,
+          artists: Array.isArray(e.artists) ? e.artists.slice(0, 5) : [],
+        })),
     },
   };
 }
@@ -1029,6 +1054,13 @@ app.get('/api/spotify/search', async (req, res) => {
       return res.status(r.status).json({ error: 'Spotify search failed', detail: text.slice(0, 500) });
     }
     const tracks = mapSpotifyTracks(JSON.parse(text));
+    const popularityMap = await fetchSpotifyTrackPopularityMap(tracks).catch(() => new Map());
+    for (const track of tracks) {
+      const spotifyId = sanitizeSpotifyTrackId(track.id);
+      if (spotifyId && popularityMap.has(spotifyId)) {
+        track.popularity = popularityMap.get(spotifyId);
+      }
+    }
     await appendMusicEventSafe({
       type: 'search',
       query: q,

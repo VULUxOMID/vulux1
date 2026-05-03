@@ -6,7 +6,7 @@ import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
 
 const ISSUER = "https://issuer.vulu.test";
-const AUDIENCE = "vulu-upload-signer";
+const AUDIENCE = "vulu-backend";
 const SUBJECT = "user_test_123";
 
 async function buildKeySet() {
@@ -107,4 +107,17 @@ test("createJwtVerifyOptions rejects empty audience configuration", () => {
     () => createJwtVerifyOptions({ issuer: ISSUER, audienceList: [] }),
     /audience is not configured/i,
   );
+});
+
+test("createJwtVerifyOptions supports issuer-only verification when audience is optional", async () => {
+  const { jwks, privateKey } = await buildKeySet();
+  const token = await signJwt(privateKey, { audience: null });
+  const jwtVerifyOptions = createJwtVerifyOptions({
+    issuer: ISSUER,
+    audienceList: [],
+    audienceRequired: false,
+  });
+
+  const userId = await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
+  assert.equal(userId, SUBJECT);
 });

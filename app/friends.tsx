@@ -3,10 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
 
-import { AppScreen, AppText } from '../src/components';
-import { toast } from '../src/components/Toast';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
-import { resolveSessionGate } from '../src/auth/sessionGate';
+import { AppScreen, AppText, PageHeader } from '../src/components';
 import { useFriends } from '../src/context';
 import { useProfile } from '../src/context/ProfileContext';
 import type { LiveUser } from '../src/features/liveroom/types';
@@ -18,18 +15,6 @@ function hasImageUri(value: string | undefined | null): value is string {
 
 export default function FriendsScreen() {
   const router = useRouter();
-  const {
-    userId,
-    hasSession,
-    isLoaded: isAuthLoaded,
-    isSignedIn,
-  } = useSessionAuth();
-  const sessionGate = resolveSessionGate({
-    isAuthLoaded,
-    hasSession,
-    isSignedIn,
-    userId,
-  });
   const { friends } = useFriends();
   const { showProfile } = useProfile();
 
@@ -57,14 +42,6 @@ export default function FriendsScreen() {
   };
 
   const openChat = (friendId: string) => {
-    if (!sessionGate.hasAuthenticatedSession) {
-      toast.error(
-        sessionGate.shouldShowSignInRequired
-          ? 'Sign in required to open direct messages.'
-          : 'Preparing your session...',
-      );
-      return;
-    }
     const normalizedFriendId = friendId.trim();
     if (!normalizedFriendId) return;
     router.push(`/chat/${encodeURIComponent(normalizedFriendId)}`);
@@ -72,23 +49,27 @@ export default function FriendsScreen() {
 
   return (
     <AppScreen noPadding style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton} hitSlop={10}>
-          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
-        </Pressable>
-        <AppText variant="h2">Friends</AppText>
-        <Pressable
-          onPress={() =>
-            router.push({
-              pathname: '/search',
-              params: { mode: 'add_friends' },
-            })
+      <View style={styles.headerWrap}>
+        <PageHeader
+          eyebrow="Social"
+          title="Friends"
+          subtitle="People you follow most closely across Vulu."
+          onBack={() => router.back()}
+          actions={
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: '/search',
+                  params: { mode: 'add_friends' },
+                })
+              }
+              style={({ pressed }) => [styles.addButton, pressed && styles.rowPressed]}
+              hitSlop={10}
+            >
+              <Ionicons name="person-add-outline" size={18} color={colors.textPrimary} />
+            </Pressable>
           }
-          style={({ pressed }) => [styles.addButton, pressed && styles.rowPressed]}
-          hitSlop={10}
-        >
-          <Ionicons name="person-add-outline" size={18} color={colors.textPrimary} />
-        </Pressable>
+        />
       </View>
 
       <FlatList
@@ -99,7 +80,7 @@ export default function FriendsScreen() {
           <View style={styles.emptyState}>
             <AppText style={styles.emptyTitle}>No friends yet</AppText>
             <AppText variant="small" secondary style={styles.emptySubtitle}>
-              Add friends from the Chat search to see them here.
+              Add friends from search to build your Vulu circle.
             </AppText>
           </View>
         }
@@ -140,55 +121,45 @@ export default function FriendsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  headerWrap: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.sm,
   },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceAlt,
-  },
   addButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.11)',
   },
   listContent: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
-    gap: spacing.xs,
+    paddingBottom: spacing.xxxl,
+    gap: spacing.sm,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceAlt,
+    paddingHorizontal: spacing.mdPlus,
+    paddingVertical: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: 'rgba(17,17,19,0.9)',
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   rowPressed: {
-    opacity: 0.78,
+    opacity: 0.8,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: colors.surface,
   },
   avatarFallback: {
@@ -200,14 +171,14 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   messageButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   name: {
     color: colors.textPrimary,
@@ -220,7 +191,7 @@ const styles = StyleSheet.create({
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xl * 2,
+    paddingVertical: spacing.xxxl * 2,
     gap: spacing.xs,
   },
   emptyTitle: {

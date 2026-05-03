@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, Platform } from 'react-native';
+import { Pressable, StyleSheet, View, LayoutAnimation, Animated, Easing, ScrollView, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../../auth/clerkSession';
 
 import { AppText, CashIcon } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
@@ -15,7 +15,7 @@ import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
 } from '../../../data/adapters/backend/accountState';
-import { spacetimeDb, subscribeSpacetimeDataChanges } from '../../../lib/spacetime';
+import { railwayDb, subscribeRailwayDataChanges } from '../../../lib/railwayRuntime';
 import {
   EVENT_WIDGET_DEFAULT_RUNTIME_CONFIG,
   readEventWidgetConfigSourceFromDb,
@@ -80,7 +80,7 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
 
   useEffect(() => {
     if (!isAuthLoaded || !isSignedIn || !userId) return;
-    return subscribeSpacetimeDataChanges((event) => {
+    return subscribeRailwayDataChanges((event) => {
       if (
         !event.scopes.includes('wallet') &&
         !event.scopes.includes('profile') &&
@@ -136,7 +136,7 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     const hydrateEventState = async () => {
       const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
-      const backendConfig = readEventWidgetConfigSourceFromDb((spacetimeDb as any).db);
+      const backendConfig = readEventWidgetConfigSourceFromDb((railwayDb as any).db);
       setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState, backendConfig));
 
       const eventState =
@@ -187,7 +187,7 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     const hydrateRuntimeConfig = async () => {
       const accountState = await fetchBackendAccountState(null, getToken, userId);
       if (!active) return;
-      const backendConfig = readEventWidgetConfigSourceFromDb((spacetimeDb as any).db);
+      const backendConfig = readEventWidgetConfigSourceFromDb((railwayDb as any).db);
       setRuntimeConfig(resolveEventWidgetRuntimeConfig(accountState, backendConfig));
     };
 
@@ -357,16 +357,13 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     return () => clearInterval(timer);
   }, [activePlayersNow, runtimeConfig.autoplayFrequencySeconds, runtimeConfig.enabled]);
 
-  const toggleDetails = () => {
+  const toggle = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded((current) => !current);
+    setExpanded((v) => !v);
   };
 
   const handleEntryPress = () => {
-    if (!runtimeConfig.enabled || hasEntered) {
-      return;
-    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Animate button press
@@ -386,13 +383,16 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     setShowEntryModal(true);
   };
 
-  const confirmEntry = useCallback((): boolean => {
+  const confirmEntry = useCallback(async (): Promise<boolean> => {
     if (hasEntered) {
       return false;
     }
 
     if (entryCost > 0) {
-      const didSpend = spendCash(entryCost);
+      const didSpend = await spendCash(entryCost, {
+        reason: 'Event entry',
+        source: 'event_entry',
+      });
       if (!didSpend) {
         return false;
       }
@@ -411,41 +411,34 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     .toString()
     .padStart(2, '0');
   const progressPercent = Math.min(progress * 100, 100);
-  const winnerLine = !runtimeConfig.enabled
-    ? 'Entries are temporarily unavailable'
-    : lastWinner
-      ? winnerHighlight
-        ? `Winner: @${lastWinner}`
-        : `Last winner: @${lastWinner}`
-      : `Next draw in ${remainingMinutes}:${remainingSeconds}`;
-  const hasFunds = entryCost <= 0 || cash >= entryCost;
+  const progressBarHeight = expanded ? 6 : 3;
+  const winnerLine = lastWinner
+    ? winnerHighlight
+      ? `Winner: @${lastWinner}`
+      : `Last winner: @${lastWinner}`
+    : 'Next draw soon';
+
+  if (!runtimeConfig.enabled) {
+    return null;
+  }
+
   // Collapsed state content - shown below header
   const collapsedContent = (
     <View style={styles.collapsedContent}>
-      <View style={styles.progressContainer}>
+      <View style={styles.collapsedMetaRow}>
+        <AppText variant="tiny" style={styles.timerText}>
+          Ends in {remainingMinutes.toString().padStart(2, '0')}:{remainingSeconds}
+        </AppText>
         <Animated.View
           style={[
             styles.progressTrack,
             {
               transform: [{ scaleX: progress > 0.9 ? pulseAnim : 1 }],
-            }
+            },
           ]}
         >
-          <View
-            style={[styles.progressFill, { width: `${progressPercent}%` }]}
-          />
+          <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
         </Animated.View>
-      </View>
-      <View style={styles.winnerRow}>
-        <AppText
-          variant="small"
-          style={[
-            styles.winnerText,
-            winnerHighlight && styles.winnerTextHighlight
-          ]}
-        >
-          {winnerLine}
-        </AppText>
       </View>
     </View>
   );
@@ -454,18 +447,16 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
     <>
       <HomePillCard
         title="Event"
-        onPress={toggleDetails}
+        leftIcon="trophy"
+        leftIconSize={20}
+        onPress={toggle}
         expanded={expanded}
         collapsedContent={collapsedContent}
+        showChevron={false}
+        density="compact"
+        headerHeight={48}
       >
         <View style={styles.eventDetails}>
-          <View style={styles.eventDetailsHeader}>
-            <AppText variant="small" secondary style={styles.eventDescription}>
-              {runtimeConfig.enabled
-                ? 'How it works: enter before the timer ends. One winner is picked each draw.'
-                : 'Event entry is paused right now. You can still view timing and status details here.'}
-            </AppText>
-          </View>
           <AppText variant="small" secondary style={styles.eventDescription}>
             {prizePool > 0
               ? `Enter now for the next ${formatCurrencyLong(prizePool)} draw.`
@@ -494,50 +485,34 @@ export function EventWidget({ onAnnounceWinner, friends, activePlayersNow }: Eve
             />
           </View>
 
-          {runtimeConfig.enabled ? (
-            <>
-              <Pressable
-                onPress={hasEntered ? undefined : handleEntryPress}
-                disabled={hasEntered}
-              >
-                <Animated.View style={[
-                  styles.eventButtonContainer,
-                  { transform: [{ scale: buttonScaleAnim }] },
-                  hasEntered && styles.eventButtonDisabled
-                ]}>
-                  {hasEntered ? (
-                    <View style={styles.eventButtonEntered}>
-                      <Ionicons name="checkmark-circle" size={18} color={colors.accentSuccess} />
-                      <AppText style={styles.eventButtonEnteredText}>Entered • Waiting for Draw</AppText>
-                    </View>
-                  ) : (
-                    <LinearGradient
-                      colors={[colors.accentSuccess, '#059669']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.eventButton}
-                    >
-                      <AppText style={styles.eventButtonText}>
-                        {entryCost > 0 ? `$${entryCost} to Enter` : 'Enter Event'}
-                      </AppText>
-                    </LinearGradient>
-                  )}
-                </Animated.View>
-              </Pressable>
-              {!hasEntered && !hasFunds ? (
-                <AppText variant="small" style={styles.entryBlockedText}>
-                  Entry unavailable: top up your wallet to join this draw.
-                </AppText>
-              ) : null}
-            </>
-          ) : (
-            <View style={styles.eventUnavailableCard}>
-              <Ionicons name="pause-circle-outline" size={18} color={colors.textSecondary} />
-              <AppText variant="small" secondary style={styles.eventUnavailableText}>
-                Entry is unavailable right now. Check back soon.
-              </AppText>
-            </View>
-          )}
+          <Pressable
+            onPress={hasEntered ? undefined : handleEntryPress}
+            disabled={hasEntered}
+          >
+            <Animated.View style={[
+              styles.eventButtonContainer,
+              { transform: [{ scale: buttonScaleAnim }] },
+              hasEntered && styles.eventButtonDisabled
+            ]}>
+              {hasEntered ? (
+                <View style={styles.eventButtonEntered}>
+                  <Ionicons name="checkmark-circle" size={18} color={colors.accentSuccess} />
+                  <AppText style={styles.eventButtonEnteredText}>Entered • Waiting for Draw</AppText>
+                </View>
+              ) : (
+                <LinearGradient
+                  colors={[colors.accentSuccess, '#059669']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.eventButton}
+                >
+                  <AppText style={styles.eventButtonText}>
+                    {entryCost > 0 ? `$${entryCost} to Enter` : 'Enter Event'}
+                  </AppText>
+                </LinearGradient>
+              )}
+            </Animated.View>
+          </Pressable>
         </View>
       </HomePillCard>
 
@@ -629,53 +604,43 @@ const styles = StyleSheet.create({
     minWidth: 100,
   },
   collapsedContent: {
-    gap: spacing.sm,
-    marginTop: spacing.xs,
+    gap: spacing.xs,
+    marginTop: 0,
+    paddingTop: 0,
   },
-  progressContainer: {
-    width: '100%',
+  collapsedMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   progressTrack: {
-    width: '100%',
-    height: 4,
+    flex: 1,
+    height: 3,
     borderRadius: 999,
     backgroundColor: colors.surface,
     overflow: 'hidden',
-  },
-  winnerRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: spacing.xs,
   },
   progressFill: {
     height: '100%',
     backgroundColor: colors.accentSuccess,
   },
-  winnerText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  winnerTextHighlight: {
-    color: colors.textPrimary,
-    fontWeight: '700',
+  timerText: {
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   eventDetails: {
-    marginTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  eventDetailsHeader: {
-    marginBottom: spacing.xs,
+    marginTop: spacing.md,
+    gap: spacing.sm,
   },
   eventDescription: {
-    flex: 1,
-    textAlign: 'left',
-    marginBottom: spacing.xs,
+    textAlign: 'center',
+    marginBottom: spacing.sm,
   },
   eventStatsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
     gap: spacing.sm,
   },
   statBox: {
@@ -708,7 +673,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   eventButtonContainer: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
   },
   eventButton: {
     borderRadius: radius.xl,
@@ -740,25 +705,5 @@ const styles = StyleSheet.create({
     color: colors.accentSuccess,
     fontWeight: '700',
     fontSize: 14,
-  },
-  entryBlockedText: {
-    color: colors.accentDanger,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-  },
-  eventUnavailableCard: {
-    marginTop: spacing.sm,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  eventUnavailableText: {
-    flex: 1,
   },
 });

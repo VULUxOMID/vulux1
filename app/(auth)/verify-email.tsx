@@ -1,5 +1,5 @@
-import { SpacetimeAuthScreen } from '../../src/features/auth/SpacetimeAuthScreen';
+import { ClerkAuthScreen } from '../../src/features/auth/ClerkAuthScreen';
 
 export default function VerifyEmailScreen() {
-  return <SpacetimeAuthScreen mode="verify" />;
+  return <ClerkAuthScreen mode="verify" />;
 }

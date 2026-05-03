@@ -6,6 +6,7 @@ import {
   PanResponderGestureState,
   Pressable,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -18,13 +19,18 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { colors } from '../../theme';
+import { colors, spacing } from '../../theme';
 import { FLOATING_BUTTON_SIZE, NAV_BAR_HEIGHT } from './layoutConstants';
-import { useAdminAuth } from '../../features/admin/hooks/useAdminAuth';
-import { ADMIN_MENU_ITEMS, MENU_ITEMS, type MenuKey } from './floatingMenuConfig';
+import { AppText } from '../../components';
 
 // Magnetic position with pull strength
-type MagnetPosition = { x: number; y: number; pullStrength: number };
+type MagnetPosition = {
+  x: number;
+  y: number;
+  pullStrength: number;
+  side: 'left' | 'right';
+  vertical: 'upper' | 'bottom';
+};
 
 const STORAGE_KEY = '@vulu_menu_position';
 
@@ -34,13 +40,24 @@ const MENU_SECTION_GAP = 10;
 const MENU_PADDING_Y = 20; // Increased to 20 for more spacing
 const ITEM_SIZE = 50;
 const VELOCITY_THRESHOLD = 0.5;
-const EXPANDED_MENU_WIDTH = 182;
 
 const SPRING_CONFIG = {
   tension: 60,
   friction: 9,
   useNativeDriver: false,
 };
+
+type MenuKey =
+  | 'music'
+  | 'posts'
+  | 'play'
+  | 'clash-of-drone'
+  | 'leaderboard'
+  | 'shop'
+  | 'videos'
+  | 'profile'
+  | 'settings'
+  | 'create-post';
 
 type MenuNotifications = {
   [key in MenuKey]?: number;
@@ -50,7 +67,38 @@ type FloatingMenuButtonProps = {
   notifications?: MenuNotifications;
 };
 
-const MAX_MENU_ITEM_COUNT = MENU_ITEMS.length + ADMIN_MENU_ITEMS.length;
+type MenuItemConfig = {
+  id: MenuKey;
+  icon: string;
+  route: string;
+  matchRoutes: string[];
+  label?: string;
+};
+
+const MENU_ITEMS: MenuItemConfig[] = [
+  { id: 'music', icon: 'musical-notes', route: '/(tabs)/music', matchRoutes: ['/music'], label: 'Music' },
+  { id: 'videos', icon: 'videocam', route: '/(tabs)/videos', matchRoutes: ['/videos'], label: 'Hub' },
+  { id: 'posts', icon: 'document-text', route: '/posts', matchRoutes: ['/posts'], label: 'Posts' },
+  { id: 'play', icon: 'game-controller', route: '/(tabs)/play', matchRoutes: ['/play'], label: 'Play' },
+  {
+    id: 'clash-of-drone',
+    icon: 'hardware-chip',
+    route: '/game/clash-of-drone',
+    matchRoutes: ['/game/clash-of-drone'],
+    label: 'Clash Of Drone',
+  },
+  { id: 'leaderboard', icon: 'trophy', route: '/(tabs)/leaderboard', matchRoutes: ['/leaderboard'], label: 'Leaderboard' },
+  { id: 'shop', icon: 'cart', route: '/(tabs)/shop', matchRoutes: ['/shop'], label: 'Shop' },
+];
+
+const MAX_MENU_ITEM_COUNT = MENU_ITEMS.length;
+const HOME_FAB_SIZE = 52;
+const COMPACT_HOME_FAB_SIZE = 44;
+const QUICK_ACTION_MENU_GAP = 12;
+const DRAG_ACTIVATION_DISTANCE = 6;
+const HORIZONTAL_ANCHOR_INSET = 28;
+const BOTTOM_ANCHOR_GAP = spacing.md;
+const MENU_PANEL_WIDTH = 168;
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -59,12 +107,27 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { width, height } = Dimensions.get('window');
-  const { isAdmin } = useAdminAuth();
+  const isHome = pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/';
+  const isMessages =
+    pathname === '/messages' ||
+    pathname.startsWith('/messages/') ||
+    pathname.startsWith('/(tabs)/messages');
+  const isNotifications =
+    pathname === '/notifications' ||
+    pathname.startsWith('/notifications/') ||
+    pathname.startsWith('/(tabs)/notifications');
+  const isProfile =
+    pathname === '/profile' ||
+    pathname.startsWith('/profile/') ||
+    pathname.startsWith('/(tabs)/profile');
+  const isCompactWidth = width < 400;
+  const fabSize = isCompactWidth ? COMPACT_HOME_FAB_SIZE : HOME_FAB_SIZE;
 
   // State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const isMenuOpenRef = useRef(false);
   const [measuredContentHeight, setMeasuredContentHeight] = useState(0);
+  const [lastKnownPosition, setLastKnownPosition] = useState({ x: 0, y: 0 });
 
   // Animations
   // 0 = closed (circle), 1 = open (pill)
@@ -79,12 +142,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   // Track starting position for "escape velocity" calculation
   const dragStartPos = useRef({ x: 0, y: 0 });
 
-  const activeMenuItems = useMemo(() => {
-    if (isAdmin) {
-      return [...MENU_ITEMS, ...ADMIN_MENU_ITEMS];
-    }
-    return MENU_ITEMS;
-  }, [isAdmin]);
+  const activeMenuItems = MENU_ITEMS;
 
   // Total notifications calculation
   const totalNotifications = useMemo(() => {
@@ -95,12 +153,23 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
 
   // Screen Boundaries
   const safeTop = insets.top + 20;
-  const safeBottom = NAV_BAR_HEIGHT + insets.bottom + 20;
+  const safeBottom = NAV_BAR_HEIGHT + insets.bottom + BOTTOM_ANCHOR_GAP;
+  const upperAnchorClearance = isMessages
+    ? 210
+    : isProfile
+      ? 126
+      : isNotifications
+        ? 122
+        : isHome
+          ? 112
+          : 88;
 
   // Calculate Expanded Dimensions
   const MENU_PADDING = MENU_PADDING_Y;
 
   // Vertical List Layout
+  const EXPANDED_WIDTH = 66; // 50px items + 16px padding (8px each side)
+
   const maxItems = activeMenuItems.length;
   const LIST_HEIGHT = (maxItems * ITEM_SIZE) +
     ((maxItems - 1) * MENU_ITEM_GAP);
@@ -110,67 +179,68 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
     MENU_SECTION_GAP +
     LIST_HEIGHT;
 
-  // Interpolations
-  const currentWidth = morphAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [FLOATING_BUTTON_SIZE, EXPANDED_MENU_WIDTH]
-  });
-
   // Use measured content height if available, otherwise fallback to calculated
   const actualExpandedHeight = measuredContentHeight > 0 ? measuredContentHeight : EXPANDED_HEIGHT;
 
-  const currentHeight = morphAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [FLOATING_BUTTON_SIZE, actualExpandedHeight]
-  });
-
   // Magnet Positions
-  const { magnetPositions, magnetPositionsExpanded } = useMemo(() => {
-    const left = insets.left + 16;
-    const right = width - FLOATING_BUTTON_SIZE - insets.right - 16;
-    const midY = height / 2 - FLOATING_BUTTON_SIZE / 2;
-    const bottom = height - safeBottom - FLOATING_BUTTON_SIZE;
-    const top = safeTop;
+  const { magnetPositions, upperAnchorY, bottomAnchorY } = useMemo(() => {
+    const left = insets.left + HORIZONTAL_ANCHOR_INSET;
+    const right = width - fabSize - insets.right - HORIZONTAL_ANCHOR_INSET;
+    const bottom = Math.max(safeTop, height - safeBottom - fabSize);
+    const upper = Math.min(
+      bottom - fabSize - QUICK_ACTION_MENU_GAP,
+      Math.max(safeTop, insets.top + upperAnchorClearance),
+    );
 
-    // 6 checkpoints when closed
     const all: MagnetPosition[] = [
-      { x: right, y: bottom, pullStrength: 1.0 }, // Bottom Right (Default)
-      { x: left, y: bottom, pullStrength: 0.8 },  // Bottom Left
-      { x: right, y: midY, pullStrength: 0.9 },   // Middle Right
-      { x: left, y: midY, pullStrength: 0.9 },    // Middle Left
-      { x: right, y: top, pullStrength: 0.8 },    // Top Right
-      { x: left, y: top, pullStrength: 0.8 },     // Top Left
+      { x: right, y: bottom, pullStrength: 1.0, side: 'right', vertical: 'bottom' },
+      { x: left, y: bottom, pullStrength: 0.92, side: 'left', vertical: 'bottom' },
+      { x: right, y: upper, pullStrength: 0.94, side: 'right', vertical: 'upper' },
+      { x: left, y: upper, pullStrength: 0.88, side: 'left', vertical: 'upper' },
     ];
 
-    // 4 checkpoints when expanded (corners only, no middle)
-    const corners: MagnetPosition[] = [
-      { x: right, y: bottom, pullStrength: 1.0 }, // Bottom Right
-      { x: left, y: bottom, pullStrength: 0.8 },  // Bottom Left
-      { x: right, y: top, pullStrength: 0.8 },    // Top Right
-      { x: left, y: top, pullStrength: 0.8 },     // Top Left
-    ];
-
-    return { magnetPositions: all, magnetPositionsExpanded: corners };
-  }, [width, height, insets, safeTop, safeBottom]);
+    return {
+      magnetPositions: all,
+      upperAnchorY: upper,
+      bottomAnchorY: bottom,
+    };
+  }, [fabSize, height, insets, safeBottom, safeTop, upperAnchorClearance, width]);
 
   // Initial Position (Bottom Right or Saved)
   // We use a ref for the Animated Value to avoid re-creating it, but we need to initialize it correctly.
-  const defaultPos = { x: width - FLOATING_BUTTON_SIZE - 20, y: height - safeBottom - FLOATING_BUTTON_SIZE };
-  const [isRightAligned, setIsRightAligned] = useState(defaultPos.x > width / 2);
+  const defaultPos = useMemo(() => {
+    const bottomRight = magnetPositions.find(
+      (position) => position.side === 'right' && position.vertical === 'bottom',
+    );
+    return bottomRight
+      ? { x: bottomRight.x, y: bottomRight.y }
+      : { x: width - fabSize - 20, y: height - safeBottom - fabSize };
+  }, [fabSize, height, magnetPositions, safeBottom, width]);
 
   // Use Animated.ValueXY for fluid movement
   const pan = useRef(new Animated.ValueXY(defaultPos)).current;
 
-  // Animated progress: 0 = X button at top (expand down), 1 = X button at bottom (expand up)
-  // Only top checkpoints (y < 35% of screen) expand down; middle + bottom expand up
-  const xPosAnim = useRef(new Animated.Value(defaultPos.y > height * 0.35 ? 1 : 0)).current;
+  const getNearestMagnetPosition = useCallback(
+    (x: number, y: number) => {
+      let nearest = magnetPositions[0];
+      let minDistance = Number.MAX_VALUE;
 
-  // Ref for screen bounds (avoids stale closures in PanResponder)
-  const boundsRef = useRef({ safeTop, safeBottom, height });
-  boundsRef.current = { safeTop, safeBottom, height };
+      magnetPositions.forEach((position) => {
+        const distance = Math.hypot(position.x - x, position.y - y);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearest = position;
+        }
+      });
+
+      return nearest;
+    },
+    [magnetPositions],
+  );
 
   // Load saved position on mount
   useEffect(() => {
+    setLastKnownPosition(defaultPos);
     const loadPosition = async () => {
       try {
         const saved = await AsyncStorage.getItem(STORAGE_KEY);
@@ -178,8 +248,8 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
           const parsed = JSON.parse(saved);
 
           // Improved Boundary Validation
-          const maxX = width - FLOATING_BUTTON_SIZE;
-          const maxY = height - safeBottom - FLOATING_BUTTON_SIZE;
+          const maxX = width - fabSize;
+          const maxY = height - safeBottom - fabSize;
           const minY = safeTop;
 
           let safeX = parsed.x;
@@ -191,31 +261,22 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
 
           // Only update if valid numbers
           if (!isNaN(safeX) && !isNaN(safeY)) {
-            pan.setValue({ x: safeX, y: safeY });
-            xPosAnim.setValue(safeY > height * 0.35 ? 1 : 0);
-            setIsRightAligned(safeX > width / 2);
+            const snapped = getNearestMagnetPosition(safeX, safeY);
+            pan.setValue({ x: snapped.x, y: snapped.y });
+            setLastKnownPosition({ x: snapped.x, y: snapped.y });
           }
         } else {
           // No saved pos: reset to default (handles rotation/resize)
           pan.setValue(defaultPos);
-          xPosAnim.setValue(defaultPos.y > height * 0.35 ? 1 : 0);
-          setIsRightAligned(defaultPos.x > width / 2);
+          setLastKnownPosition(defaultPos);
         }
       } catch (e) {
         // Ignore error
+        setLastKnownPosition(defaultPos);
       }
     };
     loadPosition();
-  }, [width, height, safeBottom, safeTop]);
-
-  // --- Layout positions driven by xPosAnim ---
-  const CONTENT_HEIGHT = ITEM_SIZE + MENU_SECTION_GAP + LIST_HEIGHT;
-
-  // X button slides from top position (0) to bottom position (past all items)
-  const xButtonTopAnim = xPosAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, LIST_HEIGHT + MENU_SECTION_GAP],
-  });
+  }, [defaultPos, fabSize, getNearestMagnetPosition, height, pan, safeBottom, safeTop, width]);
 
   // --- Animation Logic ---
 
@@ -291,9 +352,10 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
   const getBestMagnetPosition = useCallback((x: number, y: number, vx: number, vy: number, startX: number, startY: number): MagnetPosition => {
     const velocity = Math.sqrt(vx * vx + vy * vy);
     const isThrow = velocity > VELOCITY_THRESHOLD;
-
-    // Use 4 corner checkpoints when expanded, 6 when closed
-    const positions = isMenuOpenRef.current ? magnetPositionsExpanded : magnetPositions;
+    const positions = magnetPositions;
+    const startedOnLeft = startX <= width / 2;
+    const endedOnLeft = x <= width / 2;
+    const crossedMidline = startedOnLeft !== endedOnLeft;
 
     // How far did we drag from the starting position?
     const dragDistance = Math.sqrt(Math.pow(x - startX, 2) + Math.pow(y - startY, 2));
@@ -306,6 +368,11 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
     positions.forEach(pos => {
       const distanceToMagnet = Math.sqrt(Math.pow(pos.x - x, 2) + Math.pow(pos.y - y, 2));
       let score = distanceToMagnet / pos.pullStrength;
+      const targetOnLeft = pos.side === 'left';
+
+      if (targetOnLeft !== startedOnLeft && !crossedMidline) {
+        score *= 1.45;
+      }
 
       // Penalize snapping back to origin - the further you dragged, the harder to snap back
       const distanceFromStart = Math.sqrt(Math.pow(pos.x - startX, 2) + Math.pow(pos.y - startY, 2));
@@ -353,13 +420,19 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
       }
     });
     return bestPosition;
-  }, [magnetPositions, magnetPositionsExpanded, width]);
+  }, [magnetPositions, width]);
 
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        Math.abs(gesture.dx) > DRAG_ACTIVATION_DISTANCE ||
+        Math.abs(gesture.dy) > DRAG_ACTIVATION_DISTANCE,
+      onMoveShouldSetPanResponderCapture: (_evt, gesture) =>
+        Math.abs(gesture.dx) > DRAG_ACTIVATION_DISTANCE ||
+        Math.abs(gesture.dy) > DRAG_ACTIVATION_DISTANCE,
 
       onPanResponderGrant: () => {
         Haptics.selectionAsync();
@@ -382,55 +455,37 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
 
         Animated.spring(buttonScale, { toValue: 1, useNativeDriver: false }).start();
 
-        // Check if it was a tap (very small movement)
-        if (Math.abs(gesture.dx) < 6 && Math.abs(gesture.dy) < 6) {
-          toggleMenu();
-        } else {
-          // It was a drag/throw
+        const currentX = dragStartPos.current.x + gesture.dx;
+        const currentY = dragStartPos.current.y + gesture.dy;
 
-          // Calculate absolute position from start + delta
-          const currentX = dragStartPos.current.x + gesture.dx;
-          const currentY = dragStartPos.current.y + gesture.dy;
+        const bestPos = getBestMagnetPosition(
+          currentX,
+          currentY,
+          gesture.vx,
+          gesture.vy,
+          dragStartPos.current.x,
+          dragStartPos.current.y
+        );
 
-          const bestPos = getBestMagnetPosition(
-            currentX,
-            currentY,
-            gesture.vx,
-            gesture.vy,
-            dragStartPos.current.x,
-            dragStartPos.current.y
-          );
+        setLastKnownPosition(bestPos);
 
-          // Animate X button position with slow spring for smooth slide-through
-          const { height: h } = boundsRef.current;
-          const targetXPos = bestPos.y > h * 0.35 ? 1 : 0;
-          Animated.spring(xPosAnim, {
-            toValue: targetXPos,
-            tension: 25,
-            friction: 9,
-            useNativeDriver: false,
-          }).start();
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ x: bestPos.x, y: bestPos.y }))
+          .catch(err => {
+            if (__DEV__) {
+              console.warn('Failed to save menu pos:', err instanceof Error ? err.message : 'Unknown error');
+            }
+          });
 
-          // Async Storage (safe fire-and-forget)
-          AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ x: bestPos.x, y: bestPos.y }))
-            .catch(err => {
-              if (__DEV__) {
-                console.warn('Failed to save menu pos:', err instanceof Error ? err.message : 'Unknown error');
-              }
-            });
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          setIsRightAligned(bestPos.x > width / 2);
-
-          Animated.spring(pan, {
-            toValue: { x: bestPos.x, y: bestPos.y },
-            velocity: { x: gesture.vx * 0.5, y: gesture.vy * 0.5 }, // Dampen throw velocity
-            stiffness: 150,  // Responsive but not snappy
-            damping: 18,     // Smooth settle with subtle overshoot
-            mass: 0.8,       // Light feel, not sluggish
-            useNativeDriver: false
-          }).start();
-        }
+        Animated.spring(pan, {
+          toValue: { x: bestPos.x, y: bestPos.y },
+          velocity: { x: gesture.vx * 0.5, y: gesture.vy * 0.5 }, // Dampen throw velocity
+          stiffness: 150,  // Responsive but not snappy
+          damping: 18,     // Smooth settle with subtle overshoot
+          mass: 0.8,       // Light feel, not sluggish
+          useNativeDriver: false
+        }).start();
       }
     })
   ).current;
@@ -439,7 +494,7 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
 
   const borderRadius = morphAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [FLOATING_BUTTON_SIZE / 2, 22] // Smoother corner radius
+    outputRange: [isHome ? 18 : FLOATING_BUTTON_SIZE / 2, 22]
   });
 
   const menuOpacity = morphAnim.interpolate({
@@ -452,183 +507,157 @@ export function FloatingMenuButton({ notifications = {} }: FloatingMenuButtonPro
     outputRange: [20, 0]
   });
 
-  // Vertical shift: smoothly transitions between expand-down (no shift) and expand-up (shift up)
-  const verticalShift = Animated.multiply(
-    morphAnim,
-    xPosAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0, -(actualExpandedHeight - FLOATING_BUTTON_SIZE)],
-    })
+  const estimatedMenuHeight = measuredContentHeight || (activeMenuItems.length * 60);
+  const opensToRight = lastKnownPosition.x <= width / 2;
+  const availableAbove = Math.max(0, lastKnownPosition.y - safeTop);
+  const availableBelow = Math.max(0, height - safeBottom - (lastKnownPosition.y + fabSize));
+  const verticalAnchor: MagnetPosition['vertical'] =
+    Math.abs(lastKnownPosition.y - upperAnchorY) <= Math.abs(lastKnownPosition.y - bottomAnchorY)
+      ? 'upper'
+      : 'bottom';
+  const opensDown = verticalAnchor === 'upper';
+  const menuMaxHeight = Math.max(
+    140,
+    (opensDown ? availableBelow : availableAbove) - QUICK_ACTION_MENU_GAP,
   );
-
-  const horizontalShift = morphAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, isRightAligned ? -(EXPANDED_MENU_WIDTH - FLOATING_BUTTON_SIZE) : 0],
-  });
+  const horizontalMenuOffset = fabSize + QUICK_ACTION_MENU_GAP;
 
   return (
     <>
-      {/* Overlay to close menu when clicking outside */}
       {isMenuOpen && (
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={closeMenu}
-        >
-          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={closeMenu}>
+          <BlurView intensity={18} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={styles.homeBackdrop} />
         </Pressable>
       )}
 
       <Animated.View
         style={[
-          styles.container,
+          styles.homeQuickActionsWrap,
           {
+            width: fabSize,
+            height: fabSize,
             transform: [
               { translateX: pan.x },
               { translateY: pan.y },
-              { translateX: horizontalShift },
               { scale: buttonScale },
-              { translateY: verticalShift } // Additional shift for expansion
             ],
-            height: currentHeight,
-            width: currentWidth,
-            borderRadius: borderRadius,
-          }
+          },
         ]}
-        {...panResponder.panHandlers}
       >
-        {/* Background Blur */}
-        <View style={styles.blurContainer}>
-          <BlurView
-            intensity={80}
-            tint="dark"
-            style={StyleSheet.absoluteFill}
-          />
-          {/* Fallback dark bg for Android/low-end if blur isn't supported or is transparent */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.surface, opacity: 0.7 }]} />
-        </View>
-
-        {/* Main Toggle Button (Visible when closed) */}
-        <Animated.View style={[
-          styles.fabContent,
-          {
-            opacity: morphAnim.interpolate({ inputRange: [0, 0.5], outputRange: [1, 0] }),
-            transform: [
-              { scale: morphAnim.interpolate({ inputRange: [0, 0.5], outputRange: [1, 0] }) },
-              { rotate: morphAnim.interpolate({ inputRange: [0, 0.5], outputRange: ['0deg', '90deg'] }) }
-            ]
-          }
-        ]}>
-          <Ionicons name="apps" size={28} color={colors.textPrimary} />
-          <Text style={styles.fabLabel}>Menu</Text>
-          {hasNotifications && (
-            <View style={styles.mainBadge}>
-              <Text style={styles.mainBadgeText}>
-                {totalNotifications > 99 ? '99+' : totalNotifications}
-              </Text>
-            </View>
-          )}
-        </Animated.View>
-
-        {/* Expanded Menu Content */}
         <Animated.View
-          style={[
-            styles.menuContent,
-            {
-              opacity: menuOpacity,
-              transform: [{ translateY: menuTranslateY }],
-            }
-            ,
-            isMenuOpen ? styles.pointerEventsAuto : styles.pointerEventsNone,
-          ]}
-          onLayout={(e) => {
-            const { height: contentHeight } = e.nativeEvent.layout;
-            if (contentHeight > 0 && contentHeight !== measuredContentHeight) {
-              setMeasuredContentHeight(contentHeight);
+          onLayout={(event) => {
+            const nextHeight = event.nativeEvent.layout.height;
+            if (nextHeight > 0 && Math.abs(nextHeight - measuredContentHeight) > 1) {
+              setMeasuredContentHeight(nextHeight);
             }
           }}
+          style={[
+            styles.homeQuickActionsMenu,
+            {
+              width: MENU_PANEL_WIDTH,
+              maxHeight: menuMaxHeight,
+              opacity: menuOpacity,
+              transform: [{ translateY: menuTranslateY }],
+            },
+            opensDown
+              ? { top: fabSize + QUICK_ACTION_MENU_GAP }
+              : { bottom: fabSize + QUICK_ACTION_MENU_GAP },
+            opensToRight
+              ? [styles.homeQuickActionsMenuRight, { left: horizontalMenuOffset }]
+              : [styles.homeQuickActionsMenuLeft, { right: horizontalMenuOffset }],
+            isMenuOpen ? styles.pointerEventsAuto : styles.pointerEventsNone,
+          ]}
         >
-          <View style={{ width: '100%', height: CONTENT_HEIGHT, alignItems: 'center' }}>
-            {/* X/Close Button - slides through items */}
-            <Animated.View style={[styles.absoluteSlot, { top: xButtonTopAnim, zIndex: 10 }]}>
-              <Pressable
-                onPress={toggleMenu}
-                style={[styles.menuItem, styles.toggleButton]}
-                accessibilityRole="button"
-                accessibilityLabel="Close navigation menu"
-              >
-                <Animated.View style={styles.menuItemIcon}>
-                  <Animated.View
-                    style={{
-                      transform: [{ rotate: morphAnim.interpolate({ inputRange: [0.5, 1], outputRange: ['-90deg', '0deg'] }) }]
-                    }}
-                  >
-                    <Ionicons name="close" size={24} color={colors.textSecondary} />
-                  </Animated.View>
-                </Animated.View>
-                <Text style={styles.menuItemLabel}>Close</Text>
-              </Pressable>
-            </Animated.View>
-
-            {/* Menu Items - each smoothly shifts as X button passes */}
+          <ScrollView
+            style={styles.homeQuickActionsScroll}
+            contentContainerStyle={styles.homeQuickActionsScrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            nestedScrollEnabled
+          >
             {activeMenuItems.map((item, index) => {
-              const count = notifications[item.id as MenuKey] || 0;
+              const itemAnim = itemAnims[index];
               const isActive = item.matchRoutes.some(
                 (matchRoute) => pathname === matchRoute || pathname?.startsWith(`${matchRoute}/`),
               );
-              const itemAnim = itemAnims[index];
-
-              const topWhenXAbove = (ITEM_SIZE + MENU_SECTION_GAP) + index * (ITEM_SIZE + MENU_ITEM_GAP);
-              const topWhenXBelow = index * (ITEM_SIZE + MENU_ITEM_GAP);
-              const itemTop = xPosAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [topWhenXAbove, topWhenXBelow],
-              });
 
               return (
-                <Animated.View key={item.id} style={[styles.absoluteSlot, { top: itemTop }]}>
-                  <AnimatedPressable
-                    style={({ pressed }) => [
-                      styles.menuItem,
-                      pressed && styles.menuItemPressed,
-                      isActive && styles.menuItemActive,
-                      {
-                        opacity: itemAnim,
-                        transform: [
-                          { scale: itemAnim },
-                          { translateY: itemAnim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }
-                        ]
-                      }
+                <Animated.View
+                  key={item.id}
+                  style={[
+                    styles.homeActionRow,
+                    opensToRight ? styles.homeActionRowRight : styles.homeActionRowLeft,
+                    {
+                      opacity: itemAnim,
+                      transform: [
+                        { scale: itemAnim },
+                        {
+                          translateY: itemAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [12, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <Pressable
+                    style={[
+                      styles.homeActionButton,
+                      isActive && styles.homeActionButtonActive,
                     ]}
                     onPress={() => {
-                      router.push(item.route as any);
                       closeMenu();
+                      router.push(item.route as any);
                     }}
-                    accessibilityRole="button"
-                    accessibilityLabel={item.accessibilityLabel}
                   >
-                    <Ionicons
-                      name={item.icon as keyof typeof Ionicons.glyphMap}
-                      size={24}
-                      color={isActive ? colors.textPrimary : colors.textSecondary}
-                      style={styles.menuItemIcon}
-                    />
-                    <Text
+                    <AppText
+                      variant="smallBold"
+                      numberOfLines={1}
                       style={[
-                        styles.menuItemLabel,
-                        isActive ? styles.menuItemLabelActive : null,
+                        styles.homeActionLabel,
+                        isActive && styles.homeActionLabelActive,
                       ]}
                     >
-                      {item.label}
-                    </Text>
-
-                    {count > 0 && (
-                      <View style={styles.miniBadge} />
-                    )}
-                  </AnimatedPressable>
+                      {item.label ?? item.id}
+                    </AppText>
+                    <Ionicons
+                      name={item.icon as keyof typeof Ionicons.glyphMap}
+                      size={18}
+                      color={colors.textPrimary}
+                    />
+                  </Pressable>
                 </Animated.View>
               );
             })}
-          </View>
+          </ScrollView>
+        </Animated.View>
+
+        <Animated.View
+          style={styles.homeFabDragHandle}
+          {...panResponder.panHandlers}
+        >
+          <Pressable
+            onPress={toggleMenu}
+            style={[
+              styles.homeFabButton,
+              isCompactWidth && styles.homeFabButtonCompact,
+            ]}
+          >
+            <Ionicons
+              name={isMenuOpen ? 'close' : 'add'}
+              size={isCompactWidth ? 28 : 32}
+              color={colors.textOnLight}
+            />
+            {hasNotifications && !isMenuOpen ? (
+              <View style={styles.mainBadge}>
+                <Text style={styles.mainBadgeText}>
+                  {totalNotifications > 99 ? '99+' : totalNotifications}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
         </Animated.View>
       </Animated.View>
     </>
@@ -643,19 +672,19 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...Platform.select({
       web: {
-        boxShadow: '0px 4px 4.65px rgba(0, 0, 0, 0.3)',
+        boxShadow: '0px 8px 18px rgba(0, 0, 0, 0.28)',
       },
       default: {
         shadowColor: '#000',
         shadowOffset: {
           width: 0,
-          height: 4,
+          height: 8,
         },
-        shadowOpacity: 0.3,
-        shadowRadius: 4.65,
+        shadowOpacity: 0.22,
+        shadowRadius: 14,
       },
     }),
-    elevation: 8,
+    elevation: 12,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
   },
@@ -674,20 +703,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fabLabel: {
-    marginTop: 2,
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    letterSpacing: 0.3,
-  },
   menuContent: {
     width: '100%',
     alignItems: 'center',
     paddingVertical: MENU_PADDING_Y,
   },
   toggleButton: {
-    width: EXPANDED_MENU_WIDTH - 16,
+    width: ITEM_SIZE,
     height: ITEM_SIZE,
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 14, // Match menuItem borderRadius
@@ -697,14 +719,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
+  itemsList: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    width: '100%',
+    gap: MENU_ITEM_GAP,
+  },
   menuItem: {
-    width: EXPANDED_MENU_WIDTH - 16,
+    width: ITEM_SIZE,
     height: ITEM_SIZE,
     borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    flexDirection: 'row',
-    paddingHorizontal: 14,
+    justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
@@ -715,17 +741,102 @@ const styles = StyleSheet.create({
   menuItemActive: {
     backgroundColor: colors.accentPrimarySubtle, // Use the proper theme token
   },
-  menuItemLabel: {
-    flex: 1,
+  homeBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+  },
+  homeQuickActionsWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    alignItems: 'flex-end',
+    zIndex: 1000,
+  },
+  homeQuickActionsMenu: {
+    position: 'absolute',
+    gap: 10,
+  },
+  homeQuickActionsScroll: {
+    maxHeight: '100%',
+  },
+  homeQuickActionsScrollContent: {
+    gap: 10,
+    paddingBottom: spacing.xs,
+  },
+  homeQuickActionsMenuLeft: {
+    right: 0,
+    alignItems: 'flex-end',
+  },
+  homeQuickActionsMenuRight: {
+    left: 0,
+    alignItems: 'flex-start',
+  },
+  homeActionRow: {
+    width: '100%',
+  },
+  homeActionRowLeft: {
+    alignItems: 'flex-end',
+  },
+  homeActionRowRight: {
+    alignItems: 'flex-start',
+  },
+  homeActionButton: {
+    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(17, 17, 19, 0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 4, height: 4 },
+    elevation: 8,
+  },
+  homeActionButtonActive: {
+    borderColor: 'rgba(255,255,255,0.26)',
+    backgroundColor: 'rgba(24, 24, 28, 0.98)',
+  },
+  homeActionLabel: {
     color: colors.textPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
     fontSize: 13,
-    fontWeight: '600',
+    flexShrink: 1,
   },
-  menuItemLabelActive: {
+  homeActionLabelActive: {
     color: colors.textPrimary,
   },
-  menuItemIcon: {
-    marginRight: 12,
+  homeFabButton: {
+    width: HOME_FAB_SIZE,
+    height: HOME_FAB_SIZE,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(11, 11, 13, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  homeFabDragHandle: {
+    width: HOME_FAB_SIZE,
+    height: HOME_FAB_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeFabButtonCompact: {
+    width: COMPACT_HOME_FAB_SIZE,
+    height: COMPACT_HOME_FAB_SIZE,
+    borderRadius: 13,
   },
   mainBadge: {
     position: 'absolute',
@@ -748,8 +859,8 @@ const styles = StyleSheet.create({
   },
   miniBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: -2,
+    right: -2,
     width: 10,
     height: 10,
     borderRadius: 5,

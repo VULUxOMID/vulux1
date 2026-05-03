@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { EMPTY_BACKEND_SNAPSHOT } from './snapshot';
 import { createBackendLeaderboardRepository } from './leaderboardRepository';
-import { spacetimeDb } from '../../../lib/spacetime';
+import { railwayDb } from '../../../lib/railwayRuntime';
 
 function makeIterTable<T>(rows: T[]) {
   return {
@@ -11,10 +11,10 @@ function makeIterTable<T>(rows: T[]) {
   };
 }
 
-function withMockSpacetime<T>(dbView: any, run: () => T): T {
-  const originalDb = Object.getOwnPropertyDescriptor(spacetimeDb, 'db');
+function withMockRailway<T>(dbView: any, run: () => T): T {
+  const originalDb = Object.getOwnPropertyDescriptor(railwayDb, 'db');
 
-  Object.defineProperty(spacetimeDb, 'db', {
+  Object.defineProperty(railwayDb, 'db', {
     configurable: true,
     get: () => dbView,
   });
@@ -23,7 +23,7 @@ function withMockSpacetime<T>(dbView: any, run: () => T): T {
     return run();
   } finally {
     if (originalDb) {
-      Object.defineProperty(spacetimeDb, 'db', originalDb);
+      Object.defineProperty(railwayDb, 'db', originalDb);
     }
   }
 }
@@ -41,7 +41,7 @@ test('authoritative public_leaderboard rows render even when snapshot rows are e
   };
 
   const repo = createBackendLeaderboardRepository(EMPTY_BACKEND_SNAPSHOT, 'host-user');
-  const items = withMockSpacetime(dbView, () => repo.listLeaderboardItems());
+  const items = withMockRailway(dbView, () => repo.listLeaderboardItems());
 
   assert.equal(items.length, 2);
   assert.deepEqual(
@@ -99,7 +99,7 @@ test('snapshot rows remain the fallback until authoritative public_leaderboard h
     'host-user',
   );
 
-  const items = withMockSpacetime(
+  const items = withMockRailway(
     {
       publicLeaderboard: makeIterTable([]),
       publicProfileSummary: makeIterTable([]),
@@ -114,7 +114,7 @@ test('snapshot rows remain the fallback until authoritative public_leaderboard h
 
 test('authoritative public_leaderboard row identity fields override raw user-id fallback', () => {
   const repo = createBackendLeaderboardRepository(EMPTY_BACKEND_SNAPSHOT, null);
-  const [row] = withMockSpacetime(
+  const [row] = withMockRailway(
     {
       publicLeaderboard: makeIterTable([
         {

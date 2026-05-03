@@ -2,7 +2,7 @@ import type { LeaderboardRepository } from '../../contracts';
 import type { LeaderboardItem } from '../../../features/leaderboard/types';
 import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
-import { spacetimeDb } from '../../../lib/spacetime';
+import { railwayDb } from '../../../lib/railwayRuntime';
 
 type UserDirectoryEntry = {
   username: string;
@@ -66,7 +66,7 @@ function buildUserDirectory(snapshot: BackendSnapshot): Map<string, UserDirector
     });
   }
 
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const publicRows: any[] = Array.from(
     dbView?.publicProfileSummary?.iter?.() ??
       dbView?.public_profile_summary?.iter?.() ??
@@ -100,7 +100,7 @@ function getAuthoritativeLeaderboardItems(
   snapshot: BackendSnapshot,
   viewerUserId: string | null,
 ): LeaderboardItem[] {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(
     dbView?.publicLeaderboard?.iter?.() ?? dbView?.public_leaderboard?.iter?.() ?? [],
   );

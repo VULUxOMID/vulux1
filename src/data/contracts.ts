@@ -24,6 +24,9 @@ export type SocialUser = {
   status?: 'live' | 'online' | 'busy' | 'offline' | 'recent';
   statusText?: string;
   lastSeen?: string;
+  friendshipStatus?: 'pending' | 'accepted' | 'declined' | 'blocked' | 'removed';
+  blockedByViewer?: boolean;
+  blockedByOther?: boolean;
 };
 
 export type LivePresenceActivity = 'hosting' | 'watching' | 'blocked';
@@ -110,6 +113,7 @@ export type SearchRequest = {
 export type ListLivesRequest = CursorPageRequest &
   SearchRequest & {
     includeInviteOnly?: boolean;
+    allowUnconfirmedDiscovery?: boolean;
   };
 export type ListLivesResponse = LiveItem[];
 

@@ -1,4 +1,4 @@
-import { spacetimeDb } from '../../../lib/spacetime';
+import { railwayDb } from '../../../lib/railwayRuntime';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -59,7 +59,7 @@ function parseJsonRecord(value: unknown): UnknownRecord {
 }
 
 function readRows(viewKeys: string[]): any[] {
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   for (const viewKey of viewKeys) {
     const rows = Array.from(dbView?.[viewKey]?.iter?.() ?? []);
     if (rows.length > 0) {

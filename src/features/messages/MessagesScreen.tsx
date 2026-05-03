@@ -1,10 +1,10 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, UIManager } from 'react-native';
-import { useAuth } from '../../auth/spacetimeSession';
+import { Platform, Pressable, ScrollView, StyleSheet, UIManager, View } from 'react-native';
+import { useAuth } from '../../auth/clerkSession';
 import { useIsFocused } from '@react-navigation/native';
 
-import { AppScreen } from '../../components';
+import { AppScreen, AppText, Avatar } from '../../components';
 import { useFriends } from '../../context';
 import { useProfile } from '../../context/ProfileContext';
 import { useRepositories } from '../../data/provider';
@@ -18,42 +18,33 @@ import {
   buildFriendActivitiesFromPresence,
   type FriendLiveActivity,
 } from '../home/activityFriends';
-import { MessagesFab } from './components/MessagesFab';
 import { MessagesHeader } from './MessagesHeader';
 import { MessagesList } from './MessagesList';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import type { LiveUser } from '../liveroom/types';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { isSpacetimeViewActive, subscribeFriends } from '../../lib/spacetime';
+import { subscribeFriends } from '../../lib/railwayRuntime';
 import { ReportComposerModal } from '../reports/ReportComposerModal';
 import { submitReport } from '../reports/reportingClient';
 import { toast } from '../../components/Toast';
-import { resolveSessionGate } from '../../auth/sessionGate';
-import { resolveMessagesEmptyState } from './messagesAuthUi';
-import { shouldShowMessagesLoading } from './messagesLoading';
+import { colors, radius, spacing } from '../../theme';
+import { listGroupChatRooms, type GroupChatRoom } from './groupChatApi';
 
 export default function MessagesScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
-  const { userId, hasSession, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
+  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const { friends, loading: friendsLoading, refreshFriends } = useFriends();
   const { showProfile } = useProfile();
   const { live: liveRepo, social: socialRepo, messages: messagesRepo } = useRepositories();
   const [conversationLimit, setConversationLimit] = useState(50);
-  const sessionGate = resolveSessionGate({
-    isAuthLoaded,
-    hasSession,
-    isSignedIn,
-    userId,
-    isFocused,
-    isAppActive,
-  });
-  const canReadMessages = sessionGate.hasAuthenticatedSession;
-  const canSyncMessages = sessionGate.canRunForegroundQueries;
+  const [groupRooms, setGroupRooms] = useState<GroupChatRoom[]>([]);
+  const [groupRoomsLoading, setGroupRoomsLoading] = useState(false);
+  const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const socialUsers = useMemo<SocialUser[]>(
-    () => (canReadMessages ? socialRepo.listUsers({ limit: 300 }) : []),
-    [canReadMessages, socialRepo],
+    () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : []),
+    [queriesEnabled, socialRepo],
   );
   const socialUsersById = useMemo<Record<string, SocialUser>>(() => {
     return socialUsers.reduce<Record<string, SocialUser>>((acc, user) => {
@@ -62,31 +53,31 @@ export default function MessagesScreen() {
     }, {});
   }, [socialUsers]);
   const lives = useMemo<LiveItem[]>(
-    () => (canReadMessages ? liveRepo.listLives({ limit: 120 }) : []),
-    [canReadMessages, liveRepo],
+    () => (queriesEnabled ? liveRepo.listLives({ limit: 120 }) : []),
+    [liveRepo, queriesEnabled],
   );
   const liveIds = useMemo(() => new Set(lives.map((live) => live.id)), [lives]);
   const friendIds = useMemo(() => friends.map((friend) => friend.id), [friends]);
   const livePresence = useMemo(
     () =>
-      canReadMessages
+      queriesEnabled
         ? liveRepo.listPresence({
           limit: 500,
           userIds: friendIds,
         })
         : [],
-    [canReadMessages, friendIds, liveRepo],
+    [friendIds, liveRepo, queriesEnabled],
   );
   const friendActivities = useMemo<FriendLiveActivity[]>(
     () => {
-      if (!canReadMessages) return [];
+      if (!queriesEnabled) return [];
       return buildFriendActivitiesFromPresence({
         friendIds,
         liveIds,
         livePresence,
       });
     },
-    [canReadMessages, friendIds, liveIds, livePresence],
+    [friendIds, liveIds, livePresence, queriesEnabled],
   );
   const validFriendActivities = useMemo(
     () =>
@@ -100,26 +91,14 @@ export default function MessagesScreen() {
     [friends, validFriendActivities],
   );
   const conversationsQueryArgs = useMemo(
-    () => (canReadMessages ? { limit: conversationLimit } : undefined),
-    [canReadMessages, conversationLimit],
+    () => (queriesEnabled ? { limit: conversationLimit } : undefined),
+    [conversationLimit, queriesEnabled],
   );
   const conversations = useMemo(
-    () => (canReadMessages ? messagesRepo.listConversations(conversationsQueryArgs) : []),
-    [canReadMessages, conversationsQueryArgs, messagesRepo],
+    () => (queriesEnabled ? messagesRepo.listConversations(conversationsQueryArgs) : []),
+    [conversationsQueryArgs, messagesRepo, queriesEnabled],
   );
-  const conversationsLoading = useMemo(
-    () =>
-      shouldShowMessagesLoading(
-        conversations.length > 0,
-        canSyncMessages,
-        isSpacetimeViewActive('my_conversations'),
-      ),
-    [canSyncMessages, conversations.length],
-  );
-  const emptyState = useMemo(
-    () => resolveMessagesEmptyState(canReadMessages, sessionGate),
-    [canReadMessages, sessionGate],
-  );
+  const conversationsLoading = false;
 
   useEffect(() => {
     setConversationLimit(50);
@@ -139,16 +118,47 @@ export default function MessagesScreen() {
   }, []);
 
   useEffect(() => {
-    if (!canSyncMessages) return;
+    if (!queriesEnabled) return;
     requestBackendRefresh();
-  }, [canSyncMessages]);
+  }, [queriesEnabled]);
 
   useEffect(() => {
-    if (!canSyncMessages) {
+    if (!queriesEnabled) {
+      setGroupRooms([]);
+      setGroupRoomsLoading(false);
       return;
     }
-    return subscribeFriends();
-  }, [canSyncMessages]);
+
+    let cancelled = false;
+    setGroupRoomsLoading(true);
+    void listGroupChatRooms()
+      .then((rooms) => {
+        if (!cancelled) {
+          setGroupRooms(rooms);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn('[messages] Failed to load group rooms', error);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setGroupRoomsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queriesEnabled]);
+
+  useEffect(() => {
+    if (!queriesEnabled) {
+      return;
+    }
+    return subscribeFriends(friendIds);
+  }, [friendIds, queriesEnabled]);
 
   const handleFriendPress = useCallback(
     (friend: Friend) => {
@@ -265,6 +275,95 @@ export default function MessagesScreen() {
     setReportConversation(conversation);
   }, []);
 
+  const orderedGroupRooms = useMemo(() => {
+    const stateRank: Record<GroupChatRoom['membershipState'], number> = {
+      active: 0,
+      invited: 1,
+      left: 2,
+    };
+    return [...groupRooms].sort((a, b) => {
+      const stateDiff = stateRank[a.membershipState] - stateRank[b.membershipState];
+      if (stateDiff !== 0) return stateDiff;
+      return b.updatedAt - a.updatedAt;
+    });
+  }, [groupRooms]);
+
+  const handleOpenGroupRoom = useCallback(
+    (room: GroupChatRoom) => {
+      hapticTap();
+      router.push(`/chat/room/${encodeURIComponent(room.id)}`);
+    },
+    [router],
+  );
+
+  const roomsHeader = useMemo(() => {
+    return (
+      <View style={styles.roomsHeader}>
+        <View style={styles.roomsHeaderRow}>
+          <AppText style={styles.roomsTitle}>Groups</AppText>
+          <Pressable onPress={() => router.push('/chat/new-group')} style={styles.roomsAction}>
+            <AppText style={styles.roomsActionText}>New Group</AppText>
+          </Pressable>
+        </View>
+        {groupRoomsLoading ? (
+          <View style={styles.roomsLoadingCard}>
+            <AppText secondary>Loading group rooms...</AppText>
+          </View>
+        ) : orderedGroupRooms.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.roomsScrollContent}
+          >
+            {orderedGroupRooms.map((room) => (
+              <Pressable
+                key={room.id}
+                onPress={() => handleOpenGroupRoom(room)}
+                style={styles.roomCard}
+              >
+                <View style={styles.roomCardTopRow}>
+                  <AppText style={styles.roomCardTitle} numberOfLines={1}>
+                    {room.title}
+                  </AppText>
+                  <View style={styles.roomStatePill}>
+                    <AppText style={styles.roomStateText}>
+                      {room.membershipState === 'active'
+                        ? 'Joined'
+                        : room.membershipState === 'invited'
+                          ? 'Invite'
+                          : 'Left'}
+                    </AppText>
+                  </View>
+                </View>
+                <View style={styles.roomPreviewRow}>
+                  {room.memberPreview.slice(0, 3).map((member) => (
+                    <View key={`${room.id}:${member.userId}`} style={styles.roomPreviewAvatar}>
+                      <Avatar
+                        uri={member.avatarUrl}
+                        name={member.displayName ?? member.username ?? member.userId}
+                        size="sm"
+                      />
+                    </View>
+                  ))}
+                </View>
+                <AppText variant="small" secondary numberOfLines={2}>
+                  {room.activeMemberCount} active • {room.memberCount} total
+                </AppText>
+              </Pressable>
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.roomsEmptyCard}>
+            <AppText style={styles.roomsEmptyTitle}>No group rooms yet</AppText>
+            <AppText variant="small" secondary>
+              Create a room to chat with multiple friends in one place.
+            </AppText>
+          </View>
+        )}
+      </View>
+    );
+  }, [groupRoomsLoading, handleOpenGroupRoom, orderedGroupRooms, router]);
+
   return (
     <AppScreen noPadding>
       <MessagesHeader
@@ -279,17 +378,22 @@ export default function MessagesScreen() {
         conversations={listData}
         socialUsersById={socialUsersById}
         loading={conversationsLoading}
-        emptyTitle={emptyState.title}
-        emptySubtitle={emptyState.subtitle}
+        emptyTitle={queriesEnabled ? 'Start your first conversation' : 'Sign in to view DMs'}
+        emptySubtitle={
+          queriesEnabled
+            ? 'Find friends first, or create a group room if you want to talk with several people at once.'
+            : 'Authentication is required to load your messages.'
+        }
+        primaryActionLabel={queriesEnabled ? 'Find friends' : undefined}
+        onPrimaryAction={queriesEnabled ? handleFindFriends : undefined}
         onPressConversation={handleConversationPress}
         onMarkAsRead={handleMarkConversationRead}
         onViewProfile={handleViewProfile}
         onReportUser={handleReportUser}
         onScroll={handleScroll}
         onEndReached={handleLoadMoreConversations}
+        headerComponent={roomsHeader}
       />
-
-      <MessagesFab onPress={() => router.push('/chat/new-group')} />
 
       <FriendLivePreviewSheet
         visible={friendSheetVisible}
@@ -345,3 +449,94 @@ export default function MessagesScreen() {
     </AppScreen>
   );
 }
+
+const styles = StyleSheet.create({
+  roomsHeader: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.smPlus,
+  },
+  roomsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  roomsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  roomsAction: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.smMinus,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  roomsActionText: {
+    color: colors.accentPrimary,
+    fontWeight: '600',
+  },
+  roomsScrollContent: {
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+  },
+  roomsLoadingCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    padding: spacing.md,
+  },
+  roomsEmptyCard: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    padding: spacing.md,
+    gap: spacing.smMinus,
+  },
+  roomsEmptyTitle: {
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  roomCard: {
+    width: 220,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  roomCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  roomCardTitle: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  roomStatePill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+  },
+  roomStateText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  roomPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  roomPreviewAvatar: {
+    marginRight: -6,
+  },
+});

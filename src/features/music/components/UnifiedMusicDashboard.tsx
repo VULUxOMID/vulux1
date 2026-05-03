@@ -1,5 +1,14 @@
-import React, { useState, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, Image } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  View,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+  Image,
+  ActivityIndicator,
+} from 'react-native';
 import { AppText } from '../../../components/AppText';
 import { colors } from '../../../theme/colors';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +19,18 @@ import { useMusic } from '../context/MusicContext';
 import { CreatePlaylistModal } from './CreatePlaylistModal';
 import { UploadTrackModal } from './UploadTrackModal';
 import { useMusicCatalogRepo } from '../../../data/provider';
+import {
+  searchYoutubeTracks,
+  DEFAULT_YOUTUBE_SEARCH_OPTIONS,
+  YOUTUBE_SEARCH_HELP_MESSAGE,
+  YOUTUBE_SEARCH_HELP_TITLE,
+} from '../services/youtubeAudioApi';
+import {
+  addRecentSearch,
+  loadRecentPlays,
+  loadRecentSearches,
+  type RecentYoutubePlay,
+} from '../searchHistory';
 
 interface UnifiedMusicDashboardProps {
   onTrackPress: (track: Track, queue: Track[]) => void;
@@ -18,6 +39,18 @@ interface UnifiedMusicDashboardProps {
   onCategoriesPress: () => void;
   onOfflinePress: () => void;
   offlineCount: number;
+}
+
+function TrackRowSkeleton() {
+  return (
+    <View style={styles.skeletonRow}>
+      <View style={styles.skeletonArt} />
+      <View style={styles.skeletonTextCol}>
+        <View style={styles.skeletonLineLg} />
+        <View style={styles.skeletonLineSm} />
+      </View>
+    </View>
+  );
 }
 
 export const UnifiedMusicDashboard = ({
@@ -38,27 +71,126 @@ export const UnifiedMusicDashboard = ({
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
   const [isUploadModalVisible, setUploadModalVisible] = useState(false);
   const [discoveryView, setDiscoveryView] = useState<'trending' | 'new'>('trending');
+  const [youtubeTracks, setYoutubeTracks] = useState<Track[]>([]);
+  const [youtubeMeta, setYoutubeMeta] = useState<{
+    searchResultCount: number;
+    afterDetailFilterCount: number;
+  } | null>(null);
+  const [youtubePhase, setYoutubePhase] = useState<'idle' | 'search' | 'details' | 'done'>('idle');
+  const [youtubeLoading, setYoutubeLoading] = useState(false);
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
+
+  const [lastYoutubePick, setLastYoutubePick] = useState<{ title: string; channelTitle: string } | null>(
+    null,
+  );
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [recentPlays, setRecentPlays] = useState<RecentYoutubePlay[]>([]);
+
+  useEffect(() => {
+    void (async () => {
+      const [searches, plays] = await Promise.all([loadRecentSearches(), loadRecentPlays()]);
+      setRecentSearches(searches);
+      setRecentPlays(plays);
+    })();
+  }, []);
+
+  const refreshHistory = useCallback(async () => {
+    const [searches, plays] = await Promise.all([loadRecentSearches(), loadRecentPlays()]);
+    setRecentSearches(searches);
+    setRecentPlays(plays);
+  }, []);
 
   // Filter Logic
   const filteredTracks = useMemo(() => {
     if (!searchQuery) return tracksCatalog;
     const lowerQuery = searchQuery.toLowerCase();
-    return tracksCatalog.filter(t =>
-      t.title.toLowerCase().includes(lowerQuery) ||
-      t.artist.toLowerCase().includes(lowerQuery)
+    return tracksCatalog.filter(
+      (t) =>
+        t.title.toLowerCase().includes(lowerQuery) || t.artist.toLowerCase().includes(lowerQuery),
     );
   }, [searchQuery, tracksCatalog]);
 
   const filteredPlaylists = useMemo(() => {
     if (!searchQuery) return playlists;
     const lowerQuery = searchQuery.toLowerCase();
-    return playlists.filter(p =>
-      p.title.toLowerCase().includes(lowerQuery) ||
-      p.description.toLowerCase().includes(lowerQuery)
+    return playlists.filter(
+      (p) =>
+        p.title.toLowerCase().includes(lowerQuery) || p.description.toLowerCase().includes(lowerQuery),
     );
   }, [searchQuery, playlists]);
 
-  // Handlers
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setYoutubeTracks([]);
+      setYoutubeMeta(null);
+      setYoutubePhase('idle');
+      setYoutubeLoading(false);
+      setYoutubeError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        setYoutubeLoading(true);
+        setYoutubeError(null);
+        setYoutubeTracks([]);
+        setYoutubeMeta(null);
+        setYoutubePhase('search');
+        try {
+          const results = await searchYoutubeTracks(query, {
+            ...DEFAULT_YOUTUBE_SEARCH_OPTIONS,
+            onPhase: (phase) => {
+              if (!cancelled) {
+                setYoutubePhase(phase);
+              }
+            },
+          });
+          if (!cancelled) {
+            setYoutubeTracks(results.tracks);
+            setYoutubeMeta(results.meta);
+            setYoutubePhase('done');
+            void addRecentSearch(query);
+            void refreshHistory();
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setYoutubeTracks([]);
+            setYoutubeMeta(null);
+            setYoutubePhase('done');
+            setYoutubeError(e instanceof Error ? e.message : 'Search failed.');
+          }
+        } finally {
+          if (!cancelled) {
+            setYoutubeLoading(false);
+          }
+        }
+      })();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, refreshHistory]);
+
+  const mergedSearchTracks = useMemo(() => {
+    if (!searchQuery) return filteredTracks;
+    const merged = [...youtubeTracks, ...filteredTracks];
+    const uniqueById = new Map<string, Track>();
+    for (const track of merged) {
+      if (!uniqueById.has(track.id)) {
+        uniqueById.set(track.id, track);
+      }
+    }
+    return Array.from(uniqueById.values());
+  }, [filteredTracks, searchQuery, youtubeTracks]);
+
+  const handleYoutubeSearchHelp = () => {
+    Alert.alert(YOUTUBE_SEARCH_HELP_TITLE, YOUTUBE_SEARCH_HELP_MESSAGE);
+  };
+
   const handleLikedSongsPress = () => {
     const likedPlaylist: Playlist = {
       id: 'liked-songs',
@@ -70,16 +202,44 @@ export const UnifiedMusicDashboard = ({
     onPlaylistPress(likedPlaylist);
   };
 
+  const handleTrackPress = (track: Track, queue: Track[]) => {
+    if (track.source === 'youtube-audio') {
+      setLastYoutubePick({ title: track.title, channelTitle: track.artist });
+    }
+    onTrackPress(track, queue);
+  };
+
+  const searchLikeThis = () => {
+    if (!lastYoutubePick) return;
+    const q = `${lastYoutubePick.channelTitle} ${lastYoutubePick.title} official audio`.trim();
+    setSearchQuery(q);
+  };
+
+  const statusLabel =
+    youtubeLoading && youtubePhase === 'search'
+      ? 'Searching…'
+      : youtubeLoading && youtubePhase === 'details'
+        ? 'Checking availability…'
+        : null;
+
+  const emptyYoutubeReason: 'none' | 'no_results' | 'all_filtered' | 'error' = youtubeError
+    ? 'error'
+    : youtubeMeta &&
+        youtubeMeta.searchResultCount > 0 &&
+        youtubeMeta.afterDetailFilterCount === 0 &&
+        youtubeTracks.length === 0
+      ? 'all_filtered'
+      : youtubeMeta && youtubeMeta.searchResultCount === 0 && !youtubeLoading
+        ? 'no_results'
+        : 'none';
+
   return (
     <>
       <View style={styles.container}>
         <View style={styles.searchSection}>
           <View style={styles.searchBarWrapper}>
             {searchQuery ? (
-              <TouchableOpacity
-                onPress={() => setSearchQuery('')}
-                style={styles.backButton}
-              >
+              <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.backButton}>
                 <Ionicons name="arrow-back" size={24} color={colors.textMuted} />
               </TouchableOpacity>
             ) : null}
@@ -102,6 +262,40 @@ export const UnifiedMusicDashboard = ({
         </View>
 
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          {!searchQuery && recentSearches.length > 0 ? (
+            <View style={styles.historySection}>
+              <AppText style={styles.historySectionTitle}>Recent searches</AppText>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                {recentSearches.map((q) => (
+                  <TouchableOpacity key={q} style={styles.chip} onPress={() => setSearchQuery(q)}>
+                    <AppText style={styles.chipText} numberOfLines={1}>
+                      {q}
+                    </AppText>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          {!searchQuery && recentPlays.length > 0 ? (
+            <View style={styles.historySection}>
+              <AppText style={styles.historySectionTitle}>Recent plays</AppText>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                {recentPlays.map((p) => (
+                  <TouchableOpacity
+                    key={p.videoId}
+                    style={styles.chip}
+                    onPress={() => setSearchQuery(`${p.artist} ${p.title}`.trim())}
+                  >
+                    <Ionicons name="play-circle-outline" size={16} color={colors.textMuted} style={styles.chipIcon} />
+                    <AppText style={styles.chipText} numberOfLines={1}>
+                      {p.title}
+                    </AppText>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
 
           {/* Quick Actions (Only visible when not searching) */}
           {!searchQuery && (
@@ -111,8 +305,12 @@ export const UnifiedMusicDashboard = ({
                   <Ionicons name="heart" size={20} color={colors.background} />
                 </View>
                 <View style={styles.textContainer}>
-                  <AppText style={styles.quickActionTitle} numberOfLines={1}>Liked</AppText>
-                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>{likedTrackIds.size} songs</AppText>
+                  <AppText style={styles.quickActionTitle} numberOfLines={1}>
+                    Liked
+                  </AppText>
+                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>
+                    {likedTrackIds.size} songs
+                  </AppText>
                 </View>
               </TouchableOpacity>
 
@@ -121,8 +319,12 @@ export const UnifiedMusicDashboard = ({
                   <Ionicons name="download" size={20} color={colors.textPrimary} />
                 </View>
                 <View style={styles.textContainer}>
-                  <AppText style={styles.quickActionTitle} numberOfLines={1}>Offline</AppText>
-                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>{offlineCount} songs</AppText>
+                  <AppText style={styles.quickActionTitle} numberOfLines={1}>
+                    Offline
+                  </AppText>
+                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>
+                    {offlineCount} songs
+                  </AppText>
                 </View>
               </TouchableOpacity>
 
@@ -131,20 +333,32 @@ export const UnifiedMusicDashboard = ({
                   <Ionicons name="add" size={24} color={colors.textPrimary} />
                 </View>
                 <View style={styles.textContainer}>
-                  <AppText style={styles.quickActionTitle} numberOfLines={1}>Playlist</AppText>
-                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>New</AppText>
+                  <AppText style={styles.quickActionTitle} numberOfLines={1}>
+                    Playlist
+                  </AppText>
+                  <AppText style={styles.quickActionSubtitle} numberOfLines={1}>
+                    New
+                  </AppText>
                 </View>
               </TouchableOpacity>
             </View>
           )}
 
-          {/* Search Results State */}
           {searchQuery ? (
             <>
+              {lastYoutubePick ? (
+                <View style={styles.searchLikeBanner}>
+                  <TouchableOpacity style={styles.searchLikeRow} onPress={searchLikeThis}>
+                    <Ionicons name="sparkles-outline" size={18} color={colors.accentPrimary} />
+                    <AppText style={styles.searchLikeText}>Search like this</AppText>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
               {filteredPlaylists.length > 0 && (
                 <View style={styles.section}>
                   <AppText style={styles.sectionTitle}>Matching Playlists</AppText>
-                  {filteredPlaylists.map(playlist => (
+                  {filteredPlaylists.map((playlist) => (
                     <TouchableOpacity
                       key={playlist.id}
                       style={styles.searchResultRow}
@@ -160,98 +374,137 @@ export const UnifiedMusicDashboard = ({
                 </View>
               )}
 
-              {filteredTracks.length > 0 && (
+              {youtubeLoading && mergedSearchTracks.length === 0 && (
+                <>
+                  <View style={styles.statusRow}>
+                    {statusLabel ? <AppText style={styles.statusText}>{statusLabel}</AppText> : null}
+                    <ActivityIndicator size="small" color={colors.accentPrimary} />
+                  </View>
+                  <View style={styles.section}>
+                    {[0, 1, 2, 3].map((i) => (
+                      <TrackRowSkeleton key={i} />
+                    ))}
+                  </View>
+                </>
+              )}
+
+              {youtubeLoading && mergedSearchTracks.length > 0 && (
+                <View style={styles.statusRow}>
+                  {statusLabel ? <AppText style={styles.statusText}>{statusLabel}</AppText> : null}
+                  <ActivityIndicator size="small" color={colors.accentPrimary} />
+                </View>
+              )}
+
+              {mergedSearchTracks.length > 0 && (
                 <View style={styles.section}>
-                  <AppText style={styles.sectionTitle}>Matching Songs</AppText>
-                  {filteredTracks.map(track => (
+                  <View style={styles.sectionTitleRow}>
+                    <AppText style={styles.sectionTitleWithAction}>Matching Songs</AppText>
+                    {searchQuery.trim().length > 0 ? (
+                      <TouchableOpacity
+                        onPress={handleYoutubeSearchHelp}
+                        accessibilityLabel="How YouTube search works"
+                        accessibilityRole="button"
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons name="information-circle-outline" size={22} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                  {mergedSearchTracks.map((track) => (
                     <TrackRow
                       key={track.id}
                       track={track}
-                      onPress={() => onTrackPress(track, filteredTracks)}
+                      onPress={() => handleTrackPress(track, mergedSearchTracks)}
                       isPlaying={currentTrackId === track.id}
                     />
                   ))}
                 </View>
               )}
 
-              {filteredTracks.length === 0 && filteredPlaylists.length === 0 && (
-                <View style={styles.emptyState}>
-                  <AppText style={styles.emptyText}>No matches found.</AppText>
-                </View>
-              )}
+              {!youtubeLoading &&
+                mergedSearchTracks.length === 0 &&
+                filteredPlaylists.length === 0 && (
+                  <View style={styles.emptyState}>
+                    {emptyYoutubeReason === 'error' ? (
+                      <AppText style={styles.emptyText}>{youtubeError}</AppText>
+                    ) : emptyYoutubeReason === 'all_filtered' ? (
+                      <AppText style={styles.emptyText}>
+                        No videos available in your region for these results (or they were filtered out).
+                      </AppText>
+                    ) : emptyYoutubeReason === 'no_results' ? (
+                      <AppText style={styles.emptyText}>No results for this search.</AppText>
+                    ) : (
+                      <AppText style={styles.emptyText}>No matches found.</AppText>
+                    )}
+                  </View>
+                )}
             </>
           ) : (
-            /* Browse State */
             <>
-              {/* Your Playlists (Horizontal) */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <AppText style={styles.sectionTitle}>Your Playlists</AppText>
                 </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-                  {playlists.map(playlist => (
-                    <PlaylistCard
-                      key={playlist.id}
-                      playlist={playlist}
-                      onPress={onPlaylistPress}
-                    />
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.horizontalScroll}
+                >
+                  {playlists.map((playlist) => (
+                    <PlaylistCard key={playlist.id} playlist={playlist} onPress={onPlaylistPress} />
                   ))}
-                  {playlists.length === 0 && (
-                    <AppText style={styles.emptyText}>No playlists yet.</AppText>
-                  )}
+                  {playlists.length === 0 && <AppText style={styles.emptyText}>No playlists yet.</AppText>}
                 </ScrollView>
               </View>
 
-              {/* Discovery Section - Trending vs New Releases */}
               <View style={styles.section}>
                 <View style={styles.toggleContainer}>
                   <TouchableOpacity
                     style={[styles.toggleButton, discoveryView === 'trending' && styles.toggleButtonActive]}
                     onPress={() => setDiscoveryView('trending')}
                   >
-                    <AppText style={[styles.toggleText, discoveryView === 'trending' && styles.toggleTextActive]}>Trending</AppText>
+                    <AppText
+                      style={[styles.toggleText, discoveryView === 'trending' && styles.toggleTextActive]}
+                    >
+                      Trending
+                    </AppText>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.toggleButton, discoveryView === 'new' && styles.toggleButtonActive]}
                     onPress={() => setDiscoveryView('new')}
                   >
-                    <AppText style={[styles.toggleText, discoveryView === 'new' && styles.toggleTextActive]}>New Releases</AppText>
+                    <AppText style={[styles.toggleText, discoveryView === 'new' && styles.toggleTextActive]}>
+                      New Releases
+                    </AppText>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.toggleButton}
-                    onPress={onCategoriesPress}
-                  >
+                  <TouchableOpacity style={styles.toggleButton} onPress={onCategoriesPress}>
                     <AppText style={styles.toggleText}>Categories</AppText>
                   </TouchableOpacity>
                 </View>
 
-                {(discoveryView === 'trending' ? tracksCatalog.slice(0, 5) : [...tracksCatalog].reverse().slice(0, 5)).map(track => (
-                  <TrackRow
-                    key={track.id}
-                    track={track}
-                    onPress={() => onTrackPress(track, tracksCatalog)}
-                    isPlaying={currentTrackId === track.id}
-                  />
-                ))}
+                {(discoveryView === 'trending' ? tracksCatalog.slice(0, 5) : [...tracksCatalog].reverse().slice(0, 5)).map(
+                  (track) => (
+                    <TrackRow
+                      key={track.id}
+                      track={track}
+                      onPress={() => handleTrackPress(track, tracksCatalog)}
+                      isPlaying={currentTrackId === track.id}
+                    />
+                  ),
+                )}
               </View>
-
             </>
           )}
-
         </ScrollView>
       </View>
 
-      <CreatePlaylistModal
-        visible={isCreateModalVisible}
-        onClose={() => setCreateModalVisible(false)}
-      />
+      <CreatePlaylistModal visible={isCreateModalVisible} onClose={() => setCreateModalVisible(false)} />
 
       <UploadTrackModal
         visible={isUploadModalVisible}
         onClose={() => setUploadModalVisible(false)}
         onUploadSuccess={() => {
           setUploadModalVisible(false);
-          // Optional: we could refresh the catalog here if we had a trigger
         }}
       />
     </>
@@ -325,6 +578,46 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: '100%',
   },
+  historySection: {
+    marginBottom: 12,
+    paddingHorizontal: 16,
+  },
+  historySectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginBottom: 8,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 4,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    maxWidth: 220,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  chipActive: {
+    borderColor: colors.accentPrimary,
+  },
+  chipIcon: {
+    marginRight: 6,
+  },
+  chipText: {
+    fontSize: 13,
+    color: colors.textPrimary,
+  },
+  chipTextActive: {
+    color: colors.accentPrimary,
+    fontWeight: '600',
+  },
   quickActionsContainer: {
     flexDirection: 'row',
     paddingHorizontal: 16,
@@ -367,8 +660,76 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
   },
+  searchLikeBanner: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  searchLikeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  searchLikeText: {
+    fontSize: 14,
+    color: colors.accentPrimary,
+    fontWeight: '600',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  statusText: {
+    fontSize: 14,
+    color: colors.textMuted,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  skeletonArt: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceAlt,
+  },
+  skeletonTextCol: {
+    flex: 1,
+    marginLeft: 12,
+    gap: 8,
+  },
+  skeletonLineLg: {
+    height: 14,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceAlt,
+    width: '70%',
+  },
+  skeletonLineSm: {
+    height: 12,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceAlt,
+    width: '45%',
+  },
   section: {
     marginBottom: 32,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  sectionTitleWithAction: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -381,12 +742,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: colors.textPrimary,
-    paddingHorizontal: 16, // For titles that don't use header row
+    paddingHorizontal: 16,
     marginBottom: 12,
-  },
-  seeAll: {
-    fontSize: 14,
-    color: colors.accentPrimary,
   },
   horizontalScroll: {
     paddingHorizontal: 16,
@@ -457,5 +814,6 @@ const styles = StyleSheet.create({
   emptyText: {
     color: colors.textMuted,
     fontStyle: 'italic',
+    textAlign: 'center',
   },
 });

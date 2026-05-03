@@ -21,6 +21,7 @@ import { ProfileViewData, ProfileViewsModalProps } from '../types';
 import { hapticTap } from '../../../utils/haptics';
 import { useProfile } from '../../../context/ProfileContext';
 import { formatTimeAgo } from '../../../utils/timeUtils';
+import { blurActiveWebElement } from '../../../utils/webRuntimeCompat';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_HEIGHT * 0.85;
@@ -30,7 +31,7 @@ export function ProfileViewsModal({
   onClose, 
   totalViews,
   profileViewData,
-  isPremiumUser = true,
+  isPremiumUser = false,
   onUpgradePress,
 }: ProfileViewsModalProps) {
   const insets = useSafeAreaInsets();
@@ -80,6 +81,7 @@ export function ProfileViewsModal({
   }, [visible]);
 
   const handleClose = () => {
+    blurActiveWebElement();
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: SHEET_HEIGHT,

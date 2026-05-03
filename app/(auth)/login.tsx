@@ -1,5 +1,5 @@
-import { SpacetimeAuthScreen } from '../../src/features/auth/SpacetimeAuthScreen';
+import { ClerkAuthScreen } from '../../src/features/auth/ClerkAuthScreen';
 
 export default function LoginScreen() {
-  return <SpacetimeAuthScreen mode="login" />;
+  return <ClerkAuthScreen mode="login" />;
 }

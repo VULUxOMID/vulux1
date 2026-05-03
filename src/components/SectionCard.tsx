@@ -61,14 +61,19 @@ export function SectionCard({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.surface,
+    backgroundColor: 'rgba(17, 17, 19, 0.9)',
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
     padding: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
   },
   containerAlt: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(24, 24, 28, 0.94)',
   },
   header: {
     flexDirection: 'row',

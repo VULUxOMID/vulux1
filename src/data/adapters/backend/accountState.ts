@@ -1,8 +1,15 @@
 import type { BackendHttpClient } from './httpClient';
-import { getSpacetimeTelemetrySnapshot, spacetimeDb } from '../../../lib/spacetime';
+import { getConfiguredBackendBaseUrl } from '../../../config/backendBaseUrl';
 
 type BackendGetToken = (options?: { template?: string }) => Promise<string | null>;
 type UnknownRecord = Record<string, unknown>;
+const ACCOUNT_STATE_ENDPOINT = '/api/account/state';
+type UpsertAccountStateOptions = Record<string, never>;
+
+function isQaAccountStateDisabled(): boolean {
+  const raw = process.env.EXPO_PUBLIC_QA_DISABLE_ACCOUNT_STATE?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
 
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === 'object' ? (value as UnknownRecord) : {};
@@ -10,46 +17,6 @@ function asRecord(value: unknown): UnknownRecord {
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-function parseJsonRecord(value: unknown): UnknownRecord {
-  if (typeof value !== 'string') {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(value);
-    return asRecord(parsed);
-  } catch {
-    return {};
-  }
-}
-
-function parseStateFromSpacetime(userId: string | null | undefined): UnknownRecord | null {
-  const normalizedUserId = asString(userId);
-  if (!normalizedUserId) return null;
-
-  const dbView = spacetimeDb.db as any;
-  const rows: any[] = Array.from(dbView?.myAccountState?.iter?.() ?? dbView?.my_account_state?.iter?.() ?? []);
-  const matchingRow =
-    rows.find((row) => {
-      const rowUserId = asString(row?.userId ?? row?.user_id);
-      return !rowUserId || rowUserId === normalizedUserId;
-    }) ?? rows[0];
-
-  if (!matchingRow) {
-    return null;
-  }
-
-  const rawState = matchingRow?.state ?? matchingRow?.item;
-  const parsedState = parseJsonRecord(rawState);
-  return Object.keys(parsedState).length > 0 ? parsedState : {};
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function describeError(error: unknown): string {
@@ -66,81 +33,121 @@ function describeError(error: unknown): string {
   }
 }
 
-async function writeStateToSpacetime(
-  userId: string,
+async function readStateFromBackend(
+  getToken: BackendGetToken,
+  _userId: string | null,
+): Promise<UnknownRecord | null> {
+  if (isQaAccountStateDisabled()) {
+    return null;
+  }
+  const baseUrl = getConfiguredBackendBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  const token = await getToken();
+  if (!token) {
+    return null;
+  }
+
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}${ACCOUNT_STATE_ENDPOINT}`);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Account state backend read failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as UnknownRecord | null;
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  const nestedState =
+    payload.state && typeof payload.state === 'object'
+      ? (payload.state as UnknownRecord)
+      : null;
+
+  return nestedState ?? payload;
+}
+
+async function writeStateToBackend(
+  getToken: BackendGetToken,
+  _userId: string,
   updates: UnknownRecord,
 ): Promise<boolean> {
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const reducers = spacetimeDb.reducers as any;
-      const id = `account-state-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      if (typeof reducers?.upsertAccountState === 'function') {
-        await reducers.upsertAccountState({
-          userId,
-          updates: JSON.stringify(updates),
-        });
-      } else if (typeof reducers?.sendGlobalMessage === 'function') {
-        await reducers.sendGlobalMessage({
-          id,
-          roomId: `account:${userId}`,
-          item: JSON.stringify({
-            eventType: 'account_state_upsert',
-            userId,
-            updates,
-            createdAt: Date.now(),
-          }),
-        });
-      } else {
-        throw new Error('SpacetimeDB reducers unavailable for account state writes.');
-      }
-
-      return true;
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) {
-        await delay(300 * (attempt + 1));
-      }
-    }
+  if (isQaAccountStateDisabled()) {
+    return true;
+  }
+  const baseUrl = getConfiguredBackendBaseUrl();
+  if (!baseUrl) {
+    return false;
   }
 
-  if (__DEV__) {
-    const telemetry = getSpacetimeTelemetrySnapshot();
-    console.warn(
-      '[data/account-state] Failed to write account state to SpacetimeDB',
-      {
-        error: describeError(lastError),
-        connectionState: telemetry.connectionState,
-        subscriptionState: telemetry.subscriptionState,
-      },
-    );
+  const token = await getToken();
+  if (!token) {
+    return false;
   }
 
-  return false;
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${ACCOUNT_STATE_ENDPOINT}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      updates,
+    }),
+  });
+
+  return response.ok;
 }
 
 export async function fetchAccountState(
   _client: BackendHttpClient | null,
-  _getToken: BackendGetToken,
+  getToken: BackendGetToken,
   userId?: string | null,
 ): Promise<UnknownRecord | null> {
-  return parseStateFromSpacetime(userId ?? null);
+  try {
+    return await readStateFromBackend(getToken, userId ?? null);
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[data/account-state] Authoritative backend account-state read failed', {
+        error: describeError(error),
+      });
+    }
+    return null;
+  }
 }
 
 export async function upsertAccountState(
   _client: BackendHttpClient | null,
-  _getToken: BackendGetToken,
+  getToken: BackendGetToken,
   updates: UnknownRecord,
   userId?: string | null,
+  options?: UpsertAccountStateOptions,
 ): Promise<boolean> {
   if (Object.keys(updates).length === 0) return true;
 
   const normalizedUserId = asString(userId);
   if (normalizedUserId) {
-    const wroteToSpacetime = await writeStateToSpacetime(normalizedUserId, updates);
-    if (wroteToSpacetime) {
-      return true;
+    try {
+      const wroteToBackend = await writeStateToBackend(getToken, normalizedUserId, updates);
+      if (wroteToBackend) {
+        return true;
+      }
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[data/account-state] Authoritative backend account-state write failed', {
+          error: describeError(error),
+        });
+      }
     }
   }
 

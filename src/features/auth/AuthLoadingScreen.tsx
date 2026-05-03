@@ -11,7 +11,7 @@ type AuthLoadingScreenProps = {
 };
 
 export function AuthLoadingScreen({
-  title = 'Restoring your session',
+  title = 'Opening Vulu',
   detail,
   actionLabel,
   onAction,
@@ -24,7 +24,7 @@ export function AuthLoadingScreen({
           {title}
         </AppText>
         <AppText secondary style={styles.detail}>
-          {detail ?? 'Vulu is reconnecting to Clerk and SpacetimeDB.'}
+          {detail ?? 'Checking your session.'}
         </AppText>
         {actionLabel && onAction ? (
           <AppButton

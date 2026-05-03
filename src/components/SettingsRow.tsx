@@ -95,12 +95,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    backgroundColor: colors.surface,
-    marginBottom: 1, // separator effect if stacked
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: radius.lgMinus,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: spacing.sm,
     minHeight: 56,
   },
   pressed: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
   label: {
     fontSize: 16,
@@ -108,10 +111,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   destructiveContainer: {
-    backgroundColor: 'rgba(255, 94, 94, 0.08)',
+    backgroundColor: 'rgba(255, 68, 88, 0.1)',
+    borderColor: 'rgba(255, 68, 88, 0.16)',
   },
   destructivePressed: {
-    backgroundColor: 'rgba(255, 94, 94, 0.16)',
+    backgroundColor: 'rgba(255, 68, 88, 0.16)',
   },
   destructiveLabel: {
     color: colors.accentDanger,

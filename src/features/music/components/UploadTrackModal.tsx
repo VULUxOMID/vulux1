@@ -6,10 +6,10 @@ import { colors } from '../../../theme';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../../auth/clerkSession';
 import { toast } from '../../../components/Toast';
 import { uploadMediaAsset } from '../../../utils/mediaUpload';
-import { publishMusicTrackCatalogItem } from '../../../utils/spacetimePersistence';
+import { publishMusicTrackCatalogItem } from '../../../utils/railwayPersistence';
 
 interface UploadTrackModalProps {
   visible: boolean;

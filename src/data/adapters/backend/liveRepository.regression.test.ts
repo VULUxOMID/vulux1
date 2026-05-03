@@ -1,8 +1,11 @@
-import test from 'node:test';
+import test, { afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { ListLivesResponse } from '../../contracts';
-import { createBackendLiveRepository } from './liveRepository';
+import {
+  createBackendLiveRepository,
+  resetLiveDiscoveryVisibilityStateForTests,
+} from './liveRepository';
 import { EMPTY_BACKEND_SNAPSHOT, type BackendSnapshot } from './snapshot';
 
 function makeIterTable<T>(rows: T[]) {
@@ -21,6 +24,18 @@ function createSnapshot(lives: ListLivesResponse): BackendSnapshot {
 function createRepo(snapshot: BackendSnapshot, runtime: unknown) {
   return (createBackendLiveRepository as any)(snapshot, runtime);
 }
+
+const originalDateNow = Date.now;
+
+beforeEach(() => {
+  resetLiveDiscoveryVisibilityStateForTests();
+  Date.now = originalDateNow;
+});
+
+afterEach(() => {
+  resetLiveDiscoveryVisibilityStateForTests();
+  Date.now = originalDateNow;
+});
 
 test('discovery rows present -> Home uses discovery list', () => {
   const snapshot = createSnapshot([
@@ -92,8 +107,10 @@ test('discovery requested/active + empty -> stale snapshot ghosts do not reappea
   assert.deepEqual(lives, []);
 });
 
-test('discovery rows without fresh hosting presence are filtered as ghosts', () => {
+test('new discovery rows stay visible briefly before ghost filtering resumes', () => {
   const snapshot = createSnapshot([]);
+  const startedAtMs = 1_700_000_000_000;
+  Date.now = () => startedAtMs;
 
   const repo = createRepo(snapshot, {
     dbView: {
@@ -114,7 +131,90 @@ test('discovery rows without fresh hosting presence are filtered as ghosts', () 
   });
 
   const lives = repo.listLives({ limit: 100 });
+  assert.deepEqual(
+    lives.map((live: any) => live.id),
+    ['ghost-live'],
+  );
+
+  Date.now = () => startedAtMs + 60_000;
+  const livesAfterGraceWindow = repo.listLives({ limit: 100 });
+  assert.deepEqual(livesAfterGraceWindow, []);
+});
+
+test('home can opt out of unconfirmed discovery rows during startup', () => {
+  const snapshot = createSnapshot([]);
+  Date.now = () => 1_700_000_000_000;
+
+  const repo = createRepo(snapshot, {
+    dbView: {
+      publicLiveDiscovery: makeIterTable([
+        {
+          liveId: 'ghost-live',
+          hostUserId: 'ghost-host',
+          hostUsername: 'ghost',
+          hostAvatarUrl: 'https://example.com/ghost.png',
+          title: 'Ghost Live',
+          viewerCount: 1,
+        },
+      ]),
+      publicLivePresenceItem: makeIterTable([]),
+    },
+    isViewRequested: () => true,
+    isViewActive: () => true,
+  });
+
+  const lives = repo.listLives({ limit: 100, allowUnconfirmedDiscovery: false });
   assert.deepEqual(lives, []);
+});
+
+test('discovery rows with fresh hosting presence stay visible after the grace window', () => {
+  const snapshot = createSnapshot([]);
+  const startedAtMs = 1_700_000_000_000;
+  Date.now = () => startedAtMs;
+  const discoveryRows = [
+    {
+      liveId: 'active-live',
+      hostUserId: 'host-1',
+      hostUsername: 'host_one',
+      hostAvatarUrl: 'https://example.com/host.png',
+      title: 'Active Live',
+      viewerCount: 2,
+    },
+  ];
+  const presenceRows: Array<{
+    userId: string;
+    liveId: string;
+    activity: string;
+    updatedAt: number;
+  }> = [];
+
+  const repo = createRepo(snapshot, {
+    dbView: {
+      publicLiveDiscovery: makeIterTable(discoveryRows),
+      publicLivePresenceItem: makeIterTable(presenceRows),
+    },
+    isViewRequested: () => true,
+    isViewActive: () => true,
+  });
+
+  assert.deepEqual(
+    repo.listLives({ limit: 100 }).map((live: any) => live.id),
+    ['active-live'],
+  );
+
+  presenceRows.push({
+    userId: 'host-1',
+    liveId: 'active-live',
+    activity: 'hosting',
+    updatedAt: startedAtMs + 55_000,
+  });
+
+  Date.now = () => startedAtMs + 60_000;
+  const lives = repo.listLives({ limit: 100 });
+  assert.deepEqual(
+    lives.map((live: any) => live.id),
+    ['active-live'],
+  );
 });
 
 test('fallback remains available before discovery is requested/active', () => {
@@ -175,13 +275,13 @@ test('invite-only filtering behavior is unchanged', () => {
 
   const defaultLives = repo.listLives({ limit: 100 });
   assert.deepEqual(
-    defaultLives.map((live) => live.id),
+    defaultLives.map((live: any) => live.id),
     ['public-live'],
   );
 
   const withInviteOnly = repo.listLives({ limit: 100, includeInviteOnly: true });
   assert.deepEqual(
-    withInviteOnly.map((live) => live.id).sort(),
+    withInviteOnly.map((live: any) => live.id).sort(),
     ['invite-only-live', 'public-live'],
   );
 });

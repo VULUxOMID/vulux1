@@ -2,36 +2,43 @@ import React, { memo } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { AppText } from '../../../components';
-import { colors, spacing } from '../../../theme';
+import { AppButton, AppText } from '../../../components';
+import { colors, radius, spacing } from '../../../theme';
 
 type LeaderboardEmptyStateProps = {
-  iconName?: keyof typeof Ionicons.glyphMap;
-  title?: string;
-  message?: string;
+  title: string;
+  message: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  actionLabel?: string;
+  onAction?: () => void;
   loading?: boolean;
 };
 
 function LeaderboardEmptyStateComponent({
-  iconName = 'search-outline',
-  title = 'No users found',
+  title,
   message,
+  icon = 'search-outline',
+  actionLabel,
+  onAction,
   loading = false,
 }: LeaderboardEmptyStateProps) {
   return (
     <View style={styles.container}>
-      {loading ? (
-        <ActivityIndicator size="large" color={colors.accentPrimary} />
-      ) : (
-        <Ionicons name={iconName} size={48} color={colors.textMuted} />
-      )}
-      <AppText variant="bodyBold" style={styles.title}>
-        {title}
-      </AppText>
-      {message ? (
-        <AppText variant="small" secondary style={styles.message}>
+      <View style={styles.iconWrap}>
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.accentPrimary} />
+        ) : (
+          <Ionicons name={icon} size={22} color={colors.textMuted} />
+        )}
+      </View>
+      <View style={styles.copy}>
+        <AppText variant="bodyBold">{title}</AppText>
+        <AppText variant="small" secondary style={styles.text}>
           {message}
         </AppText>
+      </View>
+      {actionLabel && onAction ? (
+        <AppButton title={actionLabel} size="small" variant="secondary" onPress={onAction} />
       ) : null}
     </View>
   );
@@ -43,15 +50,28 @@ const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: spacing.xxl,
-    paddingHorizontal: spacing.xl,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.xl,
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    gap: spacing.md,
   },
-  title: {
-    marginTop: spacing.sm,
-    textAlign: 'center',
+  iconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
   },
-  message: {
-    marginTop: spacing.sm,
+  copy: {
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  text: {
     textAlign: 'center',
   },
 });
