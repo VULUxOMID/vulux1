@@ -23,6 +23,11 @@ import {
 } from '../lib/railwayRuntime';
 
 const DataContext = createContext<Repositories | undefined>(undefined);
+const EMPTY_UNAUTHENTICATED_REPOSITORIES = createBackendRepositories(
+  EMPTY_BACKEND_SNAPSHOT,
+  null,
+  null,
+);
 
 function readPositiveMsEnv(name: string, fallbackMs: number): number {
   const raw = process.env[name]?.trim();
@@ -54,8 +59,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     emailVerified,
   } = useSessionAuth();
   const { user: sessionUser, isLoaded: isUserLoaded } = useSessionUser();
-  const [repositories, setRepositories] = useState<Repositories>(() =>
-    createBackendRepositories(EMPTY_BACKEND_SNAPSHOT, null, userId ?? null),
+  const [repositories, setRepositories] = useState<Repositories>(
+    EMPTY_UNAUTHENTICATED_REPOSITORIES,
   );
   const backendClientRef = useRef(createBackendHttpClientFromEnv());
   const backendSnapshotRef = useRef(EMPTY_BACKEND_SNAPSHOT);
@@ -69,9 +74,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const applyRepositories = useCallback(
     (snapshot = backendSnapshotRef.current) => {
-      setRepositories(
-        createBackendRepositories(snapshot, backendClientRef.current, userId ?? null),
-      );
+      const nextUserId = userId ?? null;
+      if (!nextUserId && snapshot === EMPTY_BACKEND_SNAPSHOT) {
+        setRepositories((currentRepositories) =>
+          currentRepositories === EMPTY_UNAUTHENTICATED_REPOSITORIES
+            ? currentRepositories
+            : EMPTY_UNAUTHENTICATED_REPOSITORIES,
+        );
+        return;
+      }
+
+      setRepositories(createBackendRepositories(snapshot, backendClientRef.current, nextUserId));
     },
     [userId],
   );

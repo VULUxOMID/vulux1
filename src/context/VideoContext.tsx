@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useWallet } from './WalletContext';
 import { useAuth } from './AuthContext';
 import { useAppIsActive } from '../hooks/useAppIsActive';
@@ -89,20 +89,23 @@ interface VideoContextType {
 // --- Context ---
 
 const VideoContext = createContext<VideoContextType | undefined>(undefined);
+const EMPTY_VIDEOS: Video[] = [];
 
 export function VideoProvider({ children }: { children: React.ReactNode }) {
   const { user, initializing, roles } = useAuth();
+  const userId = user?.uid ?? null;
   const isAppActive = useAppIsActive();
   const videoRepo = useVideoRepo();
   const queriesEnabled =
-    !initializing && !!user?.uid && isAppActive;
+    !initializing && !!userId && isAppActive;
   const { balance, deductBalance } = useWallet();
   const repositoryVideos = useMemo(
-    () => (queriesEnabled ? videoRepo.listVideos({ limit: 250 }) : []),
+    () => (queriesEnabled ? videoRepo.listVideos({ limit: 250 }) : EMPTY_VIDEOS),
     [queriesEnabled, videoRepo],
   );
-  const [videos, setVideos] = useState<Video[]>([]);
+  const [videos, setVideos] = useState<Video[]>(EMPTY_VIDEOS);
   const [likedVideoIds, setLikedVideoIds] = useState<Set<string>>(new Set());
+  const previousUserIdRef = useRef<string | null>(userId);
 
   // Mini-player state
   const [activeVideo, setActiveVideo] = useState<Video | null>(null);
@@ -127,13 +130,20 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
 
   // Effects
   useEffect(() => {
-    if (!user?.uid) {
-      setVideos([]);
+    const previousUserId = previousUserIdRef.current;
+    previousUserIdRef.current = userId;
+    if (previousUserId && !userId) {
+      setVideos(EMPTY_VIDEOS);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
       return;
     }
     if (!isAppActive) return;
     setVideos(repositoryVideos as Video[]);
-  }, [isAppActive, repositoryVideos, user?.uid]);
+  }, [isAppActive, repositoryVideos, userId]);
 
   const unlockVideo = async (videoId: string): Promise<boolean> => {
     const video = videos.find(v => v.id === videoId);
