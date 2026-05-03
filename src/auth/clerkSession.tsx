@@ -132,7 +132,3 @@ export async function readCurrentAuthAccessToken(): Promise<string | null> {
 export function isEdgeBackendTransportSyncError(_message: string | null | undefined): boolean {
   return false;
 }
-
-export async function signInWithAppleSpike(): Promise<void> {
-  throw new Error('Apple sign-in must be wired through Clerk before this action can be used.');
-}

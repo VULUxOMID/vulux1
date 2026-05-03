@@ -1,3 +1,4 @@
+import { useSSO } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -29,7 +30,6 @@ import {
 } from 'react-native';
 
 import { useAuth as useSessionAuth, isEdgeBackendTransportSyncError } from '../../auth/clerkSession';
-import { signInWithAppleSpike } from '../../auth/clerkSession';
 import { AppScreen, AppText, AppTextInput } from '../../components';
 import { toast } from '../../components/Toast';
 import {
@@ -403,6 +403,7 @@ function OptionCard({ label, subtitle, selected, onPress }: OptionCardProps) {
 export function VuluOnboardingScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ preview?: string | string[] }>();
+  const { startSSOFlow } = useSSO();
   const { width, height } = useWindowDimensions();
   const {
     isLoaded: isAuthLoaded,
@@ -1780,7 +1781,19 @@ export function VuluOnboardingScreen() {
       if (hasOnboardingSession) {
         await signOut();
       }
-      await signInWithAppleSpike();
+      const { createdSessionId, setActive, authSessionResult } = await startSSOFlow({
+        strategy: 'oauth_apple',
+      });
+      if (!createdSessionId || !setActive) {
+        const message =
+          authSessionResult?.type === 'cancel' || authSessionResult?.type === 'dismiss'
+            ? 'Apple sign-in was canceled.'
+            : 'Apple sign-in did not return an active Clerk session.';
+        setErrorMessage(message);
+        toast.info(message);
+        return;
+      }
+      await setActive({ session: createdSessionId });
       handleContinue();
     } catch (error) {
       const message =
@@ -1913,6 +1926,15 @@ export function VuluOnboardingScreen() {
                     }}
                     variant="secondary"
                     icon="logo-apple"
+                    style={styles.welcomeAppleButton}
+                  />
+                  <PillButton
+                    title="Continue with email"
+                    onPress={() => {
+                      router.replace('/(auth)/login');
+                    }}
+                    variant="primary"
+                    icon="mail-outline"
                     style={styles.welcomeAppleButton}
                   />
                   {isAuthenticatingWithApple ? (
