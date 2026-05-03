@@ -1,8 +1,10 @@
 import { ClerkProvider, useAuth as useClerkAuth, useUser as useClerkUser } from '@clerk/clerk-expo';
 import { tokenCache } from '@clerk/clerk-expo/token-cache';
+import Constants from 'expo-constants';
 import { useEffect, type ReactNode } from 'react';
 
 import { setCurrentAuthAccessTokenHandler } from './currentAuthAccessToken';
+import { resolveClerkPublishableKey } from './clerkConfig';
 
 type TokenOptions = { template?: string };
 
@@ -42,8 +44,13 @@ function readRoles(sessionClaims: unknown): string[] {
 }
 
 export function ClerkSessionProvider({ children }: { children: ReactNode }) {
+  const publishableKey = resolveClerkPublishableKey({
+    env: process.env,
+    expoExtra: Constants.expoConfig?.extra ?? Constants.manifest2?.extra ?? null,
+  });
+
   return (
-    <ClerkProvider tokenCache={tokenCache}>
+    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
       <ClerkAccessTokenBridge>{children}</ClerkAccessTokenBridge>
     </ClerkProvider>
   );

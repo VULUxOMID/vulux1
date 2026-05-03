@@ -1,5 +1,5 @@
-import { Redirect } from 'expo-router';
+import { ClerkAuthScreen } from '../../src/features/auth/ClerkAuthScreen';
 
 export default function LoginScreen() {
-  return <Redirect href="/onboarding" />;
+  return <ClerkAuthScreen mode="login" />;
 }

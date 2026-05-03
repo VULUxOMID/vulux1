@@ -5,9 +5,9 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node --env-file=.env src/server.js",
-    "migrate": "node --env-file=.env scripts/migrate.mjs",
-    "smoke": "node --env-file=.env scripts/smoke.mjs",
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.mjs",
     "smoke:rtc": "node scripts/rtc-smoke.mjs"
   },
   "dependencies": {
