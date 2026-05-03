@@ -16,12 +16,15 @@ import { AppButton, AppText } from '../../components';
 import { toast } from '../../components/Toast';
 import { colors, radius, spacing } from '../../theme';
 import type { WithdrawalRequest } from '../../context';
+import { DEFAULT_MIN_WITHDRAWAL_GEMS } from './withdrawalEligibility';
 
 type WithdrawalMethod = 'PayPal' | 'Bank';
 
 type WithdrawalModalProps = {
   visible: boolean;
   gems: number;
+  canRequestWithdrawal: boolean;
+  disabledReason?: string | null;
   onClose: () => void;
   onSubmit: (
     amountGems: number,
@@ -31,12 +34,13 @@ type WithdrawalModalProps = {
   minWithdrawalGems?: number;
 };
 
-const DEFAULT_MIN_WITHDRAWAL_GEMS = 500;
 const STEP_COUNT = 2;
 
 export const WithdrawalModal = React.memo(function WithdrawalModal({
   visible,
   gems,
+  canRequestWithdrawal,
+  disabledReason,
   onClose,
   onSubmit,
   minWithdrawalGems = DEFAULT_MIN_WITHDRAWAL_GEMS,
@@ -95,6 +99,10 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
   );
 
   const handleContinue = useCallback(() => {
+    if (!canRequestWithdrawal) {
+      toast.info(disabledReason ?? 'Withdrawal is unavailable right now.');
+      return;
+    }
     if (!hasValidAmount) {
       toast.warning('Please enter a valid amount of gems.');
       return;
@@ -109,9 +117,13 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
     }
 
     setWithdrawStep(2);
-  }, [gems, hasValidAmount, minWithdrawalGems, parsedAmount]);
+  }, [canRequestWithdrawal, disabledReason, gems, hasValidAmount, minWithdrawalGems, parsedAmount]);
 
   const handleSubmit = useCallback(() => {
+    if (!canRequestWithdrawal) {
+      toast.info(disabledReason ?? 'Withdrawal is unavailable right now.');
+      return;
+    }
     if (!hasValidAmount) {
       toast.warning('Please enter a valid amount of gems.');
       return;
@@ -159,6 +171,8 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
     gems,
     handleClose,
     hasValidAmount,
+    canRequestWithdrawal,
+    disabledReason,
     onSubmit,
     parsedAmount,
     phoneNumber,
@@ -208,6 +222,18 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
         <ScrollView contentContainerStyle={styles.modalContent} showsVerticalScrollIndicator={false}>
           {withdrawStep === 1 ? (
             <View style={styles.stepContainer}>
+              {disabledReason ? (
+                <View style={styles.disabledNotice}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={spacing.lg}
+                    color={colors.accentWarning}
+                  />
+                  <AppText variant="tiny" style={styles.disabledNoticeText}>
+                    {disabledReason}
+                  </AppText>
+                </View>
+              ) : null}
               <AppText secondary style={styles.stepDescription}>
                 Enter the amount of gems you want to convert to real money.
               </AppText>
@@ -228,6 +254,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                     keyboardType="numeric"
                     value={withdrawAmount}
                     onChangeText={setWithdrawAmount}
+                    editable={canRequestWithdrawal}
                   />
                   <View style={styles.amountCurrency}>
                     <Ionicons name="prism" size={spacing.lg} color={colors.accentPremium} />
@@ -240,6 +267,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                     <Pressable
                       key={pct}
                       style={styles.pctPill}
+                      disabled={!canRequestWithdrawal}
                       onPress={() => handlePercentageSelect(pct)}
                     >
                       <AppText variant="tiny" style={styles.pctText}>
@@ -280,6 +308,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                       styles.methodCard,
                       withdrawMethod === 'PayPal' && styles.methodCardActive,
                     ]}
+                    disabled={!canRequestWithdrawal}
                     onPress={() => handleMethodSelect('PayPal')}
                   >
                     <View style={[styles.methodIcon, styles.methodIconPayPal]}>
@@ -300,6 +329,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                       styles.methodCard,
                       withdrawMethod === 'Bank' && styles.methodCardActive,
                     ]}
+                    disabled={!canRequestWithdrawal}
                     onPress={() => handleMethodSelect('Bank')}
                   >
                     <View style={[styles.methodIcon, styles.methodIconBank]}>
@@ -320,13 +350,30 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
               <AppButton
                 title="Continue"
                 variant="primary"
-                disabled={!hasValidAmount || parsedAmount < minWithdrawalGems || parsedAmount > gems}
+                disabled={
+                  !canRequestWithdrawal ||
+                  !hasValidAmount ||
+                  parsedAmount < minWithdrawalGems ||
+                  parsedAmount > gems
+                }
                 onPress={handleContinue}
                 style={styles.continueButton}
               />
             </View>
           ) : (
             <View style={styles.stepContainer}>
+              {disabledReason ? (
+                <View style={styles.disabledNotice}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={spacing.lg}
+                    color={colors.accentWarning}
+                  />
+                  <AppText variant="tiny" style={styles.disabledNoticeText}>
+                    {disabledReason}
+                  </AppText>
+                </View>
+              ) : null}
               <AppText secondary style={styles.stepDescription}>
                 Where should we send your {withdrawMethod} payment?
               </AppText>
@@ -339,6 +386,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                   placeholderTextColor={colors.inputPlaceholder}
                   value={fullName}
                   onChangeText={setFullName}
+                  editable={canRequestWithdrawal}
                 />
               </View>
 
@@ -354,6 +402,7 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                   autoCapitalize="none"
                   value={email}
                   onChangeText={setEmail}
+                  editable={canRequestWithdrawal}
                 />
               </View>
 
@@ -366,10 +415,15 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                   keyboardType="phone-pad"
                   value={phoneNumber}
                   onChangeText={setPhoneNumber}
+                  editable={canRequestWithdrawal}
                 />
               </View>
 
-              <Pressable style={styles.saveDetailsRow} onPress={toggleSaveDetails}>
+              <Pressable
+                style={styles.saveDetailsRow}
+                onPress={toggleSaveDetails}
+                disabled={!canRequestWithdrawal}
+              >
                 <View style={[styles.checkbox, saveDetails && styles.checkboxActive]}>
                   {saveDetails ? (
                     <Ionicons name="checkmark" size={spacing.md} color={colors.textPrimary} />
@@ -430,7 +484,13 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
                 <AppButton
                   title="Submit Request"
                   variant="primary"
-                  disabled={!fullName || !email || !phoneNumber || isSubmitting}
+                  disabled={
+                    !canRequestWithdrawal ||
+                    !fullName ||
+                    !email ||
+                    !phoneNumber ||
+                    isSubmitting
+                  }
                   loading={isSubmitting}
                   onPress={handleSubmit}
                   style={styles.submitButton}
@@ -479,6 +539,22 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     padding: spacing.lg,
+  },
+  disabledNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: `${colors.accentWarning}40`,
+    backgroundColor: `${colors.accentWarning}14`,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  disabledNoticeText: {
+    flex: 1,
+    color: colors.textPrimary,
+    lineHeight: 18,
   },
   stepContainer: {
     gap: spacing.md,

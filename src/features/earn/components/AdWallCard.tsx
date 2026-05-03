@@ -1,156 +1,84 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Animated,
-  Easing,
-  Pressable,
-  StyleSheet,
-  View,
-} from 'react-native';
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 
 import { AppButton, AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
-import { AD_WALL_DURATION, AD_WALL_REWARD } from '../constants';
+import { EARN_AD_WALL_COOLDOWN_MS, formatEarnDuration } from '../earnState';
 
 type AdWallCardProps = {
-  onReward: () => void;
+  rewardGems: number;
+  claimCount: number;
+  canClaim: boolean;
+  remainingMs: number;
+  loading: boolean;
+  disabled?: boolean;
+  onClaim: () => void;
 };
 
-export const AdWallCard = React.memo(function AdWallCard({ onReward }: AdWallCardProps) {
-  const [isActive, setIsActive] = useState(false);
-  const [adId, setAdId] = useState(1);
-  const [canClaim, setCanClaim] = useState(false);
-  const progress = useRef(new Animated.Value(0)).current;
-  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
-
-  const startAnimation = useCallback(() => {
-    progress.setValue(0);
-    setCanClaim(false);
-
-    animationRef.current = Animated.timing(progress, {
-      toValue: 1,
-      duration: AD_WALL_DURATION,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    });
-
-    animationRef.current.start(({ finished }) => {
-      if (finished) {
-        setCanClaim(true);
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        } catch (e) {}
-      }
-    });
-  }, [progress]);
-
-  useEffect(() => {
-    if (isActive && !canClaim) {
-      startAnimation();
-    } else if (!isActive) {
-      animationRef.current?.stop();
-      progress.setValue(0);
-    }
-
-    return () => animationRef.current?.stop();
-  }, [canClaim, isActive, progress, startAnimation]);
-
-  const handleClaim = useCallback(() => {
-    onReward();
-    setCanClaim(false);
-    setAdId((prev) => prev + 1);
-    if (isActive) {
-      startAnimation();
-    }
-  }, [isActive, onReward, startAnimation]);
-
-  const toggleSwitch = useCallback(() => {
-    const nextState = !isActive;
-    setIsActive(nextState);
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (e) {}
-    if (!nextState) {
-      setCanClaim(false);
-    }
-  }, [isActive]);
-
-  const width = useMemo(
-    () =>
-      progress.interpolate({
-        inputRange: [0, 1],
-        outputRange: ['0%', '100%'],
-      }),
-    [progress],
-  );
+export const AdWallCard = React.memo(function AdWallCard({
+  rewardGems,
+  claimCount,
+  canClaim,
+  remainingMs,
+  loading,
+  disabled = false,
+  onClaim,
+}: AdWallCardProps) {
+  const progress = canClaim
+    ? 1
+    : Math.max(0, Math.min(1, 1 - remainingMs / EARN_AD_WALL_COOLDOWN_MS));
+  const progressPercent = `${Math.round(progress * 100)}%` as `${number}%`;
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.titleSection}>
+        <View style={styles.headerText}>
           <View
             style={[
-              styles.statusIndicator,
-              { backgroundColor: isActive ? colors.accentSuccess : colors.textMuted },
+              styles.statusDot,
+              { backgroundColor: canClaim ? colors.accentSuccess : colors.accentWarning },
             ]}
           />
-          <AppText variant="bodyBold">AFK Session</AppText>
+          <AppText variant="bodyBold">AFK task</AppText>
         </View>
-        <Pressable
-          onPress={toggleSwitch}
-          style={[styles.toggleTrack, isActive && styles.toggleTrackActive]}
-        >
-          <View style={[styles.toggleThumb, isActive && styles.toggleThumbActive]} />
-        </Pressable>
+        <View style={styles.badge}>
+          <Ionicons name="prism-outline" size={14} color={colors.accentPremium} />
+          <AppText variant="tinyBold">{rewardGems} Gems</AppText>
+        </View>
       </View>
 
-      <View style={styles.content}>
-        <View style={styles.adPlaceholder}>
-          <Ionicons
-            name="images-outline"
-            size={32}
-            color={colors.textMuted}
-            style={styles.adPlaceholderIcon}
-          />
-          <AppText variant="small" muted>
-            Sponsor Ad #{adId}
-          </AppText>
-          <AppText variant="tiny" muted style={styles.adPlaceholderSubtext}>
-            Refreshes on claim
-          </AppText>
+      <View style={styles.preview}>
+        <Ionicons name="play-circle-outline" size={30} color={colors.textMuted} />
+        <AppText variant="small" secondary style={styles.previewText}>
+          Server-backed reward task. Claim availability persists across reloads.
+        </AppText>
+      </View>
+
+      <View style={styles.progressRow}>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: progressPercent }]} />
         </View>
+        <AppText variant="tiny" secondary>
+          {canClaim ? 'Ready now' : `Ready in ${formatEarnDuration(remainingMs)}`}
+        </AppText>
+      </View>
 
-        {isActive ? (
-          <View style={styles.adWallAction}>
-            <View style={styles.progressBarBg}>
-              <Animated.View style={[styles.progressBarFill, { width }]} />
-            </View>
-
-            {canClaim ? (
-              <AppButton
-                title={`Claim ${AD_WALL_REWARD} Cash`}
-                variant="primary"
-                onPress={handleClaim}
-                style={styles.fullWidthButton}
-              />
-            ) : (
-              <View style={styles.statusRow}>
-                <ActivityIndicator size="small" color={colors.accentPrimary} />
-                <AppText variant="tiny" secondary>
-                  Earning in progress...
-                </AppText>
-              </View>
-            )}
-          </View>
-        ) : (
-          <View style={styles.idleState}>
-            <AppText variant="small" secondary style={styles.idleText}>
-              Toggle ON to start earning {AD_WALL_REWARD} Cash every 10 seconds.
-            </AppText>
-          </View>
-        )}
+      <View style={styles.footer}>
+        <View style={styles.metaColumn}>
+          <AppText variant="tiny" secondary>
+            Claims completed
+          </AppText>
+          <AppText variant="smallBold">{claimCount}</AppText>
+        </View>
+        <AppButton
+          title={canClaim ? `Claim ${rewardGems} Gems` : 'Cooling down'}
+          variant={canClaim ? 'premium' : 'outline'}
+          onPress={onClaim}
+          disabled={!canClaim || disabled}
+          loading={loading}
+          style={styles.button}
+        />
       </View>
     </View>
   );
@@ -162,99 +90,74 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    overflow: 'hidden',
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: spacing.md,
-    backgroundColor: colors.surfaceAlt,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
+    gap: spacing.md,
   },
-  titleSection: {
+  headerText: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
   },
-  statusIndicator: {
+  statusDot: {
     width: spacing.sm,
     height: spacing.sm,
     borderRadius: radius.full,
   },
-  toggleTrack: {
-    width: spacing.xxl + spacing.md,
-    height: spacing.xl,
-    borderRadius: radius.md,
-    backgroundColor: colors.borderSubtle,
-    padding: spacing.xxs,
-  },
-  toggleTrackActive: {
-    backgroundColor: colors.accentSuccess,
-  },
-  toggleThumb: {
-    width: spacing.lg + spacing.xs,
-    height: spacing.lg + spacing.xs,
-    borderRadius: radius.full,
-    backgroundColor: colors.textPrimary,
-  },
-  toggleThumbActive: {
-    transform: [{ translateX: spacing.xl - spacing.xs }],
-  },
-  content: {
-    padding: spacing.md,
-    alignItems: 'center',
-  },
-  adWallAction: {
-    width: '100%',
-  },
-  adPlaceholder: {
-    width: '100%',
-    height: spacing.xl * 5,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderStyle: 'dashed',
-  },
-  adPlaceholderIcon: {
-    marginBottom: spacing.xs,
-  },
-  adPlaceholderSubtext: {
-    marginTop: spacing.xs,
-    opacity: 0.6,
-  },
-  progressBarBg: {
-    width: '100%',
-    height: spacing.md,
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.full,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: colors.accentSuccess,
-    borderRadius: radius.full,
-  },
-  fullWidthButton: {
-    width: '100%',
-    marginTop: spacing.md,
-  },
-  statusRow: {
+  badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: spacing.xs,
-    marginTop: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
-  idleState: {
-    paddingVertical: spacing.md,
+  preview: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    minHeight: 112,
+    padding: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
   },
-  idleText: {
+  previewText: {
     textAlign: 'center',
+  },
+  progressRow: {
+    gap: spacing.xs,
+  },
+  progressTrack: {
+    height: spacing.sm,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceAlt,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: radius.full,
+    backgroundColor: colors.accentSuccess,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  metaColumn: {
+    flex: 1,
+    gap: spacing.xxs,
+  },
+  button: {
+    minWidth: 168,
   },
 });

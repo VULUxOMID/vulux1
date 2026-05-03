@@ -1,11 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, Modal, Pressable, PanResponder, Animated, Dimensions, Platform } from 'react-native';
+import { View, StyleSheet, Modal, Pressable, PanResponder, Animated, Dimensions, Platform, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../../components';
 import { CashIcon } from '../../../components/CashIcon';
 import { colors, radius, spacing } from '../../../theme';
-import { FuelFillAmount, FUEL_COSTS, MAX_FUEL_MINUTES } from '../types';
+import {
+  getRefuelActionLabel,
+  IDLE_REFUEL_RECEIPT,
+  type RefuelReceiptState,
+} from '../refuelFlow';
+import { FuelFillAmount, FUEL_COSTS, getFuelDisplayCapacity } from '../types';
 import { hapticTap } from '../../../utils/haptics';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -20,6 +25,8 @@ type FuelSheetProps = {
   currentFuel: number; // current fuel units (drains by 1 every second)
   userGems?: number;
   userCash?: number;
+  receipt?: RefuelReceiptState;
+  walletReady?: boolean;
 };
 
 const FILL_AMOUNTS: FuelFillAmount[] = [30, 60, 120, 300, 600];
@@ -31,17 +38,29 @@ export function FuelSheet({
   currentFuel,
   userGems = 0,
   userCash = 0,
+  receipt = IDLE_REFUEL_RECEIPT,
+  walletReady = false,
 }: FuelSheetProps) {
   const insets = useSafeAreaInsets();
   const [selectedAmount, setSelectedAmount] = useState<FuelFillAmount>(30);
   const [paymentType, setPaymentType] = useState<'gems' | 'cash'>('gems');
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const onCloseRef = useRef(onClose);
+  const isPendingRef = useRef(false);
+  const isPending = receipt.status === 'pending';
+  const isSuccess = receipt.status === 'success';
+  const controlsLocked = isPending || isSuccess;
+  const balanceAfter = isSuccess ? receipt.balanceAfter : undefined;
+  const displayedFuel = balanceAfter?.fuel ?? currentFuel;
 
   // Keep onClose ref updated
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  useEffect(() => {
+    isPendingRef.current = isPending;
+  }, [isPending]);
 
   // Animate in when modal opens
   useEffect(() => {
@@ -59,11 +78,17 @@ export function FuelSheet({
   // Pan responder for swipe-down to dismiss
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => !isPendingRef.current,
       onMoveShouldSetPanResponder: (_, gestureState) => {
+        if (isPendingRef.current) {
+          return false;
+        }
         return gestureState.dy > 5 || Math.abs(gestureState.dy) > 8;
       },
       onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+        if (isPendingRef.current) {
+          return false;
+        }
         return gestureState.dy > 15;
       },
       onPanResponderGrant: () => {
@@ -96,12 +121,16 @@ export function FuelSheet({
 
   const handleFill = () => {
     hapticTap();
+    if (isSuccess) {
+      onClose();
+      return;
+    }
     onFill(selectedAmount, paymentType);
   };
 
   const cost = FUEL_COSTS[selectedAmount];
   const currentCost = paymentType === 'gems' ? cost.gems : cost.cash;
-  const canAfford = paymentType === 'gems' ? userGems >= cost.gems : userCash >= cost.cash;
+  const canAfford = walletReady && (paymentType === 'gems' ? userGems >= cost.gems : userCash >= cost.cash);
 
   const formatRemainingTime = (fuelUnits: number) => {
     const totalSeconds = Math.max(0, Math.floor(fuelUnits));
@@ -129,18 +158,35 @@ export function FuelSheet({
     return `${mins}m`;
   };
 
-  const fuelPercentage = Math.min((currentFuel / MAX_FUEL_MINUTES) * 100, 100);
+  const fuelDisplayCapacity = getFuelDisplayCapacity(displayedFuel);
+  const fuelPercentage = Math.min((displayedFuel / fuelDisplayCapacity) * 100, 100);
+
+  const fillButtonDisabled = isPending || (!isSuccess && (!walletReady || !canAfford));
+  const fillButtonText = getRefuelActionLabel({
+    status: receipt.status,
+    walletReady,
+    canAfford,
+    paymentType,
+    defaultLabel: `Fill +${formatFillAmount(selectedAmount)}`,
+  });
 
   return (
     <Modal
       visible={visible}
       animationType="fade"
       transparent
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (!isPending) {
+          onClose();
+        }
+      }}
     >
       <View style={styles.container}>
         {/* Backdrop tap to close */}
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={isPending ? undefined : onClose}
+        />
 
         {/* Sheet with pan handlers */}
         <Animated.View
@@ -163,6 +209,7 @@ export function FuelSheet({
             <Pressable
               onPress={onClose}
               style={styles.closeButton}
+              disabled={isPending}
               accessibilityRole="button"
               accessibilityLabel="Close fuel sheet"
             >
@@ -188,7 +235,7 @@ export function FuelSheet({
           <View style={styles.statsCard}>
             <View style={styles.statsRow}>
               <View style={styles.statItem}>
-                <AppText style={styles.statValue}>{formatRemainingTime(currentFuel)}</AppText>
+                <AppText style={styles.statValue}>{formatRemainingTime(displayedFuel)}</AppText>
                 <AppText style={styles.statLabel}>Current Tank Level</AppText>
               </View>
             </View>
@@ -207,11 +254,52 @@ export function FuelSheet({
             </AppText>
           </View>
 
+          {receipt.status !== 'idle' ? (
+            <View
+              style={[
+                styles.statusCard,
+                receipt.status === 'success'
+                  ? styles.statusCardSuccess
+                  : receipt.status === 'failure'
+                    ? styles.statusCardFailure
+                    : styles.statusCardPending,
+              ]}
+            >
+              <View style={styles.statusRow}>
+                {receipt.status === 'pending' ? (
+                  <ActivityIndicator color={colors.accentPrimary} size="small" />
+                ) : receipt.status === 'success' ? (
+                  <Ionicons name="checkmark-circle" size={18} color={colors.accentSuccess} />
+                ) : (
+                  <Ionicons name="alert-circle" size={18} color={colors.accentDanger} />
+                )}
+                <AppText style={styles.statusTitle}>{receipt.title}</AppText>
+              </View>
+              <AppText style={styles.statusMessage}>{receipt.message}</AppText>
+              {balanceAfter ? (
+                <AppText style={styles.statusBalance}>
+                  Wallet now: {balanceAfter.gems} Gems • {balanceAfter.cash} Cash • {balanceAfter.fuel}m Fuel
+                </AppText>
+              ) : null}
+            </View>
+          ) : !walletReady ? (
+            <View style={[styles.statusCard, styles.statusCardPending]}>
+              <View style={styles.statusRow}>
+                <ActivityIndicator color={colors.accentPrimary} size="small" />
+                <AppText style={styles.statusTitle}>Syncing wallet</AppText>
+              </View>
+              <AppText style={styles.statusMessage}>
+                Waiting for your authoritative Gems and Cash balance from the server.
+              </AppText>
+            </View>
+          ) : null}
+
           {/* Payment Method Selector */}
           <View style={styles.paymentSelector}>
             <Pressable
               style={[styles.paymentOption, paymentType === 'gems' && styles.paymentOptionSelected]}
               onPress={() => { hapticTap(); setPaymentType('gems'); }}
+              disabled={controlsLocked}
             >
               <Ionicons name="prism" size={16} color={paymentType === 'gems' ? colors.accentPremium : colors.textSecondary} />
               <AppText style={[styles.paymentText, paymentType === 'gems' && styles.paymentTextSelected]}>Pay with Gems</AppText>
@@ -219,6 +307,7 @@ export function FuelSheet({
             <Pressable
               style={[styles.paymentOption, paymentType === 'cash' && styles.paymentOptionSelected]}
               onPress={() => { hapticTap(); setPaymentType('cash'); }}
+              disabled={controlsLocked}
             >
               <CashIcon size={16} color={paymentType === 'cash' ? colors.accentSuccess : colors.textSecondary} />
               <AppText style={[styles.paymentText, paymentType === 'cash' && styles.paymentTextSelected]}>Pay with Cash</AppText>
@@ -238,6 +327,7 @@ export function FuelSheet({
                   hapticTap();
                   setSelectedAmount(amount);
                 }}
+                disabled={controlsLocked}
               >
                 <AppText style={[
                   styles.amountText,
@@ -253,17 +343,15 @@ export function FuelSheet({
           <Pressable
             style={[
               styles.fillButton,
-              !canAfford && styles.fillButtonDisabled,
+              fillButtonDisabled && styles.fillButtonDisabled,
             ]}
             onPress={handleFill}
-            disabled={!canAfford}
+            disabled={fillButtonDisabled}
           >
             <AppText style={styles.fillButtonText}>
-              {!canAfford
-                ? `Not enough ${paymentType === 'gems' ? 'Gems' : 'Cash'}`
-                : `Fill +${formatFillAmount(selectedAmount)}`}
+              {fillButtonText}
             </AppText>
-            {canAfford && (
+            {!isPending && !isSuccess && canAfford && (
               <View style={styles.costBadge}>
                 {paymentType === 'gems' ? (
                   <Ionicons name="prism" size={18} color={colors.accentPremium} />
@@ -413,6 +501,45 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     marginTop: 6,
+    fontWeight: '600',
+  },
+  statusCard: {
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  statusCardPending: {
+    backgroundColor: colors.surfaceAlt,
+  },
+  statusCardSuccess: {
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.28)',
+  },
+  statusCardFailure: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.24)',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  statusTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  statusMessage: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  statusBalance: {
+    fontSize: 12,
+    color: colors.textMuted,
     fontWeight: '600',
   },
 

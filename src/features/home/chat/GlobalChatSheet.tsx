@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Dimensions,
   Easing,
@@ -85,6 +86,7 @@ export type GlobalChatSheetProps = {
   onFocusMessageHandled?: () => void;
   currentUserDisplayName?: string;
   currentUserId?: string | null;
+  isLoading?: boolean;
 };
 
 export function GlobalChatSheet({
@@ -101,6 +103,7 @@ export function GlobalChatSheet({
   onFocusMessageHandled,
   currentUserDisplayName = 'you',
   currentUserId = null,
+  isLoading = false,
 }: GlobalChatSheetProps) {
   const insets = useSafeAreaInsets();
   const sheetY = useRef(new Animated.Value(SCREEN_H)).current;
@@ -162,10 +165,17 @@ export function GlobalChatSheet({
   // Track keyboard visibility for composer padding
   const [kbOpen, setKbOpen] = useState(false);
   const [composerH, setComposerH] = useState(0);
+  const openedAtRef = useRef(0);
 
   const dragStartYRef = useRef(0);
   const lastRawYRef = useRef(0);
   const lastSnapRef = useRef<'collapsed' | 'mid' | 'expanded'>('collapsed');
+
+  useEffect(() => {
+    if (visible) {
+      openedAtRef.current = Date.now();
+    }
+  }, [visible]);
 
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -464,6 +474,9 @@ export function GlobalChatSheet({
   const grabberOpacity = grabActive.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0.95] });
 
   const closeAll = useCallback(() => {
+    if (Date.now() - openedAtRef.current < 200) {
+      return;
+    }
     closeMenu();
     animateDismiss();
   }, [animateDismiss, closeMenu]);
@@ -737,7 +750,7 @@ export function GlobalChatSheet({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="none">
+    <Modal visible={visible} transparent animationType="none" onRequestClose={closeAll}>
       <View style={[StyleSheet.absoluteFill, styles.pointerEventsBoxNone]}>
         {/* Backdrop BEHIND the sheet - tapping closes */}
         <Animated.View style={[styles.backdrop, { opacity: overlayOpacity }, styles.pointerEventsBoxNone]}>
@@ -931,7 +944,15 @@ export function GlobalChatSheet({
                   }}
                   ListEmptyComponent={
                     <View style={styles.emptyState}>
-                      {showSearch && !searchQuery && activeFilter === 'all' && recentSearches.length > 0 ? (
+                      {isLoading && !searchQuery && activeFilter === 'all' ? (
+                        <>
+                          <ActivityIndicator size="small" color={colors.textSecondary} />
+                          <AppText style={styles.emptyStateText}>Loading messages…</AppText>
+                          <AppText style={styles.emptyStateSubtext}>
+                            Syncing global chat for this session.
+                          </AppText>
+                        </>
+                      ) : showSearch && !searchQuery && activeFilter === 'all' && recentSearches.length > 0 ? (
                         <View style={styles.recentSearchesContainer}>
                           <AppText style={styles.recentSearchesTitle}>Recent Searches</AppText>
                           {recentSearches.map((s, i) => (

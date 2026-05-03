@@ -15,6 +15,7 @@ import { ShopBuyTab } from '../../src/features/shop/ShopBuyTab';
 import { ShopEarnTab } from '../../src/features/shop/ShopEarnTab';
 import { ShopWalletTab } from '../../src/features/shop/ShopWalletTab';
 import { WithdrawalModal } from '../../src/features/shop/WithdrawalModal';
+import { getWithdrawalEligibility } from '../../src/features/shop/withdrawalEligibility';
 import { ShopTab } from '../../src/features/shop/types';
 import { useAuth as useSessionAuth } from '../../src/auth/clerkSession';
 import {
@@ -28,12 +29,14 @@ import {
 export default function ShopScreen() {
   const router = useRouter();
   const { userId } = useSessionAuth();
-  const { 
-    gems, 
-    cash, 
-    fuel, 
+  const {
+    gems,
+    cash,
+    fuel,
     requestWithdrawal,
-    withdrawalHistory
+    withdrawalHistory,
+    walletHydrated,
+    walletStateAvailable,
   } = useWallet();
 
   const [activeTab, setActiveTab] = useState<ShopTab>('buy');
@@ -93,6 +96,16 @@ export default function ShopScreen() {
   }, []);
 
   const MIN_WITHDRAWAL_GEMS = 500; // $5.00
+  const withdrawalEligibility = useMemo(
+    () =>
+      getWithdrawalEligibility({
+        gems,
+        walletHydrated,
+        walletStateAvailable,
+        minWithdrawalGems: MIN_WITHDRAWAL_GEMS,
+      }),
+    [gems, walletHydrated, walletStateAvailable],
+  );
 
   const handleWatchAd = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -324,6 +337,7 @@ export default function ShopScreen() {
             gems={gems}
             cash={cash}
             withdrawalHistory={withdrawalHistory}
+            withdrawalEligibility={withdrawalEligibility}
             onExchangeGemsToCash={handleGemsToCash}
             onExchangeCashToGems={handleCashToGems}
             onOpenWithdrawal={handleOpenWithdrawal}
@@ -337,6 +351,8 @@ export default function ShopScreen() {
         gems={gems}
         onClose={handleCloseWithdrawal}
         onSubmit={handleSubmitWithdrawal}
+        canRequestWithdrawal={withdrawalEligibility.canRequestWithdrawal}
+        disabledReason={withdrawalEligibility.disabledReason}
         minWithdrawalGems={MIN_WITHDRAWAL_GEMS}
       />
 

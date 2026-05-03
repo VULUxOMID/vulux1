@@ -12,6 +12,7 @@ type BalanceCardProps = {
   gemsBalance?: number;
   fuelBalance?: number;
   isLoading?: boolean;
+  loadingLabel?: string;
   rank?: number;
   isRankPublic?: boolean;
   onToggleRankPrivacy?: (value: boolean) => void;
@@ -23,6 +24,7 @@ export function GemsBalanceCard({
   gemsBalance = 0,
   fuelBalance = 0,
   isLoading = false,
+  loadingLabel = 'Syncing',
   rank,
   isRankPublic,
   onToggleRankPrivacy,
@@ -55,7 +57,7 @@ export function GemsBalanceCard({
                 <Ionicons name="prism" size={20} color={colors.accentPrimary} />
               </View>
               <AppText variant="h2" style={styles.balanceValue}>
-                {isLoading ? '--' : formatValue(gemsBalance)}
+                {isLoading ? loadingLabel : formatValue(gemsBalance)}
               </AppText>
               <AppText variant="micro" secondary style={styles.label}>Gems</AppText>
             </View>
@@ -65,7 +67,7 @@ export function GemsBalanceCard({
                 <CashIcon size={20} color={colors.accentSuccess} />
               </View>
               <AppText variant="h2" style={styles.balanceValue}>
-                {isLoading ? '--' : formatValue(cashBalance)}
+                {isLoading ? loadingLabel : formatValue(cashBalance)}
               </AppText>
               <AppText variant="micro" secondary style={styles.label}>Cash</AppText>
             </View>
@@ -75,12 +77,24 @@ export function GemsBalanceCard({
                 <Ionicons name="rocket" size={20} color={colors.accentDanger} />
               </View>
               <AppText variant="h2" style={styles.balanceValue}>
-                {isLoading ? '--' : `${fuelBalance}m`}
+                {isLoading ? loadingLabel : `${fuelBalance}m`}
               </AppText>
               <AppText variant="micro" secondary style={styles.label}>Fuel</AppText>
             </View>
           </View>
         </Pressable>
+
+        {isLoading ? (
+          <>
+            <View style={styles.rowDivider} />
+            <View style={styles.statusRow}>
+              <Ionicons name="sync-outline" size={16} color={colors.textSecondary} />
+              <AppText variant="tiny" secondary>
+                Wallet is syncing from the server.
+              </AppText>
+            </View>
+          </>
+        ) : null}
 
         {showRank ? (
           <>
@@ -193,6 +207,12 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     marginBottom: spacing.md,
     opacity: 0.5,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
   },
   rankRow: {
     flexDirection: 'row',

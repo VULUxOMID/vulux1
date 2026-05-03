@@ -8,6 +8,7 @@ import {
   FUEL_COSTS,
   FuelFillAmount,
   MAX_FUEL_MINUTES,
+  getFuelDisplayCapacity,
 } from '../liveroom/types';
 
 type ShopBuyTabProps = {
@@ -20,6 +21,7 @@ type ShopBuyTabProps = {
   gems: number;
   cash: number;
   onRefuel: (amount: FuelFillAmount) => void;
+  isActionPending?: boolean;
 };
 
 export const ShopBuyTab = React.memo(function ShopBuyTab({
@@ -32,6 +34,7 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
   gems,
   cash,
   onRefuel,
+  isActionPending = false,
 }: ShopBuyTabProps) {
   const toggleOptions = useMemo(
     () => [
@@ -67,16 +70,20 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
     [onFuelPaymentTypeChange]
   );
 
-  const fuelPercent = Math.round((fuel / MAX_FUEL_MINUTES) * 100);
+  const fuelDisplayCapacity = getFuelDisplayCapacity(fuel);
+  const fuelPercent = Math.round((fuel / fuelDisplayCapacity) * 100);
   const fuelPercentText = `${Math.min(fuelPercent, 100)}%`;
 
   return (
     <View style={styles.container}>
       <SectionCard title="Get Gems" contentStyle={styles.sectionContent}>
         <Pressable
-          style={[styles.watchAdCard, isLoadingAd && styles.cardDisabled]}
+          style={[
+            styles.watchAdCard,
+            (isLoadingAd || isActionPending) && styles.cardDisabled,
+          ]}
           onPress={onWatchAd}
-          disabled={isLoadingAd}
+          disabled={isLoadingAd || isActionPending}
         >
           <View style={styles.watchAdContent}>
             <Ionicons
@@ -101,22 +108,26 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
             amount={100}
             price="$0.99"
             onBuy={() => onBuyGems(100, '$0.99')}
+            disabled={isActionPending}
           />
           <GemCard
             amount={550}
             price="$4.99"
             onBuy={() => onBuyGems(550, '$4.99')}
             recommended
+            disabled={isActionPending}
           />
           <GemCard
             amount={1200}
             price="$9.99"
             onBuy={() => onBuyGems(1200, '$9.99')}
+            disabled={isActionPending}
           />
           <GemCard
             amount={2500}
             price="$19.99"
             onBuy={() => onBuyGems(2500, '$19.99')}
+            disabled={isActionPending}
           />
         </View>
       </SectionCard>
@@ -139,14 +150,14 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
               Tank Level: {fuelPercentText}
             </AppText>
             <AppText variant="small" secondary>
-              {fuel}/{MAX_FUEL_MINUTES}m
+              {fuel}/{fuelDisplayCapacity}m
             </AppText>
           </View>
           <View style={styles.fuelTrack}>
             <View
               style={[
                 styles.fuelFill,
-                { width: `${Math.min((fuel / MAX_FUEL_MINUTES) * 100, 100)}%` },
+                { width: `${Math.min((fuel / fuelDisplayCapacity) * 100, 100)}%` },
               ]}
             />
           </View>
@@ -172,7 +183,7 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
                   price={price}
                   currency={fuelPaymentType}
                   onBuy={() => onRefuel(amount)}
-                  canAfford={canAfford}
+                  canAfford={canAfford && !isActionPending}
                 />
               );
             }
@@ -247,13 +258,15 @@ type GemCardProps = {
   price: string;
   onBuy: () => void;
   recommended?: boolean;
+  disabled?: boolean;
 };
 
-function GemCard({ amount, price, onBuy, recommended }: GemCardProps) {
+function GemCard({ amount, price, onBuy, recommended, disabled = false }: GemCardProps) {
   return (
     <Pressable
-      style={[styles.card, recommended && styles.recommendedCard]}
+      style={[styles.card, recommended && styles.recommendedCard, disabled && styles.cardDisabled]}
       onPress={onBuy}
+      disabled={disabled}
     >
       {recommended ? (
         <View style={styles.badge}>

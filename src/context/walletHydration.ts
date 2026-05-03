@@ -3,7 +3,64 @@ export type WalletRefreshEvent = {
   scopes?: readonly string[] | null;
 };
 
+type UnknownRecord = Record<string, unknown>;
+
+export type WalletBalanceLike = {
+  userId: string | null;
+  gems: number;
+  cash: number;
+  fuel: number;
+} | null;
+
+export type ResolvedAuthoritativeWallet = {
+  source: 'account_state' | 'wallet_balance' | 'none';
+  walletStateAvailable: boolean;
+  walletState: UnknownRecord | null;
+};
+
 const WALLET_RELEVANT_SCOPES = new Set(['wallet', 'profile', 'identity']);
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return value && typeof value === 'object' ? (value as UnknownRecord) : null;
+}
+
+export function resolveAuthoritativeWalletState(
+  accountState: UnknownRecord | null,
+  walletBalance: WalletBalanceLike,
+  signedInUserId: string | null | undefined,
+): ResolvedAuthoritativeWallet {
+  const accountWalletState = asRecord(accountState?.wallet);
+  if (accountWalletState) {
+    return {
+      source: 'account_state',
+      walletStateAvailable: true,
+      walletState: accountWalletState,
+    };
+  }
+
+  const walletBalanceMatchesUser = Boolean(
+    walletBalance &&
+      (!walletBalance.userId || !signedInUserId || walletBalance.userId === signedInUserId),
+  );
+
+  if (walletBalance && walletBalanceMatchesUser) {
+    return {
+      source: 'wallet_balance',
+      walletStateAvailable: true,
+      walletState: {
+        gems: walletBalance.gems,
+        cash: walletBalance.cash,
+        fuel: walletBalance.fuel,
+      },
+    };
+  }
+
+  return {
+    source: 'none',
+    walletStateAvailable: false,
+    walletState: null,
+  };
+}
 
 export function hasAuthoritativeWalletForUser(
   walletUserId: string | null,
@@ -66,4 +123,21 @@ export function shouldRefreshWalletFromBackendEvent(
   }
 
   return hasRelevantWalletScope(event.scopes);
+}
+
+export function shouldRefreshWalletFromSubscriptionActivation(params: {
+  subscriptionState: 'idle' | 'subscribing' | 'active' | 'error';
+  previousSubscriptionState: 'idle' | 'subscribing' | 'active' | 'error';
+  walletHydrated: boolean;
+  walletStateAvailable: boolean;
+}): boolean {
+  const becameActive =
+    params.subscriptionState === 'active' &&
+    params.previousSubscriptionState !== 'active';
+
+  if (!becameActive) {
+    return false;
+  }
+
+  return !params.walletHydrated || !params.walletStateAvailable;
 }

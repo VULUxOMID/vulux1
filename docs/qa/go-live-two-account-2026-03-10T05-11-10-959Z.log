@@ -1,0 +1,21 @@
+[2026-03-10T05:11:12.049Z] [host] open login
+[2026-03-10T05:11:14.215Z] [host] sign-in attempt 1
+[2026-03-10T05:11:44.598Z] [host] sign-in attempt 2
+[2026-03-10T05:12:14.923Z] [host] sign-in attempt 3
+[2026-03-10T05:12:45.316Z] [host] sign-in attempt 4
+[2026-03-10T05:13:15.687Z] ERROR [host] login failed. Body sample: Sign in to Vulu
+Use your email or username and password. Vulu restores the same vulu_user_id after sign-in.
+
+Sign in
+Need an account? Sign up
+Forgot password?
+Your sign-in needs another step in Clerk. Complete it and try again.
+ST
+down/idle
+g0 u0 d------
+r0
+d0
+now/none
+[2026-03-10T05:13:15.730Z] screenshot /Users/omid/vulux1/docs/qa/go-live-two-account-2026-03-10T05-11-10-959Z-host-error.png
+[2026-03-10T05:13:15.761Z] screenshot /Users/omid/vulux1/docs/qa/go-live-two-account-2026-03-10T05-11-10-959Z-viewer-error.png
+[2026-03-10T05:13:15.763Z] report /Users/omid/vulux1/docs/qa/go-live-two-account-2026-03-10T05-11-10-959Z.json

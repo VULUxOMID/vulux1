@@ -307,6 +307,36 @@ export async function claimAdReward(
   );
 }
 
+export async function claimEarnAdWallReward(
+  userId: string,
+  source = 'earn_ad_wall',
+): Promise<WalletMutationResult> {
+  return callWalletReducer(
+    'claim_earn_ad_wall_reward',
+    {
+      userId,
+      source,
+    },
+    'wallet_claim_earn_ad_wall_reward',
+  );
+}
+
+export async function claimEarnStreakReward(
+  userId: string,
+  rewardIndex: number,
+  source = 'earn_streak',
+): Promise<WalletMutationResult> {
+  return callWalletReducer(
+    'claim_earn_streak_reward',
+    {
+      userId,
+      rewardIndex: Math.max(0, Math.floor(rewardIndex)),
+      source,
+    },
+    'wallet_claim_earn_streak_reward',
+  );
+}
+
 export async function creditGemsPurchase(
   userId: string,
   gemsToCredit: number,
