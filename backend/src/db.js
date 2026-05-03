@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,14 +61,20 @@ export async function runMigrations() {
   }
 
   const migrationsDir = path.join(rootDir, "migrations");
-  const migrationId = "001_initial_railway_schema";
-  const sql = await readFile(path.join(migrationsDir, `${migrationId}.sql`), "utf8");
+  const migrationFiles = (await readdir(migrationsDir))
+    .filter((fileName) => /^\d+_.+\.sql$/.test(fileName))
+    .sort();
 
-  await activePool.query(sql);
-  await activePool.query(
-    "INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
-    [migrationId],
-  );
+  for (const fileName of migrationFiles) {
+    const migrationId = fileName.replace(/\.sql$/, "");
+    const sql = await readFile(path.join(migrationsDir, fileName), "utf8");
+
+    await activePool.query(sql);
+    await activePool.query(
+      "INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
+      [migrationId],
+    );
+  }
 }
 
 export async function closePool() {

@@ -7,20 +7,26 @@ function normalizeString(value) {
   return value.trim();
 }
 
-export function createJwtVerifyOptions({ issuer, audienceList }) {
+export function createJwtVerifyOptions({ issuer, audienceList, audienceRequired = true }) {
   const normalizedIssuer = normalizeString(issuer);
   const normalizedAudienceList = Array.isArray(audienceList)
     ? audienceList.map((value) => normalizeString(value)).filter(Boolean)
     : [];
 
-  if (normalizedAudienceList.length === 0) {
+  if (audienceRequired && normalizedAudienceList.length === 0) {
     throw Object.assign(new Error("Auth JWT audience is not configured."), { statusCode: 503 });
   }
 
   return {
     ...(normalizedIssuer ? { issuer: normalizedIssuer } : {}),
-    audience:
-      normalizedAudienceList.length === 1 ? normalizedAudienceList[0] : normalizedAudienceList,
+    ...(normalizedAudienceList.length > 0
+      ? {
+          audience:
+            normalizedAudienceList.length === 1
+              ? normalizedAudienceList[0]
+              : normalizedAudienceList,
+        }
+      : {}),
   };
 }
 

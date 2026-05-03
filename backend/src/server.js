@@ -43,6 +43,11 @@ const jwtVerifyOptions =
         audienceList: authJwtAudienceList,
       })
     : null;
+const issuerOnlyJwtVerifyOptions = createJwtVerifyOptions({
+  issuer: authJwtIssuer,
+  audienceList: [],
+  audienceRequired: false,
+});
 const qaGuestAuthHelper = createQaGuestAuthHelper(process.env);
 const demoLiveStore = createDemoLiveStore();
 
@@ -168,7 +173,19 @@ async function verifyAnyViewerUserId(token) {
     throw Object.assign(new Error("Auth JWT audience is not configured."), { statusCode: 503 });
   }
 
-  return await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
+  try {
+    return await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!/missing required \"aud\" claim/i.test(message)) {
+      throw error;
+    }
+    return await verifyViewerUserId({
+      token,
+      jwks,
+      jwtVerifyOptions: issuerOnlyJwtVerifyOptions,
+    });
+  }
 }
 
 async function requireViewerUserId(req) {

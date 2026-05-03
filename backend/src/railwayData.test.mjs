@@ -55,3 +55,15 @@ test("initial Railway migration includes durable app domains", async () => {
     assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${tableName}\\b`));
   }
 });
+
+test("friendships compatibility migration backfills expected snapshot columns", async () => {
+  const sql = await readFile(
+    new URL("../migrations/002_friendships_compatibility_columns.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS requester_user_id/i);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS addressee_user_id/i);
+  assert.match(sql, /requested_by/i);
+  assert.match(sql, /user_low_id/i);
+  assert.match(sql, /user_high_id/i);
+});
