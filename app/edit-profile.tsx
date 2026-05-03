@@ -13,13 +13,13 @@ import {
 } from 'react-native';
 
 import { AppScreen, AppText } from '../src/components';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
 import { colors, radius, spacing } from '../src/theme';
 import { useProfile } from '../src/context/ProfileContext';
 import { useUserProfile, UserProfilePhoto } from '../src/context/UserProfileContext';
 import { LiveUser } from '../src/features/liveroom/types';
 import { useAppIsActive } from '../src/hooks/useAppIsActive';
-import { subscribeBootstrap } from '../src/lib/spacetime';
+import { subscribeProfile } from '../src/lib/railwayRuntime';
 
 type Photo = UserProfilePhoto;
 
@@ -41,7 +41,7 @@ export default function EditProfileScreen() {
     if (!shouldSubscribe) {
       return;
     }
-    return subscribeBootstrap();
+    return subscribeProfile();
   }, [shouldSubscribe]);
 
   useEffect(() => {

@@ -53,6 +53,7 @@ export function InviteToStreamModal({
               hapticTap();
               onInvite();
             }}
+            testID="live-invite-to-stream-confirm"
           >
             <View style={[styles.optionIcon, styles.optionIconInvite]}>
               <Ionicons name="person-add" size={24} color="#fff" />
@@ -68,6 +69,7 @@ export function InviteToStreamModal({
               hapticTap();
               onCancel();
             }}
+            testID="live-invite-to-stream-cancel"
           >
             <AppText style={styles.cancelText}>Cancel</AppText>
           </Pressable>

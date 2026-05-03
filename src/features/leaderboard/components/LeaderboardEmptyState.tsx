@@ -1,21 +1,45 @@
 import React, { memo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { AppText } from '../../../components';
-import { colors, spacing } from '../../../theme';
+import { AppButton, AppText } from '../../../components';
+import { colors, radius, spacing } from '../../../theme';
 
 type LeaderboardEmptyStateProps = {
-  message?: string;
+  title: string;
+  message: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  actionLabel?: string;
+  onAction?: () => void;
+  loading?: boolean;
 };
 
-function LeaderboardEmptyStateComponent({ message = 'No users found' }: LeaderboardEmptyStateProps) {
+function LeaderboardEmptyStateComponent({
+  title,
+  message,
+  icon = 'search-outline',
+  actionLabel,
+  onAction,
+  loading = false,
+}: LeaderboardEmptyStateProps) {
   return (
     <View style={styles.container}>
-      <Ionicons name="search-outline" size={48} color={colors.textMuted} />
-      <AppText variant="body" muted style={styles.text}>
-        {message}
-      </AppText>
+      <View style={styles.iconWrap}>
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.accentPrimary} />
+        ) : (
+          <Ionicons name={icon} size={22} color={colors.textMuted} />
+        )}
+      </View>
+      <View style={styles.copy}>
+        <AppText variant="bodyBold">{title}</AppText>
+        <AppText variant="small" secondary style={styles.text}>
+          {message}
+        </AppText>
+      </View>
+      {actionLabel && onAction ? (
+        <AppButton title={actionLabel} size="small" variant="secondary" onPress={onAction} />
+      ) : null}
     </View>
   );
 }
@@ -26,9 +50,28 @@ const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: spacing.xxl,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.xl,
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+    gap: spacing.md,
+  },
+  iconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  copy: {
+    alignItems: 'center',
+    gap: spacing.xs,
   },
   text: {
-    marginTop: spacing.sm,
+    textAlign: 'center',
   },
 });

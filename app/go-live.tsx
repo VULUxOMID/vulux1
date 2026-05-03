@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -29,8 +29,9 @@ import { FuelSheet } from '../src/features/liveroom/components/FuelSheet';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../src/features/liveroom/types';
 import { useLive } from '../src/context/LiveContext';
 import { toast } from '../src/components/Toast';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
 import { purchaseFuelPack } from '../src/data/adapters/backend/walletMutations';
+import { submitGoLiveStart } from '../src/features/live/goLiveStartSubmission';
 
 const GO_LIVE_BUTTON_GRADIENT = ['#3B82F6', '#2563EB'] as const;
 const LIVE_TITLE_MIN_LENGTH = 3;
@@ -40,7 +41,7 @@ export default function GoLiveScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { userId } = useSessionAuth();
-  const { startLive, activeLive, liveRoom } = useLive();
+  const { startLive } = useLive();
   const { fuel, gems, cash, walletStateAvailable } = useWallet();
 
   const [title, setTitle] = useState('');
@@ -48,6 +49,7 @@ export default function GoLiveScreen() {
   const [showFuelSheet, setShowFuelSheet] = useState(false);
   const [pendingStart, setPendingStart] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const pendingStartRef = useRef(false);
   const normalizedTitle = title.trim();
   const isOutOfFuel = walletStateAvailable && fuel <= 0;
   const hasValidTitle = normalizedTitle.length >= LIVE_TITLE_MIN_LENGTH;
@@ -77,7 +79,7 @@ export default function GoLiveScreen() {
   };
 
   const handleStartLive = async () => {
-    if (pendingStart) return;
+    if (pendingStartRef.current) return;
     hapticTap();
     if (isOutOfFuel) {
       openFuelSheet();
@@ -86,34 +88,48 @@ export default function GoLiveScreen() {
     if (!hasValidTitle) {
       return;
     }
-    setPendingStart(true);
-    setStartError(null);
-    try {
-      const startResult = await startLive(normalizedTitle, inviteOnly);
-      if (!startResult.ok) {
-        setPendingStart(false);
-        setStartError(startResult.message);
-        toast.error(startResult.message);
-      }
-    } catch {
-      setPendingStart(false);
-      const message = 'Unable to start live right now. Please try again.';
-      setStartError(message);
-      toast.error(message);
-    }
+    await submitGoLiveStart({
+      title: normalizedTitle,
+      inviteOnly,
+      pendingRef: pendingStartRef,
+      startLive,
+      setPendingStart,
+      setStartError,
+      showStartErrorToast: (message) => {
+        toast.error(message);
+      },
+      navigateToLive: (liveId) => {
+        router.replace({
+          pathname: '/live',
+          params: { id: liveId },
+        });
+      },
+    });
   };
 
   useEffect(() => {
-    if (!pendingStart) return;
-    if (!activeLive || !liveRoom) return;
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+    const shouldExposeQaBridge =
+      process.env.EXPO_PUBLIC_QA_SKIP_ONBOARDING?.trim().toLowerCase() === '1';
+    if (!shouldExposeQaBridge) {
+      return;
+    }
 
-    setPendingStart(false);
-    setStartError(null);
-    router.replace({
-      pathname: '/live',
-      params: { id: activeLive.id || liveRoom.id },
-    });
-  }, [activeLive, liveRoom, pendingStart, router]);
+    const target = window as typeof window & {
+      __VULU_QA_GO_LIVE__?: {
+        startLiveFromQa: () => Promise<void>;
+      };
+    };
+    target.__VULU_QA_GO_LIVE__ = {
+      startLiveFromQa: handleStartLive,
+    };
+
+    return () => {
+      delete target.__VULU_QA_GO_LIVE__;
+    };
+  }, [handleStartLive]);
 
   const handleClose = () => {
     hapticTap();

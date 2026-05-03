@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect, useMemo } from 'react';
-import { useAuth as useSessionAuth } from '../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../auth/clerkSession';
 import { useFriendshipsRepo, useSocialRepo } from '../data/provider';
 import type { SocialUser } from '../data/contracts';
 import { useAppIsActive } from '../hooks/useAppIsActive';

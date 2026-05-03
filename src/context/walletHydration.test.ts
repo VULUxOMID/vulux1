@@ -5,8 +5,9 @@ import {
   hasAuthoritativeWallet,
   hasAuthoritativeWalletForUser,
   hasRelevantWalletScope,
+  selectAuthoritativeWalletHistory,
   shouldRefreshWalletFromBackendEvent,
-  shouldRefreshWalletFromSpacetimeEvent,
+  shouldRefreshWalletFromRailwayEvent,
 } from './walletHydration';
 
 test('hasRelevantWalletScope matches wallet account-state lifecycle scopes', () => {
@@ -16,17 +17,17 @@ test('hasRelevantWalletScope matches wallet account-state lifecycle scopes', () 
   assert.equal(hasRelevantWalletScope(['wallet']), true);
 });
 
-test('shouldRefreshWalletFromSpacetimeEvent refreshes until hydration succeeds', () => {
+test('shouldRefreshWalletFromRailwayEvent refreshes until hydration succeeds', () => {
   assert.equal(
-    shouldRefreshWalletFromSpacetimeEvent({ scopes: ['messages'] }, false),
+    shouldRefreshWalletFromRailwayEvent({ scopes: ['messages'] }, false),
     true,
   );
   assert.equal(
-    shouldRefreshWalletFromSpacetimeEvent({ scopes: ['messages'] }, true),
+    shouldRefreshWalletFromRailwayEvent({ scopes: ['messages'] }, true),
     false,
   );
   assert.equal(
-    shouldRefreshWalletFromSpacetimeEvent({ scopes: ['profile'] }, true),
+    shouldRefreshWalletFromRailwayEvent({ scopes: ['profile'] }, true),
     true,
   );
 });
@@ -74,4 +75,25 @@ test('hasAuthoritativeWallet only exposes balances after hydration completes', (
   assert.equal(hasAuthoritativeWallet(false, true), false);
   assert.equal(hasAuthoritativeWallet(true, false), false);
   assert.equal(hasAuthoritativeWallet(true, true), true);
+});
+
+test('selectAuthoritativeWalletHistory clears stale history after account switch', () => {
+  assert.deepEqual(
+    selectAuthoritativeWalletHistory(
+      'user-1',
+      'user-1',
+      true,
+      [{ id: 'history-1' }],
+    ),
+    [{ id: 'history-1' }],
+  );
+  assert.deepEqual(
+    selectAuthoritativeWalletHistory(
+      'user-1',
+      'user-2',
+      true,
+      [{ id: 'history-1' }],
+    ),
+    [],
+  );
 });

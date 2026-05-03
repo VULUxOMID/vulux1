@@ -55,6 +55,7 @@ export function KickConfirmModal({
                 hapticTap();
                 onClose();
               }}
+              testID="live-kick-cancel"
             >
               <AppText style={styles.cancelText}>Cancel</AppText>
             </Pressable>
@@ -65,6 +66,7 @@ export function KickConfirmModal({
                 hapticTap();
                 onConfirm();
               }}
+              testID="live-kick-confirm"
             >
               <AppText style={styles.kickText}>Kick out</AppText>
             </Pressable>
@@ -154,4 +156,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

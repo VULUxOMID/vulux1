@@ -1,0 +1,23 @@
+name: Vulu Agent Fallback Sweep
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  fallback-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger runner sweep
+        env:
+          VULU_AGENT_RUNNER_URL: ${{ vars.VULU_AGENT_RUNNER_URL }}
+          VULU_AGENT_INTERNAL_TOKEN: ${{ secrets.VULU_AGENT_INTERNAL_TOKEN }}
+        run: |
+          if [ -z "$VULU_AGENT_RUNNER_URL" ] || [ -z "$VULU_AGENT_INTERNAL_TOKEN" ]; then
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $VULU_AGENT_INTERNAL_TOKEN" \
+            "$VULU_AGENT_RUNNER_URL/internal/sweep"

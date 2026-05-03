@@ -2,13 +2,12 @@ import type { SocialRepository, SocialUser } from '../../contracts';
 import { applyCursorPage, filterByQuery } from './query';
 import type { BackendSnapshot } from './snapshot';
 import type { BackendHttpClient } from './httpClient';
-import { postSafe } from './httpMutations';
-import { getSpacetimeTelemetrySnapshot, spacetimeDb } from '../../../lib/spacetime';
+import { getRailwayTelemetrySnapshot, railwayDb } from '../../../lib/railwayRuntime';
 import { requestBackendRefresh } from './refreshBus';
 
 type UnknownRecord = Record<string, unknown>;
-let lastKnownSocialUsers: SocialUser[] = [];
 type SocialPresenceStatus = NonNullable<SocialUser['status']>;
+const IS_DEV_RUNTIME = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -45,6 +44,19 @@ function describeError(error: unknown): string {
   } catch {
     return 'Unknown social write error';
   }
+}
+
+function toSocialPersistenceError(
+  action: 'status' | 'live',
+  userId: string,
+  backendError: unknown,
+  railwayError: unknown,
+): Error {
+  const backendMessage = describeError(backendError);
+  const railwayMessage = describeError(railwayError);
+  return new Error(
+    `Failed to persist social ${action} for ${userId}. backend=${backendMessage}; railway=${railwayMessage}`,
+  );
 }
 
 function readTimestampMs(value: unknown): number {
@@ -182,9 +194,9 @@ function upsertUser(
   map.set(userId, next);
 }
 
-function getSpacetimeUsersFromPublicProfileView(): Map<string, SocialUser> {
+function getRailwayUsersFromPublicProfileView(): Map<string, SocialUser> {
   const users = new Map<string, SocialUser>();
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(dbView?.publicProfileSummary?.iter?.() ?? []);
 
   for (const row of rows) {
@@ -216,10 +228,17 @@ type SocialStatusEvent = {
   createdAt: number;
 };
 
-function getSocialStatusEvents(): Map<string, SocialStatusEvent> {
+function getSocialStatusEvents(options: {
+  includeProfileEvents?: boolean;
+  includeRosterEvents?: boolean;
+  includeStatusEvents?: boolean;
+} = {}): Map<string, SocialStatusEvent> {
   const latest = new Map<string, SocialStatusEvent>();
-  const dbView = spacetimeDb.db as any;
+  const dbView = railwayDb.db as any;
   const rows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
+  const includeProfileEvents = options.includeProfileEvents !== false;
+  const includeRosterEvents = options.includeRosterEvents !== false;
+  const includeStatusEvents = options.includeStatusEvents !== false;
   rows.sort(
     (a: any, b: any) =>
       readTimestampMs(a?.createdAt ?? a?.created_at) -
@@ -230,7 +249,7 @@ function getSocialStatusEvents(): Map<string, SocialStatusEvent> {
     const item = parseJsonRecord(row?.item);
     const eventType = asString(item.eventType);
 
-    if (eventType === 'user_profile') {
+    if (includeProfileEvents && eventType === 'user_profile') {
       const userId = asString(item.userId);
       if (!userId) continue;
       latest.set(userId, {
@@ -245,7 +264,7 @@ function getSocialStatusEvents(): Map<string, SocialStatusEvent> {
       continue;
     }
 
-    if (eventType === 'social_status') {
+    if (includeStatusEvents && eventType === 'social_status') {
       const userId = asString(item.userId);
       const statusRaw = asString(item.status);
       if (!userId || !statusRaw) continue;
@@ -270,7 +289,7 @@ function getSocialStatusEvents(): Map<string, SocialStatusEvent> {
     }
 
     // Build user roster from other app-level events.
-    if (eventType === 'thread_message') {
+    if (includeRosterEvents && eventType === 'thread_message') {
       const fromUserId = asString(item.fromUserId);
       const toUserId = asString(item.toUserId);
       const messageRaw =
@@ -295,30 +314,8 @@ function getSocialStatusEvents(): Map<string, SocialStatusEvent> {
       continue;
     }
 
-    if (eventType === 'friend_request' || eventType === 'friend_response') {
-      const fromUserId = asString(item.fromUserId);
-      const toUserId = asString(item.toUserId);
-      if (fromUserId && !latest.has(fromUserId)) {
-        latest.set(fromUserId, {
-          userId: fromUserId,
-          username: asString(item.fromUserName) ?? undefined,
-          avatarUrl: asString(item.fromUserAvatar) ?? undefined,
-          createdAt: readTimestampMs(row?.createdAt ?? row?.created_at),
-        });
-      }
-      if (toUserId && !latest.has(toUserId)) {
-        latest.set(toUserId, {
-          userId: toUserId,
-          username: asString(item.toUserName) ?? undefined,
-          avatarUrl: asString(item.toUserAvatar) ?? undefined,
-          createdAt: readTimestampMs(row?.createdAt ?? row?.created_at),
-        });
-      }
-      continue;
-    }
-
     // Global chat row payloads.
-    const senderId = asString(item.senderId);
+    const senderId = includeRosterEvents ? asString(item.senderId) : null;
     if (senderId && !latest.has(senderId)) {
       latest.set(senderId, {
         userId: senderId,
@@ -338,17 +335,24 @@ export function createBackendSocialRepository(
   return {
     listUsers(request) {
       const usersById = new Map<string, SocialUser>();
+      const useRailwayProfileFallback = !snapshot.socialReadLoaded;
 
       for (const user of snapshot.socialUsers) {
         if (!user?.id) continue;
         upsertUser(usersById, user.id, user);
       }
 
-      for (const [userId, user] of getSpacetimeUsersFromPublicProfileView()) {
-        upsertUser(usersById, userId, user);
+      if (useRailwayProfileFallback) {
+        for (const [userId, user] of getRailwayUsersFromPublicProfileView()) {
+          upsertUser(usersById, userId, user);
+        }
       }
 
-      const statusEvents = getSocialStatusEvents();
+      const statusEvents = getSocialStatusEvents({
+        includeProfileEvents: useRailwayProfileFallback,
+        includeRosterEvents: useRailwayProfileFallback,
+        includeStatusEvents: useRailwayProfileFallback,
+      });
       for (const [userId, event] of statusEvents) {
         const existing = usersById.get(userId) ?? withDefaultUser(userId);
         const nextStatus = normalizeSocialStatus(event.status, {
@@ -371,11 +375,6 @@ export function createBackendSocialRepository(
       }
 
       let users = Array.from(usersById.values());
-      if (users.length === 0 && lastKnownSocialUsers.length > 0) {
-        users = lastKnownSocialUsers;
-      } else if (users.length > 0) {
-        lastKnownSocialUsers = users;
-      }
 
       if (request?.statuses?.length) {
         users = users.filter((user) =>
@@ -406,46 +405,58 @@ export function createBackendSocialRepository(
       const nowIso = new Date().toISOString();
       const status = normalizeSocialStatus(request.status);
       const nextStatusText = asString(request.statusText);
-
-      let lastError: unknown = null;
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      let backendError: unknown = null;
+      if (client) {
         try {
-          const reducers = spacetimeDb.reducers as any;
-          const id = `social-status-${request.userId}-${Date.now()}`;
-          if (typeof reducers?.setSocialStatus === 'function') {
-            await reducers.setSocialStatus({
-              id,
+          await client.post('/api/social/update-status', {
+            ...request,
+            status,
+            statusText: nextStatusText,
+            updatedAtIsoUtc: nowIso,
+          });
+          requestBackendRefresh({
+            scopes: ['social', 'friendships'],
+            source: 'manual',
+            reason: 'social_status_updated_backend',
+          });
+        } catch (error) {
+          backendError = error;
+          if (IS_DEV_RUNTIME) {
+            console.warn('[data/social] Failed to persist status via backend', {
               userId: request.userId,
               status,
-              statusText: nextStatusText,
-              lastSeen: status === 'recent' || status === 'offline' ? nowIso : null,
-              username: null,
-              avatarUrl: null,
+              error: describeError(error),
             });
-          } else if (typeof reducers?.sendGlobalMessage === 'function') {
-            await reducers.sendGlobalMessage({
-              id,
-              roomId: `social:${request.userId}`,
-              item: JSON.stringify({
-                eventType: 'social_status',
-                userId: request.userId,
-                status,
-                isLive: status === 'live',
-                isOnline: statusIsOnline(status),
-                statusText: nextStatusText ?? undefined,
-                lastSeen: status === 'recent' || status === 'offline' ? nowIso : undefined,
-              }),
-            });
-          } else {
-            throw new Error('SpacetimeDB reducers unavailable for social status.');
           }
+        }
+      }
+
+      let lastError: unknown = null;
+      let railwayPersisted = false;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const reducers = railwayDb.reducers as any;
+          const id = `social-status-${request.userId}-${Date.now()}`;
+          if (typeof reducers?.setSocialStatus !== 'function') {
+            throw new Error('Railway reducers unavailable for social status.');
+          }
+          await reducers.setSocialStatus({
+            id,
+            userId: request.userId,
+            status,
+            statusText: nextStatusText,
+            lastSeen: status === 'recent' || status === 'offline' ? nowIso : null,
+            username: null,
+            avatarUrl: null,
+          });
 
           requestBackendRefresh({
             scopes: ['social', 'friendships'],
             source: 'manual',
-            reason: 'social_status_updated_spacetimedb',
+            reason: 'social_status_updated_railway',
           });
-          return;
+          railwayPersisted = true;
+          break;
         } catch (error) {
           lastError = error;
           if (attempt < 3) {
@@ -454,9 +465,9 @@ export function createBackendSocialRepository(
         }
       }
 
-      if (__DEV__) {
-        const telemetry = getSpacetimeTelemetrySnapshot();
-        console.warn('[data/social] Failed to persist status via SpacetimeDB', {
+      if (IS_DEV_RUNTIME) {
+        const telemetry = getRailwayTelemetrySnapshot();
+        console.warn('[data/social] Failed to persist status via Railway', {
           userId: request.userId,
           status,
           error: describeError(lastError),
@@ -465,51 +476,67 @@ export function createBackendSocialRepository(
         });
       }
 
-      await postSafe(client, '/social/update-status', request);
+      if (backendError && snapshot.socialReadLoaded) {
+        throw backendError instanceof Error ? backendError : new Error(describeError(backendError));
+      }
+      if (!railwayPersisted && lastError) {
+        throw toSocialPersistenceError('status', request.userId, backendError, lastError);
+      }
     },
     async setUserLive(request) {
       if (!request.userId) return;
 
       const status: 'live' | 'online' | 'recent' = request.isLive ? 'live' : 'online';
+      let backendError: unknown = null;
+      if (client) {
+        try {
+          await client.post('/api/social/set-live', {
+            ...request,
+            updatedAtIsoUtc: new Date().toISOString(),
+          });
+          requestBackendRefresh({
+            scopes: ['social', 'friendships'],
+            source: 'manual',
+            reason: 'social_live_updated_backend',
+          });
+        } catch (error) {
+          backendError = error;
+          if (IS_DEV_RUNTIME) {
+            console.warn('[data/social] Failed to persist live status via backend', {
+              userId: request.userId,
+              isLive: request.isLive,
+              error: describeError(error),
+            });
+          }
+        }
+      }
 
       let lastError: unknown = null;
+      let railwayPersisted = false;
       for (let attempt = 0; attempt < 4; attempt += 1) {
         try {
-          const reducers = spacetimeDb.reducers as any;
+          const reducers = railwayDb.reducers as any;
           const id = `social-live-${request.userId}-${Date.now()}`;
-          if (typeof reducers?.setSocialStatus === 'function') {
-            await reducers.setSocialStatus({
-              id,
-              userId: request.userId,
-              status,
-              statusText: null,
-              lastSeen: request.isLive ? null : new Date().toISOString(),
-              username: null,
-              avatarUrl: null,
-            });
-          } else if (typeof reducers?.sendGlobalMessage === 'function') {
-            await reducers.sendGlobalMessage({
-              id,
-              roomId: `social:${request.userId}`,
-              item: JSON.stringify({
-                eventType: 'social_status',
-                userId: request.userId,
-                status,
-                isLive: request.isLive,
-                isOnline: request.isLive || status === 'online',
-                lastSeen: request.isLive ? undefined : new Date().toISOString(),
-              }),
-            });
-          } else {
-            throw new Error('SpacetimeDB reducers unavailable for live status.');
+          if (typeof reducers?.setSocialStatus !== 'function') {
+            throw new Error('Railway reducers unavailable for live status.');
           }
+          await reducers.setSocialStatus({
+            id,
+            userId: request.userId,
+            status,
+            statusText: null,
+            lastSeen: request.isLive ? null : new Date().toISOString(),
+            username: null,
+            avatarUrl: null,
+          });
 
           requestBackendRefresh({
             scopes: ['social', 'friendships'],
             source: 'manual',
-            reason: 'social_live_updated_spacetimedb',
+            reason: 'social_live_updated_railway',
           });
-          return;
+          railwayPersisted = true;
+          break;
         } catch (error) {
           lastError = error;
           if (attempt < 3) {
@@ -518,9 +545,9 @@ export function createBackendSocialRepository(
         }
       }
 
-      if (__DEV__) {
-        const telemetry = getSpacetimeTelemetrySnapshot();
-        console.warn('[data/social] Failed to persist live status via SpacetimeDB', {
+      if (IS_DEV_RUNTIME) {
+        const telemetry = getRailwayTelemetrySnapshot();
+        console.warn('[data/social] Failed to persist live status via Railway', {
           userId: request.userId,
           isLive: request.isLive,
           error: describeError(lastError),
@@ -529,7 +556,12 @@ export function createBackendSocialRepository(
         });
       }
 
-      await postSafe(client, '/social/set-live', request);
+      if (backendError && snapshot.socialReadLoaded) {
+        throw backendError instanceof Error ? backendError : new Error(describeError(backendError));
+      }
+      if (!railwayPersisted && lastError) {
+        throw toSocialPersistenceError('live', request.userId, backendError, lastError);
+      }
     },
   };
 }

@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
-import { StyleProp, StyleSheet, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 
 import { colors, spacing } from '../theme';
 
@@ -18,12 +18,11 @@ export function AppScreen({ children, style, noPadding, edges }: AppScreenProps)
     <SafeAreaView
       style={[
         styles.container,
-        !noPadding && styles.withPadding,
         style,
       ]}
       edges={edges ?? DEFAULT_EDGES}
     >
-      {children}
+      <View style={[styles.content, !noPadding && styles.withPadding]}>{children}</View>
     </SafeAreaView>
   );
 }
@@ -33,8 +32,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  content: {
+    flex: 1,
+  },
   withPadding: {
     padding: spacing.lg,
   },
 });
-

@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useMemo } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { AppText, CashIcon } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
@@ -25,10 +26,15 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
 
   const formattedCash = useMemo(() => formatCash(item.cashAmount), [item.cashAmount]);
   const avatarUri = normalizeImageUri(item.avatarUrl);
+  const usernameLabel = item.username.trim().length > 0 ? `@${item.username}` : 'Open profile';
 
   return (
     <Pressable
-      style={[styles.container, item.isCurrentUser && styles.currentUser]}
+      style={({ pressed }) => [
+        styles.container,
+        item.isCurrentUser && styles.currentUser,
+        pressed && styles.pressed,
+      ]}
       onPress={handlePress}
     >
       <View style={[styles.rankBadge, { backgroundColor: rankColors.background }]}>
@@ -44,21 +50,38 @@ function LeaderboardItemRowComponent({ item, onPress }: LeaderboardItemRowProps)
       )}
 
       <View style={styles.infoContainer}>
-        <AppText variant="bodyBold" numberOfLines={1} style={styles.displayName}>
-          {item.displayName}
-        </AppText>
+        <View style={styles.titleRow}>
+          <AppText variant="bodyBold" numberOfLines={1} style={styles.displayName}>
+            {item.displayName || item.username || item.id}
+          </AppText>
+          {item.isCurrentUser ? (
+            <View style={[styles.tag, styles.currentUserTag]}>
+              <AppText variant="tinyBold" style={styles.currentUserTagText}>
+                YOU
+              </AppText>
+            </View>
+          ) : null}
+          {item.isFriend ? (
+            <View style={styles.tag}>
+              <AppText variant="tinyBold" style={styles.tagText}>
+                FRIEND
+              </AppText>
+            </View>
+          ) : null}
+        </View>
         <AppText variant="small" secondary numberOfLines={1}>
-          @{item.username}
+          {usernameLabel}
         </AppText>
       </View>
 
-      <View style={styles.statsContainer}>
+      <View style={styles.trailingColumn}>
         <View style={styles.cashPill}>
           <CashIcon size={14} color={colors.accentCash} />
           <AppText variant="smallBold" style={styles.cashCount}>
             {formattedCash}
           </AppText>
         </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
       </View>
     </Pressable>
   );
@@ -75,25 +98,28 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
     marginHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    gap: spacing.md,
+  },
+  pressed: {
+    opacity: 0.88,
   },
   currentUser: {
-    borderWidth: 1,
     borderColor: colors.accentPrimary,
     backgroundColor: colors.accentPrimarySubtle,
   },
   rankBadge: {
-    width: 28,
-    height: 28,
+    width: 36,
+    height: 36,
     borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: spacing.md,
   },
   avatar: {
-    width: 48,
-    height: 48,
+    width: 52,
+    height: 52,
     borderRadius: radius.full,
-    marginRight: spacing.md,
     backgroundColor: colors.surface,
   },
   avatarFallback: {
@@ -102,13 +128,38 @@ const styles = StyleSheet.create({
   },
   infoContainer: {
     flex: 1,
-    marginRight: spacing.sm,
+    gap: spacing.xxs,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
   displayName: {
-    marginBottom: spacing.xxs,
+    flexShrink: 1,
   },
-  statsContainer: {
+  tag: {
+    paddingHorizontal: spacing.xsPlus,
+    paddingVertical: spacing.xxs,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  currentUserTag: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
+  },
+  tagText: {
+    color: colors.textSecondary,
+  },
+  currentUserTagText: {
+    color: colors.textPrimary,
+  },
+  trailingColumn: {
     alignItems: 'flex-end',
+    gap: spacing.xs,
   },
   cashPill: {
     flexDirection: 'row',

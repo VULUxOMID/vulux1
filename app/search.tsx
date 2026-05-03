@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
 
 import { Ionicons } from '@expo/vector-icons';
 
-import { AppScreen, AppText, Avatar } from '../src/components';
+import { AppScreen, AppText, Avatar, PageHeader } from '../src/components';
 import { useFriends } from '../src/context';
 import { useLive } from '../src/context/LiveContext';
 import { useProfile } from '../src/context/ProfileContext';
@@ -16,7 +16,7 @@ import { hapticTap } from '../src/utils/haptics';
 import type { LiveUser } from '../src/features/liveroom/types';
 import type { ListSearchIndexResponse } from '../src/data/contracts';
 import { useAppIsActive } from '../src/hooks/useAppIsActive';
-import { subscribeBootstrap } from '../src/lib/spacetime';
+import { subscribeBootstrap } from '../src/lib/railwayRuntime';
 
 type SearchTab = 'All' | 'Friends' | 'Live' | 'People' | 'Chat';
 type SearchItemType = Exclude<SearchTab, 'All'>;
@@ -237,6 +237,17 @@ export default function SearchScreen() {
   return (
     <AppScreen noPadding>
       <View style={styles.container}>
+        <PageHeader
+          eyebrow={addFriendsMode ? 'Social' : 'Explore'}
+          title={addFriendsMode ? 'Add Friends' : 'Search'}
+          subtitle={
+            addFriendsMode
+              ? 'Find people and open their profile to send a request.'
+              : 'Search live rooms, people, chats, and your network.'
+          }
+          onBack={() => router.back()}
+        />
+
         <View style={styles.searchRow}>
           <View style={[styles.inputWrap, styles.searchBarContainer]}>
             <Ionicons name="search" size={18} color={colors.textMuted} />
@@ -254,11 +265,6 @@ export default function SearchScreen() {
               </Pressable>
             )}
           </View>
-          <Pressable onPress={() => router.back()} style={styles.cancelButton}>
-            <AppText variant="body" style={styles.cancelText}>
-              Cancel
-            </AppText>
-          </Pressable>
         </View>
 
         {addFriendsMode ? (
@@ -339,13 +345,14 @@ export default function SearchScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: spacing.lg,
     paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
   },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    marginTop: spacing.lg,
   },
   inputWrap: {
     flex: 1,
@@ -353,12 +360,12 @@ const styles = StyleSheet.create({
   searchBarContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: 10,
+    backgroundColor: 'rgba(17,17,19,0.92)',
+    borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    height: 36,
-    paddingHorizontal: spacing.sm,
+    borderColor: 'rgba(255,255,255,0.08)',
+    height: 48,
+    paddingHorizontal: spacing.md,
     gap: spacing.sm,
   },
   input: {
@@ -367,20 +374,12 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     fontSize: 15,
   },
-  cancelButton: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-  },
-  cancelText: {
-    color: colors.textPrimary,
-    opacity: 0.9,
-  },
   tabsWrapper: {
-    marginHorizontal: -spacing.lg,
+    marginHorizontal: -spacing.sm,
     marginTop: spacing.md,
   },
   tabsContent: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.sm,
     gap: spacing.sm,
   },
   modeHint: {
@@ -393,18 +392,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   tabPillActive: {
-    backgroundColor: colors.textPrimary,
-    borderColor: colors.textPrimary,
+    backgroundColor: colors.accentPrimarySubtle,
+    borderColor: colors.accentPrimary,
   },
   tabPillInactive: {
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.borderSubtle,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   tabText: {
     fontWeight: '600',
   },
   tabTextActive: {
-    color: colors.background,
+    color: colors.accentPrimary,
   },
   tabTextInactive: {
     color: colors.textPrimary,
@@ -417,9 +416,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(17,17,19,0.9)',
     gap: spacing.md,
+    marginBottom: spacing.sm,
   },
   resultContent: {
     flex: 1,
@@ -462,7 +465,7 @@ const styles = StyleSheet.create({
     borderColor: colors.background,
   },
   resultRowPressed: {
-    opacity: 0.75,
+    opacity: 0.82,
   },
   resultMeta: {
     flexDirection: 'row',

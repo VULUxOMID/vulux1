@@ -27,11 +27,11 @@ import {
 } from 'react-native';
 
 import { AppScreen, AppText } from '../src/components';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
 import { toast } from '../src/components/Toast';
 import { useUserProfile, UserProfilePhoto } from '../src/context/UserProfileContext';
 import { useAppIsActive } from '../src/hooks/useAppIsActive';
-import { subscribeBootstrap } from '../src/lib/spacetime';
+import { subscribeBootstrap } from '../src/lib/railwayRuntime';
 import { colors, radius, spacing } from '../src/theme';
 import { uploadMediaAsset } from '../src/utils/mediaUpload';
 
@@ -58,6 +58,17 @@ const CROP_MAX_SCALE = 3;
 const CROP_FRAME_RATIO = PHOTO_HEIGHT / PHOTO_SIZE;
 const PROFILE_UPLOAD_TARGET_WIDTH = 960;
 const PROFILE_UPLOAD_JPEG_QUALITY = 0.78;
+
+function isDevRuntime(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__;
+}
+
+function logManagePhotosDiagnostic(message: string): void {
+  if (!isDevRuntime()) {
+    return;
+  }
+  console.log(message);
+}
 
 const REORDER_LAYOUT_ANIM = {
   duration: 300,
@@ -208,7 +219,7 @@ export default function ManagePhotosScreen() {
   const commitPhotos = (nextPhotos: Photo[]) => {
     photosRef.current = nextPhotos;
     updateUserProfile({ photos: nextPhotos });
-    console.log(`[manage-photos] ui refresh -> committed ${nextPhotos.length} photos`);
+    logManagePhotosDiagnostic(`[manage-photos] ui refresh -> committed ${nextPhotos.length} photos`);
   };
 
   const handleBack = () => {
@@ -335,10 +346,10 @@ export default function ManagePhotosScreen() {
     }
 
     try {
-      console.log('[manage-photos] opening photo library');
+      logManagePhotosDiagnostic('[manage-photos] opening photo library');
       const hasAccess = await ensureMediaLibraryAccess();
       if (!hasAccess) {
-        console.log('[manage-photos] photo library access not granted');
+        logManagePhotosDiagnostic('[manage-photos] photo library access not granted');
         return;
       }
 
@@ -350,10 +361,10 @@ export default function ManagePhotosScreen() {
       });
 
       if (result.canceled || !result.assets.length) {
-        console.log('[manage-photos] photo library selection canceled');
+        logManagePhotosDiagnostic('[manage-photos] photo library selection canceled');
         return;
       }
-      console.log('[manage-photos] photo selected from library');
+      logManagePhotosDiagnostic('[manage-photos] photo selected from library');
       openCropEditor(result.assets[0]);
     } catch (error) {
       console.error('[manage-photos] could not open photo library', error);
@@ -368,10 +379,10 @@ export default function ManagePhotosScreen() {
     }
 
     try {
-      console.log('[manage-photos] opening selfie camera');
+      logManagePhotosDiagnostic('[manage-photos] opening selfie camera');
       const hasAccess = await ensureCameraAccess();
       if (!hasAccess) {
-        console.log('[manage-photos] camera access not granted');
+        logManagePhotosDiagnostic('[manage-photos] camera access not granted');
         return;
       }
 
@@ -383,10 +394,10 @@ export default function ManagePhotosScreen() {
       });
 
       if (result.canceled || !result.assets.length) {
-        console.log('[manage-photos] selfie capture canceled');
+        logManagePhotosDiagnostic('[manage-photos] selfie capture canceled');
         return;
       }
-      console.log('[manage-photos] selfie captured');
+      logManagePhotosDiagnostic('[manage-photos] selfie captured');
       openCropEditor(result.assets[0]);
     } catch (error) {
       console.error('[manage-photos] could not open camera', error);
@@ -433,7 +444,7 @@ export default function ManagePhotosScreen() {
         contentType: 'image/jpeg',
         mediaType: 'profile',
       });
-      console.log('[manage-photos] upload flow -> r2 upload complete');
+      logManagePhotosDiagnostic('[manage-photos] upload flow -> r2 upload complete');
 
       const finalizedPhotoId = `photo-${Date.now()}`;
       const nextPhotos: Photo[] = photosRef.current.map((photo) =>
@@ -445,7 +456,7 @@ export default function ManagePhotosScreen() {
           : photo,
       );
       commitPhotos(nextPhotos);
-      console.log('[manage-photos] upload flow -> photo available in UI');
+      logManagePhotosDiagnostic('[manage-photos] upload flow -> photo available in UI');
       toast.success('Photo uploaded');
     } catch (error) {
       const rollbackPhotos = photosRef.current.filter((photo) => photo.id !== pendingPhotoId);
@@ -499,7 +510,7 @@ export default function ManagePhotosScreen() {
         },
       );
 
-      console.log('[manage-photos] upload flow -> cropped asset ready');
+      logManagePhotosDiagnostic('[manage-photos] upload flow -> cropped asset ready');
       const pendingPhotoId = `photo-pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const nextPhotos: Photo[] = [
         ...photosRef.current,
@@ -559,7 +570,7 @@ export default function ManagePhotosScreen() {
     }
 
     pendingAddSourceRef.current = null;
-    console.log(`[manage-photos] source sheet dismissed, launching ${nextSource}`);
+    logManagePhotosDiagnostic(`[manage-photos] source sheet dismissed, launching ${nextSource}`);
 
     if (nextSource === 'library') {
       void pickFromLibrary();
@@ -569,7 +580,7 @@ export default function ManagePhotosScreen() {
   };
 
   const requestLibraryPhoto = () => {
-    console.log('[manage-photos] photo from gallery tapped');
+    logManagePhotosDiagnostic('[manage-photos] photo from gallery tapped');
     pendingAddSourceRef.current = 'library';
     setIsSourceSheetVisible(false);
 
@@ -579,7 +590,7 @@ export default function ManagePhotosScreen() {
   };
 
   const requestSelfie = () => {
-    console.log('[manage-photos] take a selfie tapped');
+    logManagePhotosDiagnostic('[manage-photos] take a selfie tapped');
     pendingAddSourceRef.current = 'camera';
     setIsSourceSheetVisible(false);
 

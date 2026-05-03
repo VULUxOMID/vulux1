@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import Slider from '@react-native-community/slider';
-import { useAuth } from '../../src/auth/spacetimeSession';
+import { useAuth } from '../../src/auth/clerkSession';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   FlatList,
@@ -35,13 +36,15 @@ import { hapticConfirm, hapticTap, hapticWarn } from '../../src/utils/haptics';
 import { toast } from '../../src/components/Toast';
 import { useProfile } from '../../src/context/ProfileContext';
 import { useWallet } from '../../src/context/WalletContext';
+import { apiClient } from '../../src/data/api';
 import { useRepositories } from '../../src/data/provider';
 import type { SocialUser } from '../../src/data/contracts';
 import type { LiveUser } from '../../src/features/liveroom/types';
 import { requestBackendRefresh } from '../../src/data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../src/hooks/useAppIsActive';
-import { subscribeConversation } from '../../src/lib/spacetime';
+import { subscribeConversation } from '../../src/lib/railwayRuntime';
 import { uploadMediaAsset } from '../../src/utils/mediaUpload';
+import { resolveThreadRouteTargets } from '../../src/features/chat/threadRouteTargets';
 
 type AnchorRect = {
   x: number;
@@ -516,7 +519,15 @@ const UserMessageRow = React.memo(function UserMessageRow({
 });
 
 export default function ChatDetailScreen() {
-  const { userId } = useLocalSearchParams<{ userId: string }>();
+  const {
+    userId,
+    messageId: routeMessageId,
+    replyToMessageId: routeReplyToMessageId,
+  } = useLocalSearchParams<{
+    userId: string;
+    messageId?: string | string[];
+    replyToMessageId?: string | string[];
+  }>();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
   const { userId: viewerUserId, isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
@@ -553,12 +564,13 @@ export default function ChatDetailScreen() {
   const [cashAmountInput, setCashAmountInput] = useState('');
   const [cashNoteInput, setCashNoteInput] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [optimisticBlockedByViewer, setOptimisticBlockedByViewer] = useState(false);
+  const [blockRequestPending, setBlockRequestPending] = useState(false);
   
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<AnchorRect | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
-  const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   
   const [showSearch, setShowSearch] = useState(false);
@@ -579,6 +591,8 @@ export default function ChatDetailScreen() {
   const didAutoScrollOnOpenRef = useRef(false);
   const previousMessageCountRef = useRef(0);
   const scrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const handledRouteFocusTargetRef = useRef<string | null>(null);
+  const handledRouteReplyTargetRef = useRef<string | null>(null);
   const repositoryThreadMessages = useMemo(() => {
     if (!resolvedOtherUserId) return [];
     return messagesRepo
@@ -656,10 +670,14 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     setLocalMessages([]);
     setIsLoading(true);
+    setOptimisticBlockedByViewer(false);
+    setBlockRequestPending(false);
     didAutoScrollOnOpenRef.current = false;
     shouldAutoScrollRef.current = true;
     isUserScrollingRef.current = false;
     previousMessageCountRef.current = 0;
+    handledRouteFocusTargetRef.current = null;
+    handledRouteReplyTargetRef.current = null;
     clearScheduledScrolls();
   }, [clearScheduledScrolls, resolvedOtherUserId]);
 
@@ -750,6 +768,37 @@ export default function ChatDetailScreen() {
     setTimeout(() => setHighlightId(null), 900);
   }, [messages]);
 
+  const routeTargets = useMemo(
+    () =>
+      resolveThreadRouteTargets(messages, {
+        messageId: routeMessageId,
+        replyToMessageId: routeReplyToMessageId,
+      }),
+    [messages, routeMessageId, routeReplyToMessageId],
+  );
+
+  useEffect(() => {
+    if (isLoading || !resolvedOtherUserId) {
+      return;
+    }
+
+    if (routeTargets.focusMessage) {
+      const focusKey = `${resolvedOtherUserId}::${routeTargets.focusMessage.id}`;
+      if (handledRouteFocusTargetRef.current !== focusKey) {
+        jumpToMessage(routeTargets.focusMessage.id);
+        handledRouteFocusTargetRef.current = focusKey;
+      }
+    }
+
+    if (routeTargets.replyToMessage) {
+      const replyKey = `${resolvedOtherUserId}::${routeTargets.replyToMessage.id}`;
+      if (handledRouteReplyTargetRef.current !== replyKey) {
+        setReplyTo(routeTargets.replyToMessage);
+        handledRouteReplyTargetRef.current = replyKey;
+      }
+    }
+  }, [isLoading, jumpToMessage, resolvedOtherUserId, routeTargets.focusMessage, routeTargets.replyToMessage]);
+
   const closeMenu = useCallback(() => {
     setMenuVisible(false);
     setMenuAnchor(null);
@@ -767,32 +816,13 @@ export default function ChatDetailScreen() {
     if (!selectedMessage) return;
     const msg = selectedMessage;
     if (id === 'reply') { hapticTap(); setReplyTo(msg); closeMenu(); return; }
-    if (id === 'edit') { hapticTap(); setReplyTo(null); setEditing(msg); setText(msg.text); closeMenu(); return; }
-    if (id === 'delete') { hapticWarn(); setLocalMessages(prev => prev.filter(m => m.id !== msg.id)); closeMenu(); return; }
+    if (id === 'edit' || id === 'delete') {
+      hapticWarn();
+      toast.warning('Edit and delete are not supported in DMs yet.');
+      closeMenu();
+      return;
+    }
     if (id === 'copy') { hapticTap(); Clipboard.setStringAsync(msg.text); closeMenu(); }
-  }, [closeMenu, selectedMessage]);
-
-  const handleReaction = useCallback((emoji: string) => {
-    if (!selectedMessage) return;
-    hapticTap();
-    setLocalMessages(prev => prev.map(msg => {
-      if (msg.id !== selectedMessage.id) return msg;
-      const currentReactions = msg.reactions || [];
-      const existingIndex = currentReactions.findIndex(r => r.emoji === emoji);
-      let newReactions;
-      if (existingIndex >= 0) {
-        const existing = currentReactions[existingIndex];
-        if (existing.isMine) {
-           if (existing.count === 1) newReactions = currentReactions.filter(r => r.emoji !== emoji);
-           else { newReactions = [...currentReactions]; newReactions[existingIndex] = { ...existing, count: existing.count - 1, isMine: false }; }
-        } else {
-           newReactions = [...currentReactions];
-           newReactions[existingIndex] = { ...existing, count: existing.count + 1, isMine: true };
-        }
-      } else newReactions = [...currentReactions, { emoji, count: 1, isMine: true }];
-      return { ...msg, reactions: newReactions };
-    }));
-    closeMenu();
   }, [closeMenu, selectedMessage]);
 
   const sendMessage = (
@@ -800,12 +830,6 @@ export default function ChatDetailScreen() {
     media?: ChatMessage['media'],
     options?: { type?: ChatMessage['type']; amount?: number },
   ) => {
-    if (editing && !media && !options?.type) {
-      setLocalMessages(prev => prev.map(m => m.id === editing.id ? { ...m, text: content, edited: true } : m));
-      setEditing(null);
-      setText('');
-      return;
-    }
     const newMsg: ChatMessage = {
       id: createClientMessageId(),
       user: 'You',
@@ -887,6 +911,12 @@ export default function ChatDetailScreen() {
   };
 
   const handleSend = () => {
+    if (isConversationBlocked) {
+      toast.warning(
+        isBlockedByViewer ? 'Unblock this user to send messages.' : 'Messaging is unavailable for this user.',
+      );
+      return;
+    }
     setComposerMenuVisible(false);
     const v = text.trim();
     if (!v) return;
@@ -899,6 +929,14 @@ export default function ChatDetailScreen() {
   };
 
   const handleComposerMenuToggle = () => {
+    if (isConversationBlocked) {
+      toast.warning(
+        isBlockedByViewer
+          ? 'Unblock this user to send attachments or cash.'
+          : 'Messaging is unavailable for this user.',
+      );
+      return;
+    }
     hapticTap();
     setComposerMenuVisible((prev) => {
       const next = !prev;
@@ -910,6 +948,12 @@ export default function ChatDetailScreen() {
   };
 
   const handlePickAndSendImage = async () => {
+    if (isConversationBlocked) {
+      toast.warning(
+        isBlockedByViewer ? 'Unblock this user to send attachments.' : 'Messaging is unavailable for this user.',
+      );
+      return;
+    }
     closeComposerMenu();
     hapticTap();
 
@@ -966,18 +1010,24 @@ export default function ChatDetailScreen() {
   };
 
   const openCashSheet = () => {
+    if (isConversationBlocked) {
+      toast.warning(
+        isBlockedByViewer ? 'Unblock this user to send cash.' : 'Messaging is unavailable for this user.',
+      );
+      return;
+    }
     closeComposerMenu();
     hapticTap();
     setCashSheetVisible(true);
   };
 
-  const handleSendCash = () => {
+  const handleSendCash = async () => {
     const amount = Number.parseInt(cashAmountInput, 10);
     if (!Number.isFinite(amount) || amount <= 0) {
       toast.warning('Enter a valid cash amount.');
       return;
     }
-    if (!spendCash(amount)) {
+    if (!(await spendCash(amount, { reason: 'Cash message send', source: 'chat_cash_message' }))) {
       hapticWarn();
       toast.error('Not enough cash balance.');
       return;
@@ -1053,6 +1103,50 @@ export default function ChatDetailScreen() {
     [showProfile, socialUsers],
   );
 
+  const confirmBlockUser = useCallback(() => {
+    if (!resolvedOtherUserId || resolvedOtherUserId === 'unknown-user' || blockRequestPending) {
+      return;
+    }
+
+    Alert.alert(
+      `Block ${(resolvedRouteUser?.username ?? routeUserToken) || 'this user'}?`,
+      'They will not be able to send new messages or friend activity with you until you unblock them.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: () => {
+            setBlockRequestPending(true);
+            void apiClient
+              .post('/api/social/block', {
+                targetUserId: resolvedOtherUserId,
+                updatedAtIsoUtc: new Date().toISOString(),
+              })
+              .then(() => {
+                setOptimisticBlockedByViewer(true);
+                setComposerMenuVisible(false);
+                setCashSheetVisible(false);
+                setReplyTo(null);
+                requestBackendRefresh({
+                  scopes: ['social', 'friendships', 'notifications', 'messages', 'conversations', 'counts'],
+                  source: 'manual',
+                  reason: 'social_user_blocked',
+                });
+                toast.success('User blocked.');
+              })
+              .catch((error) => {
+                toast.error(error instanceof Error ? error.message : 'Could not block user.');
+              })
+              .finally(() => {
+                setBlockRequestPending(false);
+              });
+          },
+        },
+      ],
+    );
+  }, [blockRequestPending, resolvedOtherUserId, resolvedRouteUser?.username, routeUserToken]);
+
   const renderItem = useCallback(({ item }: { item: ChatMessage }) => {
     if (item.type === 'system') return <View style={styles.systemMessageRow}><AppText variant="small" secondary style={styles.systemMessageText}>{item.text}</AppText></View>;
     return (
@@ -1088,6 +1182,9 @@ export default function ChatDetailScreen() {
     };
   }, [resolvedOtherUserId, resolvedRouteUser, routeUserToken]);
   const otherUserPresence = useMemo(() => resolveSocialPresence(otherUser), [otherUser]);
+  const isBlockedByViewer = optimisticBlockedByViewer || otherUser.blockedByViewer === true;
+  const isBlockedByOther = otherUser.blockedByOther === true;
+  const isConversationBlocked = isBlockedByViewer || isBlockedByOther;
 
   const parsedCashAmount = Number.parseInt(cashAmountInput, 10);
   const hasValidCashAmount = Number.isFinite(parsedCashAmount) && parsedCashAmount > 0;
@@ -1137,9 +1234,22 @@ export default function ChatDetailScreen() {
               </View>
             </View>
           </Pressable>
-          <Pressable style={styles.headerIconButton} onPress={() => setShowSearch(!showSearch)}>
-            <Ionicons name="search" size={20} color={colors.textSecondary} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable style={styles.headerIconButton} onPress={() => setShowSearch(!showSearch)}>
+              <Ionicons name="search" size={20} color={colors.textSecondary} />
+            </Pressable>
+            <Pressable
+              style={styles.headerIconButton}
+              onPress={confirmBlockUser}
+              disabled={isBlockedByViewer || isBlockedByOther || blockRequestPending}
+            >
+              <Ionicons
+                name={isBlockedByViewer || isBlockedByOther ? 'shield-checkmark-outline' : 'ban-outline'}
+                size={20}
+                color={isBlockedByViewer || isBlockedByOther ? colors.textMuted : colors.textSecondary}
+              />
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -1210,6 +1320,25 @@ export default function ChatDetailScreen() {
         )}
 
         <View style={[styles.composerContainer, { paddingBottom: insets.bottom + 2 }]} onLayout={(e) => setComposerH(Math.round(e.nativeEvent.layout.height))}>
+          {isConversationBlocked ? (
+            <View style={styles.blockedBanner}>
+              <View style={styles.blockedBannerTextWrap}>
+                <AppText style={styles.blockedBannerTitle}>
+                  {isBlockedByViewer ? 'You blocked this user' : 'Messaging unavailable'}
+                </AppText>
+                <AppText style={styles.blockedBannerText}>
+                  {isBlockedByViewer
+                    ? 'Unblock them from Blocked Users if you want to send messages again.'
+                    : 'One of you has blocked the other, so new messages are disabled.'}
+                </AppText>
+              </View>
+              {isBlockedByViewer ? (
+                <Pressable style={styles.blockedBannerButton} onPress={() => router.push('/blocked-users')}>
+                  <AppText style={styles.blockedBannerButtonText}>Manage</AppText>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
           {replyTo && (
             <View style={styles.replyBar}>
               <Pressable onPress={() => jumpToMessage(replyTo.id)} style={styles.replyBarContent}>
@@ -1217,12 +1346,6 @@ export default function ChatDetailScreen() {
                 <AppText numberOfLines={1} style={styles.replyBarSnippet}>{replyTo.text}</AppText>
               </Pressable>
               <Pressable onPress={() => setReplyTo(null)} style={styles.replyBarClose}><Ionicons name="close" size={18} color={colors.textMuted} /></Pressable>
-            </View>
-          )}
-          {editing && (
-            <View style={styles.composerBar}>
-              <Pressable onPress={() => { setEditing(null); setText(''); }} style={styles.composerX}><Ionicons name="close" size={18} color={colors.textSecondary} /></Pressable>
-              <AppText style={styles.composerTitle}>Editing Message</AppText>
             </View>
           )}
           <View style={styles.chatInputRow}>
@@ -1236,11 +1359,18 @@ export default function ChatDetailScreen() {
             <TextInput
               value={text}
               onChangeText={handleChange}
+              editable={!isConversationBlocked}
               onFocus={() => {
                 shouldAutoScrollRef.current = true;
                 scrollToBottomWithRetries(true);
               }}
-              placeholder={`Message @${otherUser.username}`}
+              placeholder={
+                isConversationBlocked
+                  ? isBlockedByViewer
+                    ? `Unblock @${otherUser.username} to message again`
+                    : 'Messaging unavailable'
+                  : `Message @${otherUser.username}`
+              }
               placeholderTextColor={colors.textMuted}
               style={styles.chatInput}
               multiline
@@ -1248,6 +1378,7 @@ export default function ChatDetailScreen() {
             {text.length === 0 ? (
               <Pressable
                 style={styles.chatIconButton}
+                disabled={isConversationBlocked}
                 onPress={() => {
                   closeComposerMenu();
                   hapticTap();
@@ -1256,7 +1387,11 @@ export default function ChatDetailScreen() {
                 <Ionicons name="mic" size={20} color={colors.textSecondary} />
               </Pressable>
             ) : (
-              <Pressable style={styles.chatSend} onPress={handleSend}>
+              <Pressable
+                style={[styles.chatSend, isConversationBlocked && styles.chatSendDisabled]}
+                onPress={handleSend}
+                disabled={isConversationBlocked}
+              >
                 <Ionicons name="arrow-up" size={20} color={colors.textPrimary} />
               </Pressable>
             )}
@@ -1392,7 +1527,15 @@ export default function ChatDetailScreen() {
         </View>
       </Modal>
 
-      <MessageActionMenu visible={menuVisible} anchor={menuAnchor} isMine={selectedMessage?.senderId === 'me'} onClose={closeMenu} onAction={handleAction} onReaction={handleReaction} />
+      <MessageActionMenu
+        visible={menuVisible}
+        anchor={menuAnchor}
+        isMine={selectedMessage?.senderId === 'me'}
+        allowOwnMessageEdits={false}
+        allowReactions={false}
+        onClose={closeMenu}
+        onAction={handleAction}
+      />
     </View>
   );
 }
@@ -1402,6 +1545,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surfaceAlt },
   header: { backgroundColor: colors.surfaceAlt, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle, paddingHorizontal: 16, paddingBottom: 12 },
   headerRow: { flexDirection: 'row', alignItems: 'center' },
+  headerActions: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 8 },
   backButton: { padding: 4, marginRight: 8 },
   headerInfo: {
     flex: 1,
@@ -1460,15 +1604,36 @@ const styles = StyleSheet.create({
   replyToName: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   replyPreview: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   composerContainer: { paddingTop: 4, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)', backgroundColor: colors.surfaceAlt, paddingHorizontal: spacing.lg },
+  blockedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: radius.lg,
+  },
+  blockedBannerTextWrap: { flex: 1, gap: 2 },
+  blockedBannerTitle: { color: colors.textPrimary, fontSize: 13, fontWeight: '700' },
+  blockedBannerText: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
+  blockedBannerButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  blockedBannerButtonText: { color: colors.textPrimary, fontSize: 12, fontWeight: '600' },
   replyBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', padding: 8, borderRadius: radius.md, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: colors.accentPrimary },
   replyBarContent: { flex: 1 },
   replyBarText: { fontSize: 12, color: colors.textSecondary },
   replyBarName: { fontWeight: '700', color: colors.textPrimary },
   replyBarSnippet: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   replyBarClose: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  composerBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', padding: 8, borderRadius: radius.md, marginBottom: 8, gap: 8 },
-  composerX: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  composerTitle: { color: colors.textMuted, flex: 1 },
   chatInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   attachmentMenuOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1536,6 +1701,7 @@ const styles = StyleSheet.create({
   chatIconButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.borderSubtle, backgroundColor: colors.surface },
   chatInput: { flex: 1, backgroundColor: colors.surface, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, lineHeight: 20, minHeight: 44, maxHeight: 120, color: colors.textPrimary, borderWidth: 1, borderColor: colors.borderSubtle },
   chatSend: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accentPrimarySoft, borderWidth: 1, borderColor: colors.borderSubtle },
+  chatSendDisabled: { opacity: 0.45 },
   cashSheetOverlay: {
     flex: 1,
     justifyContent: 'flex-end',

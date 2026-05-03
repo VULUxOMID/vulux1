@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 import { AppScreen, AppText } from '../src/components';
-import { useAuth as useSessionAuth } from '../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../src/auth/clerkSession';
 import { useUserProfile } from '../src/context/UserProfileContext';
 import { useSocialRepo } from '../src/data/provider';
 import { colors, radius, spacing } from '../src/theme';

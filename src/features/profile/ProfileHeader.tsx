@@ -12,10 +12,10 @@ type ProfileHeaderProps = {
 export function ProfileHeader({ onSettingsPress }: ProfileHeaderProps) {
   return (
     <View style={styles.container}>
-      {/* Spacer for layout balance */}
-      <View style={styles.spacer} />
-
-      <AppText variant="h3" style={styles.title}>Profile</AppText>
+      <View style={styles.titleBlock}>
+        <AppText variant="micro" style={styles.eyebrow}>Your space</AppText>
+        <AppText variant="h2" style={styles.title}>Profile</AppText>
+      </View>
 
       <Pressable onPress={onSettingsPress} style={styles.settingsButton}>
         <Ionicons name="settings-outline" size={26} color={colors.textSecondary} />
@@ -29,20 +29,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.md,
   },
-  spacer: {
-    width: spacing.xxxl,
-    height: spacing.xxxl,
+  titleBlock: {
+    gap: spacing.xxs,
   },
   title: {
     color: colors.textPrimary,
   },
+  eyebrow: {
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
   settingsButton: {
-    width: spacing.xxxl,
-    height: spacing.xxxl,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
 });

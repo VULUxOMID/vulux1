@@ -5,6 +5,8 @@ export const hapticTap = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.L
 export const hapticConfirm = () =>
   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
+export const hapticSuccess = hapticConfirm;
+
 export const hapticWarn = () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
 export const hapticImpact = (style: 'light' | 'medium' | 'heavy' | 'error' = 'medium') => {
@@ -16,7 +18,6 @@ export const hapticImpact = (style: 'light' | 'medium' | 'heavy' | 'error' = 'me
   };
   return Haptics.impactAsync(styles[style]);
 };
-
 
 
 

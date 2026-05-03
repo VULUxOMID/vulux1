@@ -83,12 +83,12 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     gap: spacing.sm,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     padding: spacing.xs,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.md,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.lgMinus,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   tabItem: {
     flex: 1,
@@ -101,10 +101,12 @@ const styles = StyleSheet.create({
   },
   tabItemActive: {
     backgroundColor: colors.surface,
-    shadowColor: colors.background,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    shadowColor: colors.accentPrimary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
     elevation: 3,
   },
   tabLabel: {
@@ -113,5 +115,6 @@ const styles = StyleSheet.create({
   },
   tabLabelActive: {
     color: colors.textPrimary,
+    fontWeight: '700',
   },
 });

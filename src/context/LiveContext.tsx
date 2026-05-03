@@ -8,7 +8,11 @@ import React, {
   useRef,
   type ReactNode,
 } from 'react';
-import { useAuth as useSessionAuth, useUser as useSessionUser } from '../auth/spacetimeSession';
+import {
+  readCurrentAuthAccessToken,
+  useAuth as useSessionAuth,
+  useUser as useSessionUser,
+} from '../auth/clerkSession';
 
 import { type LiveItem } from '../features/home/LiveSection';
 import {
@@ -20,14 +24,22 @@ import {
 } from '../features/liveroom/types';
 import { liveSessionUser, createChatMessage } from '../features/liveroom/liveSession';
 import { createRoomFromLive } from '../features/liveroom/roomFactory';
+import { getConfiguredBackendBaseUrl } from '../config/backendBaseUrl';
+import { getRailwayAuthSnapshot } from '../lib/railwayRuntime';
 import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
 import { spendFuelTick } from '../data/adapters/backend/walletMutations';
 import { useRepositories } from '../data/provider';
 import { useWallet } from './WalletContext';
 import { toast } from '../components/Toast';
 import type { GlobalChatMessage, SocialUser } from '../data/contracts';
-import { liveLifecycleClient, type LiveMutationResult } from '../lib/liveLifecycleClient';
-import { spacetimeDb } from '../lib/spacetime';
+import {
+  liveLifecycleClient,
+  type LiveMutationResult,
+  type StartLiveMutationResult,
+} from '../lib/liveLifecycleClient';
+import { railwayDb } from '../lib/railwayRuntime';
+import { buildProfileIdentityMap, type ProfileIdentity } from './liveProfileIdentity';
+import { shouldDrainLiveFuel } from './liveFuelDrainPolicy';
 
 type ExtendedLiveItem = LiveItem & {
   ownerUserId?: string;
@@ -76,9 +88,10 @@ type LiveContextType = {
   boostLive: (multiplier: BoostMultiplier) => void;
   resetBoost: () => void;
 
-  startLive: (title: string, inviteOnly: boolean) => Promise<LiveMutationResult>;
+  startLive: (title: string, inviteOnly: boolean) => Promise<StartLiveMutationResult>;
 
   toggleMic: () => void;
+  toggleCamera: () => void;
 };
 
 const LiveContext = createContext<LiveContextType | undefined>(undefined);
@@ -101,6 +114,51 @@ const LIVE_OVER_TITLE = 'Live is over';
 const LIVE_STATUS_POLL_INTERVAL_MS = 2_000;
 const FUEL_DRAIN_INTERVAL_MS = 1_000;
 const LIVE_CHAT_MAX_MESSAGES = 200;
+
+function normalizeBackendBaseUrl(): string {
+  return getConfiguredBackendBaseUrl().trim().replace(/\/+$/, '');
+}
+
+async function postEventWinnerNotificationToBackend(payload: {
+  id: string;
+  eventMessageId: string;
+  liveId: string;
+  targetUserId: string;
+  liveTitle?: string;
+  createdAt: number;
+}): Promise<void> {
+  const baseUrl = normalizeBackendBaseUrl();
+  const token = asTrimmedString(await readCurrentAuthAccessToken());
+  if (!baseUrl || !token) {
+    throw new Error('Railway social backend is unavailable.');
+  }
+
+  const response = await fetch(`${baseUrl}/api/social/event-winner`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(getRailwayAuthSnapshot().userId
+        ? { 'X-Vulu-User-Id': getRailwayAuthSnapshot().userId as string }
+        : {}),
+    },
+    body: JSON.stringify({
+      id: payload.id,
+      eventMessageId: payload.eventMessageId,
+      liveId: payload.liveId,
+      targetUserId: payload.targetUserId,
+      liveTitle: payload.liveTitle ?? null,
+      createdAt: payload.createdAt,
+      source: 'live_event_draw',
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(message || `Event-winner backend write failed (${response.status})`);
+  }
+}
 
 function normalizeUsername(value: string | undefined, fallback: string): string {
   const normalized = value?.trim().toLowerCase().replace(/\s+/g, '_');
@@ -244,12 +302,6 @@ type SessionIdentityUser = {
   fullName?: string | null;
   username?: string | null;
   imageUrl?: string | null;
-};
-
-type ProfileIdentity = {
-  displayName?: string;
-  username?: string;
-  avatarUrl?: string;
 };
 
 function parseJsonRecord(value: unknown): Record<string, unknown> {
@@ -533,7 +585,7 @@ function asFiniteNumber(value: unknown): number | null {
 function makeLiveMutationFailure(
   code: Extract<LiveMutationResult, { ok: false }>['code'],
   message: string,
-): LiveMutationResult {
+): Extract<LiveMutationResult, { ok: false }> {
   return {
     ok: false,
     code,
@@ -684,6 +736,7 @@ const defaultLiveValue: LiveContextType = {
     message: 'Live context is unavailable.',
   }),
   toggleMic: () => { },
+  toggleCamera: () => { },
 };
 
 export function LiveProvider({ children }: { children: ReactNode }) {
@@ -708,6 +761,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const activeLiveRef = useRef<LiveItem | null>(null);
   const liveRoomRef = useRef<LiveRoom | null>(null);
   const liveRoomMessageScopeRef = useRef<string | null>(null);
+  const writtenEventWinnerNotificationIdsRef = useRef<Set<string>>(new Set());
   const liveStartInFlightRef = useRef(false);
   const liveEndDetectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveEndAutoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -723,7 +777,16 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const [userMediaState, setUserMediaState] = useState({ isMuted: false });
+  const [userMediaState, setUserMediaState] = useState({
+    isMuted: false,
+    cameraEnabled: true,
+    hasAudioTrack: true,
+    hasVideoTrack: true,
+    isConnectedToRtc: false,
+    connectionState: 'unknown' as LiveUser['connectionState'],
+    role: 'watcher' as LiveUser['role'],
+    isLocal: true,
+  });
 
   const queriesEnabled = isAuthLoaded && Boolean(userId);
 
@@ -743,62 +806,19 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   );
 
   const profileIdentityById = useMemo(() => {
-    const identities = new Map<string, ProfileIdentity>();
-    if (!queriesEnabled) {
-      return identities;
-    }
-
-    const dbView = spacetimeDb.db as any;
-    const globalRows: any[] = Array.from(dbView?.globalMessageItem?.iter?.() ?? []);
-    globalRows
-      .sort(
-        (a, b) =>
-          readTimestampMs(a?.createdAt ?? a?.created_at) -
-          readTimestampMs(b?.createdAt ?? b?.created_at),
-      )
-      .forEach((row) => {
-        const item = parseJsonRecord(row?.item);
-        if (asTrimmedString(item.eventType) !== 'user_profile') return;
-        const profileUserId = asTrimmedString(item.userId);
-        if (!profileUserId) return;
-
-        const current = identities.get(profileUserId) ?? {};
-        const next: ProfileIdentity = {
-          displayName: asTrimmedString(item.displayName) ?? current.displayName,
-          username: asTrimmedString(item.username) ?? current.username,
-          avatarUrl: asTrimmedString(item.avatarUrl) ?? current.avatarUrl,
-        };
-        identities.set(profileUserId, next);
-      });
-
-    const myProfileRows: any[] = Array.from(dbView?.myProfile?.iter?.() ?? dbView?.my_profile?.iter?.() ?? []);
-    const myProfileRow = myProfileRows[0];
-    if (myProfileRow) {
-      const profile = parseJsonRecord(myProfileRow?.profile);
-      const profileUserId =
-        asTrimmedString(myProfileRow?.userId ?? myProfileRow?.user_id) ??
-        asTrimmedString(profile.userId) ??
-        userId ??
-        null;
-      if (profileUserId) {
-        const current = identities.get(profileUserId) ?? {};
-        identities.set(profileUserId, {
-          displayName:
-            asTrimmedString(profile.displayName) ??
-            asTrimmedString(profile.name) ??
-            current.displayName,
-          username:
-            asTrimmedString(profile.username) ??
-            current.username,
-          avatarUrl:
-            asTrimmedString(profile.avatarUrl) ??
-            firstPhotoUri(profile.photos) ??
-            current.avatarUrl,
-        });
-      }
-    }
-
-    return identities;
+    const dbView = railwayDb.db as any;
+    return buildProfileIdentityMap({
+      queriesEnabled,
+      globalRows: Array.from(dbView?.globalMessageItem?.iter?.() ?? []),
+      myProfileRows: Array.from(
+        dbView?.myProfile?.iter?.() ?? dbView?.my_profile?.iter?.() ?? [],
+      ),
+      currentUserId: userId,
+      authoritativeUserIds: [
+        ...knownLiveUsers.map((item) => item.id),
+        ...socialUsers.map((item) => item.id),
+      ],
+    });
   }, [knownLiveUsers, queriesEnabled, socialUsers, userId]);
 
   const sessionIdentity = useMemo(() => {
@@ -1029,33 +1049,63 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     [messagesRepo, queriesEnabled, selectedLiveId],
   );
 
-  const forceCloseLiveForAccessRejection = useCallback((reason: LiveAccessRejectionReason) => {
-    clearLiveEndTimers();
-    setLiveEndingState(null);
-    setActiveLive(null);
-    setIsMinimized(false);
-    setLiveState('LIVE_CLOSED');
-    setLiveRoom(null);
-    setIsHost(false);
-    requestBackendRefresh({
-      scopes: ['live', 'global_messages'],
-      source: 'manual',
-      reason:
-        reason === 'banned'
-          ? 'live_banned_user_forced_exit'
-          : reason === 'invite_only'
-            ? 'live_invite_only_forced_exit'
-            : 'live_ended_forced_exit',
-    });
-  }, [clearLiveEndTimers]);
+  useEffect(() => {
+    if (!queriesEnabled || !selectedLiveId || !userId || !isHost) {
+      return;
+    }
 
-  const handleLiveAccessRejection = useCallback(
-    (reason: LiveAccessRejectionReason) => {
-      toast.warning(messageForLiveAccessRejectionReason(reason));
-      forceCloseLiveForAccessRejection(reason);
-    },
-    [forceCloseLiveForAccessRejection],
-  );
+    const dbView = railwayDb.db as any;
+    const rows: any[] = Array.from(
+      dbView?.globalMessageItem?.iter?.() ?? dbView?.global_message_item?.iter?.() ?? [],
+    );
+
+    rows.forEach((row) => {
+      const eventMessageId = asTrimmedString(row?.id);
+      if (!eventMessageId) {
+        return;
+      }
+      if (writtenEventWinnerNotificationIdsRef.current.has(eventMessageId)) {
+        return;
+      }
+
+      const item = parseJsonRecord(row?.item);
+      if (asTrimmedString(item.eventType) !== 'event_winner') {
+        return;
+      }
+      if (asTrimmedString(item.liveId) !== selectedLiveId) {
+        return;
+      }
+      const winnerUserId = asTrimmedString(item.winnerUserId);
+      if (!winnerUserId) {
+        return;
+      }
+
+      writtenEventWinnerNotificationIdsRef.current.add(eventMessageId);
+      const createdAt =
+        readTimestampMs(item.createdAt ?? row?.createdAt ?? row?.created_at) || Date.now();
+      void postEventWinnerNotificationToBackend({
+        id: `event-winner:${eventMessageId}`,
+        eventMessageId,
+        liveId: selectedLiveId,
+        targetUserId: winnerUserId,
+        liveTitle: snapshotLive?.title ?? liveRoom?.title,
+        createdAt,
+      })
+        .then(() => {
+          requestBackendRefresh({
+            scopes: ['notifications', 'social', 'counts'],
+            source: 'manual',
+            reason: 'event_winner_notification_written_backend',
+          });
+        })
+        .catch((error) => {
+          writtenEventWinnerNotificationIdsRef.current.delete(eventMessageId);
+          if (__DEV__) {
+            console.warn('[live] Failed to write backend event-winner notification', error);
+          }
+        });
+    });
+  }, [isHost, liveRoom?.title, queriesEnabled, selectedLiveId, snapshotLive?.title, userId]);
 
   const postLiveMutation = useCallback(
     async (path: string, payload: Record<string, unknown>): Promise<LiveMutationResult> => {
@@ -1181,6 +1231,41 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       return makeLiveMutationFailure('invalid_input', `Unsupported live mutation path: ${path}`);
     },
     [isAuthLoaded, userId],
+  );
+
+  const forceCloseLiveForAccessRejection = useCallback((reason: LiveAccessRejectionReason) => {
+    const closingLiveId = liveRoom?.id ?? activeLive?.id;
+    if (closingLiveId) {
+      void postLiveMutation('/live/presence', {
+        activity: 'none',
+        liveId: closingLiveId,
+      });
+    }
+    clearLiveEndTimers();
+    setLiveEndingState(null);
+    setActiveLive(null);
+    setIsMinimized(false);
+    setLiveState('LIVE_CLOSED');
+    setLiveRoom(null);
+    setIsHost(false);
+    requestBackendRefresh({
+      scopes: ['live', 'global_messages'],
+      source: 'manual',
+      reason:
+        reason === 'banned'
+          ? 'live_banned_user_forced_exit'
+          : reason === 'invite_only'
+            ? 'live_invite_only_forced_exit'
+            : 'live_ended_forced_exit',
+    });
+  }, [activeLive?.id, clearLiveEndTimers, liveRoom?.id, postLiveMutation]);
+
+  const handleLiveAccessRejection = useCallback(
+    (reason: LiveAccessRejectionReason) => {
+      toast.warning(messageForLiveAccessRejectionReason(reason));
+      forceCloseLiveForAccessRejection(reason);
+    },
+    [forceCloseLiveForAccessRejection],
   );
 
   const syncLivePresence = useCallback(
@@ -1377,7 +1462,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         prev.title !== nextTitle ||
         prev.viewers !== nextViewers ||
         prev.hosts.length !== nextHosts.length ||
-        prev.images.length !== nextImages.length;
+        prev.images.length !== nextImages.length ||
+        prev.hosts.some((host, index) => {
+          const nextHost = nextHosts[index];
+          return (
+            !nextHost ||
+            host.id !== nextHost.id ||
+            host.username !== nextHost.username ||
+            host.name !== nextHost.name ||
+            host.avatar !== nextHost.avatar
+          );
+        }) ||
+        prev.images.some((image, index) => image !== nextImages[index]);
 
       if (!hasChanges) {
         return prev;
@@ -1587,7 +1683,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const fuelDrainInFlightRef = useRef(false);
 
   useEffect(() => {
-    if (liveState === 'LIVE_CLOSED') return;
+    if (!shouldDrainLiveFuel(liveState, isHost)) return;
 
     if (walletStateAvailable && fuelRef.current <= 0) {
       toast.warning('You are out of fuel. Your live session has ended.');
@@ -1616,7 +1712,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       clearInterval(drainInterval);
       fuelDrainInFlightRef.current = false;
     };
-  }, [liveState, userId, walletStateAvailable]);
+  }, [isHost, liveState, userId, walletStateAvailable]);
 
   const switchLiveRoom = useCallback(
     (live: LiveItem): boolean => {
@@ -2224,7 +2320,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startLive = useCallback(
-    async (title: string, inviteOnly: boolean): Promise<LiveMutationResult> => {
+    async (title: string, inviteOnly: boolean): Promise<StartLiveMutationResult> => {
       if (!isAuthLoaded || !userId) {
         return makeLiveMutationFailure('unauthenticated', 'Sign in before starting a live.');
       }
@@ -2333,7 +2429,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           reason: 'live_started',
         });
 
-        return { ok: true };
+        return { ok: true, liveId };
       } finally {
         liveStartInFlightRef.current = false;
       }
@@ -2355,6 +2451,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     setUserMediaState((prev) => ({
       ...prev,
       isMuted: !prev.isMuted,
+      hasAudioTrack: prev.isMuted,
+    }));
+  }, []);
+
+  const toggleCamera = useCallback(() => {
+    setUserMediaState((prev) => ({
+      ...prev,
+      cameraEnabled: !prev.cameraEnabled,
+      hasVideoTrack: !prev.cameraEnabled,
     }));
   }, []);
 
@@ -2397,6 +2502,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         startLive,
 
         toggleMic,
+        toggleCamera,
       }}
     >
       {children}

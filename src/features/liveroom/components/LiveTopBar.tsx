@@ -7,6 +7,10 @@ import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 import { hapticTap } from '../../../utils/haptics';
 import { FuelGauge } from './FuelGauge';
+import {
+  getLiveProfileViewsAccessibilityLabel,
+  getLiveViewerCountAccessibilityLabel,
+} from './liveTopBarAccessibility';
 
 
 type LiveTopBarProps = {
@@ -19,7 +23,11 @@ type LiveTopBarProps = {
   topInset: number;
   showMediaControls?: boolean;
   isMuted?: boolean;
+  isCameraEnabled?: boolean;
   onToggleMic?: () => void;
+  onToggleCamera?: () => void;
+  showLeavePanel?: boolean;
+  onLeavePanel?: () => void;
   isHost?: boolean;
   // Fuel info (Premium GemPlus)
   fuelMinutes?: number;
@@ -38,7 +46,11 @@ export function LiveTopBar({
   topInset,
   showMediaControls = false,
   isMuted = false,
+  isCameraEnabled = true,
   onToggleMic,
+  onToggleCamera,
+  showLeavePanel = false,
+  onLeavePanel,
   isHost = false,
   fuelMinutes = 0,
   isFuelDraining = false,
@@ -82,6 +94,9 @@ export function LiveTopBar({
             onMinimize();
           }}
           style={styles.blurContainer}
+          accessibilityRole="button"
+          accessibilityLabel="Minimize live"
+          accessibilityHint="Returns to the previous screen."
         >
           <BlurView intensity={20} tint="dark" style={styles.minimizeButton}>
             <Ionicons name="chevron-down" size={24} color="#fff" />
@@ -106,6 +121,10 @@ export function LiveTopBar({
                 onToggleMic?.();
               }}
               style={styles.blurContainer}
+              testID="live-toggle-mic"
+              accessibilityRole="button"
+              accessibilityLabel={isMuted ? 'Turn microphone on' : 'Turn microphone off'}
+              accessibilityHint="Toggles your live microphone."
             >
               <BlurView intensity={20} tint="dark" style={styles.iconButton}>
                 <Ionicons
@@ -115,6 +134,42 @@ export function LiveTopBar({
                 />
               </BlurView>
             </Pressable>
+            <Pressable
+              onPress={() => {
+                hapticTap();
+                onToggleCamera?.();
+              }}
+              style={styles.blurContainer}
+              testID="live-toggle-camera"
+              accessibilityRole="button"
+              accessibilityLabel={isCameraEnabled ? 'Turn camera off' : 'Turn camera on'}
+              accessibilityHint="Toggles your live camera."
+            >
+              <BlurView intensity={20} tint="dark" style={styles.iconButton}>
+                <Ionicons
+                  name={isCameraEnabled ? 'videocam' : 'videocam-off'}
+                  size={18}
+                  color={isCameraEnabled ? '#fff' : colors.accentDanger}
+                />
+              </BlurView>
+            </Pressable>
+            {showLeavePanel ? (
+              <Pressable
+                onPress={() => {
+                  hapticTap();
+                  onLeavePanel?.();
+                }}
+                style={styles.blurContainer}
+                testID="live-leave-panel"
+                accessibilityRole="button"
+                accessibilityLabel="Open leave panel"
+                accessibilityHint="Opens options to step out of the live."
+              >
+                <BlurView intensity={20} tint="dark" style={styles.iconButton}>
+                  <Ionicons name="arrow-down-circle-outline" size={18} color="#fff" />
+                </BlurView>
+              </Pressable>
+            ) : null}
           </>
         )}
         {onExitPress ? (
@@ -124,6 +179,10 @@ export function LiveTopBar({
               onExitPress();
             }}
             style={styles.blurContainer}
+            testID="live-exit-button"
+            accessibilityRole="button"
+            accessibilityLabel={isHost ? 'End live' : 'Leave live'}
+            accessibilityHint={isHost ? 'Ends the live for everyone.' : 'Leaves the current live.'}
           >
             <BlurView
               intensity={20}
@@ -145,6 +204,9 @@ export function LiveTopBar({
             onProfileViewsPress();
           }}
           style={styles.blurContainer}
+          accessibilityRole="button"
+          accessibilityLabel={getLiveProfileViewsAccessibilityLabel(profileViewCount)}
+          accessibilityHint="Opens the profile views list."
         >
           <BlurView intensity={20} tint="dark" style={styles.iconPill}>
             <Ionicons name="eye-outline" size={18} color="#fff" />
@@ -163,6 +225,10 @@ export function LiveTopBar({
             onViewersPress();
           }}
           style={styles.blurContainer}
+          testID="live-viewers-button"
+          accessibilityRole="button"
+          accessibilityLabel={getLiveViewerCountAccessibilityLabel(viewerCount)}
+          accessibilityHint="Opens the viewers list."
         >
           <BlurView intensity={20} tint="dark" style={styles.viewerPill}>
             <Ionicons name="people" size={16} color="#fff" />

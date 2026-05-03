@@ -6,7 +6,7 @@ import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
 
 const ISSUER = "https://issuer.vulu.test";
-const AUDIENCE = "vulu-upload-signer";
+const AUDIENCE = "vulu-backend";
 const SUBJECT = "user_test_123";
 
 async function buildKeySet() {

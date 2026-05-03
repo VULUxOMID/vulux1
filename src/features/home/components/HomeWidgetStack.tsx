@@ -30,7 +30,11 @@ export const HomeWidgetStack = React.memo(function HomeWidgetStack({
         friends={friends}
         activePlayersNow={activePlayersNow}
       />
-      <GlobalChatWidget onOpen={onOpenChat} messageCount={messageCount} isChatOpen={isChatOpen} />
+      <GlobalChatWidget
+        onOpen={onOpenChat}
+        messageCount={messageCount}
+        isChatOpen={isChatOpen}
+      />
     </View>
   );
 });

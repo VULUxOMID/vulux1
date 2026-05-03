@@ -9,8 +9,7 @@ function nextTick(): Promise<void> {
 
 test('realtime connect does not place auth token in websocket URL query', async () => {
   const originalWebSocket = globalThis.WebSocket;
-  const originalAdminApiBaseUrl = process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL;
-  const originalLegacyApiBaseUrl = process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL;
+  const originalRailwayWsBaseUrl = process.env.EXPO_PUBLIC_RAILWAY_WS_BASE_URL;
   const createdConnections: Array<{ url: string; protocols: string[] | undefined }> = [];
 
   class MockWebSocket {
@@ -39,8 +38,7 @@ test('realtime connect does not place auth token in websocket URL query', async 
   }
 
   try {
-    process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL = 'https://api.vulu.example';
-    delete process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL;
+    process.env.EXPO_PUBLIC_RAILWAY_WS_BASE_URL = 'wss://api.vulu.example/realtime';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     globalThis.WebSocket = MockWebSocket as any;
 
@@ -64,15 +62,10 @@ test('realtime connect does not place auth token in websocket URL query', async 
       'vulu.auth.bearer.header.payload.signature',
     ]);
   } finally {
-    if (originalAdminApiBaseUrl === undefined) {
-      delete process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL;
+    if (originalRailwayWsBaseUrl === undefined) {
+      delete process.env.EXPO_PUBLIC_RAILWAY_WS_BASE_URL;
     } else {
-      process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL = originalAdminApiBaseUrl;
-    }
-    if (originalLegacyApiBaseUrl === undefined) {
-      delete process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL;
-    } else {
-      process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL = originalLegacyApiBaseUrl;
+      process.env.EXPO_PUBLIC_RAILWAY_WS_BASE_URL = originalRailwayWsBaseUrl;
     }
     globalThis.WebSocket = originalWebSocket;
   }

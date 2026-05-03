@@ -19,7 +19,7 @@ import {
 import { Redirect, useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../auth/spacetimeSession';
+import { useAuth } from '../../auth/clerkSession';
 import { useIsFocused } from '@react-navigation/native';
 
 import { useLive } from '../../context/LiveContext';
@@ -56,13 +56,13 @@ import { LiveItem } from '../home/LiveSection';
 import { MiniHostsGrid } from './components/MiniHostsGrid';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { spacetimeDb, subscribeLive, subscribeSpacetimeDataChanges } from '../../lib/spacetime';
+import { railwayDb, subscribeLive, subscribeRailwayDataChanges } from '../../lib/railwayRuntime';
 import {
   publishLiveHostRequest,
   publishLiveHostRequestResponse,
   publishLiveInvite,
   publishLiveInviteResponse,
-} from '../../utils/spacetimePersistence';
+} from '../../utils/railwayPersistence';
 import {
   blurActiveWebElement,
   lockPortraitOrientationSafely,
@@ -76,6 +76,7 @@ import {
   derivePendingHostRequestIds,
   parseLiveControlEvents,
 } from './liveControlEvents';
+import { useLiveRtc } from './rtc/useLiveRtc';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const EDGE_THRESHOLD = SCREEN_WIDTH * 0.33;
@@ -134,10 +135,14 @@ export default function LiveScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; eventMessageId?: string | string[] }>();
   const insets = useSafeAreaInsets();
-  const { userId, isLoaded: isAuthLoaded, isSignedIn, hasSession } = useAuth();
+  const { userId, isLoaded: isAuthLoaded, isSignedIn, hasSession, getToken } = useAuth();
   const routeLiveId = typeof params.id === 'string' ? params.id.trim() : '';
+  const routeEventMessageId = useMemo(() => {
+    const raw = Array.isArray(params.eventMessageId) ? params.eventMessageId[0] : params.eventMessageId;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+  }, [params.eventMessageId]);
   const { live: liveRepo, social: socialRepo } = useRepositories();
   const [liveDataRefreshNonce, setLiveDataRefreshNonce] = useState(0);
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
@@ -157,7 +162,7 @@ export default function LiveScreen() {
     () => (queriesEnabled ? socialRepo.listUsers({ limit: 300 }) : []),
     [queriesEnabled, socialRepo],
   );
-  const { selectedUser, showProfile } = useProfile();
+  const { selectedUser, showProfile, isPremiumUser } = useProfile();
   const {
     gems: userGems,
     cash: userCash,
@@ -182,11 +187,23 @@ export default function LiveScreen() {
     resetBoost,
     switchLiveRoom,
     toggleMic,
+    toggleCamera,
     currentUser,
     setTitle,
+    inviteToStream,
+    removeFromStream,
   } = useLive();
   const currentLiveId = liveRoom?.id ?? activeLive?.id;
   const subscriptionLiveId = liveRoom?.id ?? activeLive?.id ?? routeLiveId;
+  const rtc = useLiveRtc({
+    liveId: subscriptionLiveId || null,
+    userId: userId ?? null,
+    displayName: currentUser?.name ?? 'You',
+    username: currentUser?.username ?? 'you',
+    avatarUrl: currentUser?.avatarUrl ?? '',
+    isHost,
+    getToken,
+  });
   const isProfileOpen = useRef(false);
   const isSheetOpen = useRef(false);
   const autoJoinAttemptedLiveIdRef = useRef<string | null>(null);
@@ -221,7 +238,7 @@ export default function LiveScreen() {
     if (!queriesEnabled || !subscriptionLiveId) {
       return;
     }
-    return subscribeSpacetimeDataChanges((event) => {
+    return subscribeRailwayDataChanges((event) => {
       if (!event.scopes.includes('live')) {
         return;
       }
@@ -298,16 +315,27 @@ export default function LiveScreen() {
 
   const sendLiveInvite = useCallback(
     async (targetUserId: string): Promise<boolean> => {
-      const currentLiveId = liveRoom?.id ?? activeLive?.id;
-      if (!currentLiveId || !isAuthLoaded || !isSignedIn) {
+      if (!subscriptionLiveId || !isAuthLoaded || !isSignedIn) {
         return false;
       }
 
       try {
-        await publishLiveInvite({
-          liveId: currentLiveId,
-          targetUserId,
-        });
+        const rtcInviteSent = await rtc.inviteToPanel(targetUserId);
+        if (!rtcInviteSent) {
+          return false;
+        }
+        try {
+          await publishLiveInvite({
+            liveId: subscriptionLiveId,
+            targetUserId,
+            fromUserName: currentUser?.name ?? null,
+            fromUsername: currentUser?.username ?? null,
+          });
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('[live] RTC invite sent, but invite notification persistence failed', error);
+          }
+        }
         return true;
       } catch (error) {
         if (__DEV__) {
@@ -317,10 +345,12 @@ export default function LiveScreen() {
       }
     },
     [
-      activeLive?.id,
       isAuthLoaded,
       isSignedIn,
-      liveRoom?.id,
+      currentUser?.name,
+      currentUser?.username,
+      rtc,
+      subscriptionLiveId,
     ],
   );
 
@@ -358,6 +388,12 @@ export default function LiveScreen() {
     }
     setActiveSheetState(nextSheet);
   }, []);
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    blurActiveWebElement();
+  }, [activeSheet]);
   const [boostSheetTab, setBoostSheetTab] = useState<'boost' | 'league'>('boost');
   const [hostOptionsTab, setHostOptionsTab] = useState<HostOptionsTab>('settings');
   const [inviteQuery, setInviteQuery] = useState('');
@@ -423,10 +459,167 @@ export default function LiveScreen() {
     return entries;
   }, [knownLiveUsers, liveRoom?.hostUser, liveRoom?.streamers, liveRoom?.watchers]);
 
+  const rtcParticipants = useMemo(
+    () => Object.values(rtc.state.participantsByUserId),
+    [rtc.state.participantsByUserId],
+  );
+
+  const displayStreamers = useMemo(() => {
+    if (!liveRoom) return [];
+
+    const next = new Map<string, LiveUser>();
+    liveRoom.streamers.forEach((streamer) => {
+      next.set(streamer.id, streamer);
+    });
+
+    rtcParticipants
+      .filter((participant) => participant.role === 'host' || participant.role === 'panel')
+      .forEach((participant) => {
+        const baseUser =
+          liveUserDirectory.get(participant.userId) ??
+          makeFallbackLiveUser(participant.userId, participant.displayName);
+        next.set(participant.userId, {
+          ...baseUser,
+          isMuted: !participant.micEnabled,
+          cameraEnabled: participant.cameraEnabled,
+          role: participant.role,
+          connectionState: participant.connectionState,
+          isSpeaking: participant.isSpeaking,
+          hasAudioTrack: participant.hasAudioTrack,
+          hasVideoTrack: participant.hasVideoTrack,
+          isLocal: participant.isLocal,
+          isConnectedToRtc: participant.isConnectedToRtc,
+        });
+      });
+
+    return Array.from(next.values());
+  }, [liveRoom, liveUserDirectory, rtcParticipants]);
+
+  const displayWatchers = useMemo(() => {
+    if (!liveRoom) return [];
+
+    const streamerIds = new Set(displayStreamers.map((streamer) => streamer.id));
+    const next = new Map<string, LiveUser>();
+    liveRoom.watchers.forEach((watcher) => {
+      if (!streamerIds.has(watcher.id)) {
+        next.set(watcher.id, watcher);
+      }
+    });
+
+    rtcParticipants
+      .filter((participant) => participant.role === 'watcher')
+      .forEach((participant) => {
+        if (streamerIds.has(participant.userId)) {
+          return;
+        }
+        const baseUser =
+          liveUserDirectory.get(participant.userId) ??
+          makeFallbackLiveUser(participant.userId, participant.displayName);
+        next.set(participant.userId, {
+          ...baseUser,
+          isMuted: !participant.micEnabled,
+          cameraEnabled: participant.cameraEnabled,
+          role: participant.role,
+          connectionState: participant.connectionState,
+          isSpeaking: participant.isSpeaking,
+          hasAudioTrack: participant.hasAudioTrack,
+          hasVideoTrack: participant.hasVideoTrack,
+          isLocal: participant.isLocal,
+          isConnectedToRtc: participant.isConnectedToRtc,
+        });
+      });
+
+    return Array.from(next.values());
+  }, [displayStreamers, liveRoom, liveUserDirectory, rtcParticipants]);
+
+  const displayLiveRoom = useMemo(() => {
+    if (!liveRoom) return null;
+    return {
+      ...liveRoom,
+      streamers: displayStreamers,
+      watchers: displayWatchers,
+      hostUser: displayStreamers[0] ?? liveRoom.hostUser,
+    };
+  }, [displayStreamers, displayWatchers, liveRoom]);
+
+  const isPanelMember = useMemo(
+    () =>
+      Boolean(
+        userId &&
+          rtcParticipants.some(
+            (participant) =>
+              participant.userId === userId &&
+              (participant.role === 'host' || participant.role === 'panel'),
+          ),
+      ),
+    [rtcParticipants, userId],
+  );
+
+  const mediaByUserId = useMemo(() => {
+    const next: Record<
+      string,
+      {
+        stream?: unknown;
+        hasVideoTrack?: boolean;
+        connectionState?: string;
+        isLocal?: boolean;
+      }
+    > = {};
+
+    if (userId && rtc.state.localStream) {
+      const selfParticipant = rtc.state.participantsByUserId[userId];
+      next[userId] = {
+        stream: rtc.state.localStream,
+        hasVideoTrack: selfParticipant?.cameraEnabled ?? true,
+        connectionState: selfParticipant?.connectionState ?? 'connected',
+        isLocal: true,
+      };
+    }
+
+    Object.entries(rtc.state.remoteStreamsByUserId).forEach(([remoteUserId, stream]) => {
+      next[remoteUserId] = {
+        stream,
+        hasVideoTrack: rtc.state.participantsByUserId[remoteUserId]?.cameraEnabled ?? true,
+        connectionState: rtc.state.participantsByUserId[remoteUserId]?.connectionState ?? 'connecting',
+        isLocal: false,
+      };
+    });
+
+    return next;
+  }, [rtc.state.localStream, rtc.state.participantsByUserId, rtc.state.remoteStreamsByUserId, userId]);
+
+  useEffect(() => {
+    if (!isHost || !liveRoom) {
+      return;
+    }
+
+    const roomStreamerIds = new Set(liveRoom.streamers.map((streamer) => streamer.id));
+    const rtcPanelParticipants = rtcParticipants.filter(
+      (participant) => participant.role === 'host' || participant.role === 'panel',
+    );
+    const rtcPanelIds = new Set(rtcPanelParticipants.map((participant) => participant.userId));
+
+    rtcPanelParticipants.forEach((participant) => {
+      if (roomStreamerIds.has(participant.userId)) {
+        return;
+      }
+      const resolvedUser =
+        liveUserDirectory.get(participant.userId) ??
+        makeFallbackLiveUser(participant.userId, participant.displayName);
+      inviteToStream(resolvedUser);
+    });
+
+    liveRoom.streamers
+      .filter((streamer) => streamer.id !== liveRoom.hostUser.id && !rtcPanelIds.has(streamer.id))
+      .forEach((streamer) => {
+        removeFromStream(streamer);
+      });
+  }, [inviteToStream, isHost, liveRoom, liveUserDirectory, removeFromStream, rtcParticipants]);
+
   const liveControlEvents = useMemo<LiveControlEvent[]>(() => {
     if (!currentLiveId) return [];
 
-    const dbView = spacetimeDb.db as any;
+    const dbView = railwayDb.db as any;
     const rows: any[] = Array.from(
       dbView?.globalMessageItem?.iter?.() ??
       dbView?.global_message_item?.iter?.() ??
@@ -436,13 +629,23 @@ export default function LiveScreen() {
   }, [currentLiveId, liveDataRefreshNonce]);
 
   const pendingHostRequestIds = useMemo(
-    () => derivePendingHostRequestIds(liveControlEvents),
-    [liveControlEvents],
+    () => {
+      const merged = new Set(derivePendingHostRequestIds(liveControlEvents));
+      rtc.state.pendingRequestUserIds.forEach((userId) => merged.add(userId));
+      return Array.from(merged);
+    },
+    [liveControlEvents, rtc.state.pendingRequestUserIds],
   );
 
   const pendingHostInviteIds = useMemo(
-    () => derivePendingHostInviteIds(liveControlEvents),
-    [liveControlEvents],
+    () => {
+      const merged = new Set(derivePendingHostInviteIds(liveControlEvents));
+      if (rtc.state.pendingInviteFromHostUserId && userId) {
+        merged.add(userId);
+      }
+      return Array.from(merged);
+    },
+    [liveControlEvents, rtc.state.pendingInviteFromHostUserId, userId],
   );
 
   const pendingHostRequestUserId = useMemo(() => {
@@ -478,8 +681,8 @@ export default function LiveScreen() {
 
   const pendingInviteHostUserId = useMemo(() => {
     if (!hasPendingHostInvite) return null;
-    return liveRoom?.hostUser?.id ?? null;
-  }, [hasPendingHostInvite, liveRoom?.hostUser?.id]);
+    return rtc.state.pendingInviteFromHostUserId ?? liveRoom?.hostUser?.id ?? null;
+  }, [hasPendingHostInvite, liveRoom?.hostUser?.id, rtc.state.pendingInviteFromHostUserId]);
 
   const pendingInviteHostUser = useMemo(() => {
     if (!hasPendingHostInvite || !liveRoom) return null;
@@ -522,40 +725,11 @@ export default function LiveScreen() {
     }
   }, [isHost, activeSheet]);
   
-  // Speaking state (in production this comes from audio detection)
-  const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
   // Boost state
   const [isBoosting, setIsBoosting] = useState(false);
   const [currentBoostAmount, setCurrentBoostAmount] = useState(0);
   // Boost timer state
   const [boostTimeLeft, setBoostTimeLeft] = useState(0);
-  
-  // Local speaking simulation - randomly toggle speaking for demo
-  useEffect(() => {
-    if (!liveRoom) return;
-    
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    
-    const interval = setInterval(() => {
-      // Randomly pick a streamer to be "speaking"
-      const streamers = liveRoom.streamers;
-      if (streamers.length > 0) {
-        const randomIndex = Math.floor(Math.random() * streamers.length);
-        const speakerId = streamers[randomIndex].id;
-        setSpeakingUserIds([speakerId]);
-        
-        // Clear after a bit - track timeout for cleanup
-        timeoutId = setTimeout(() => {
-          setSpeakingUserIds([]);
-        }, 1500);
-      }
-    }, 3000);
-    
-    return () => {
-      clearInterval(interval);
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, [liveRoom]);
 
   // Countdown timer
   useEffect(() => {
@@ -833,6 +1007,11 @@ export default function LiveScreen() {
     }
 
     try {
+      const rtcSent = await rtc.requestPanelAccess();
+      if (!rtcSent) {
+        toast.error('Could not send request. Try again.');
+        return;
+      }
       await publishLiveHostRequest({
         liveId: currentLiveId,
       });
@@ -853,6 +1032,7 @@ export default function LiveScreen() {
     currentUser?.id,
     isHost,
     liveRoom?.id,
+    rtc,
   ]);
 
   const handleInviteToStream = useCallback((user: LiveUser) => {
@@ -885,14 +1065,19 @@ export default function LiveScreen() {
 
   const respondToHostRequest = useCallback(
     async (accepted: boolean) => {
-      if (!currentLiveId || !pendingHostRequestUserId || isRespondingToHostRequest) {
+      if (!subscriptionLiveId || !pendingHostRequestUserId || isRespondingToHostRequest) {
         return;
       }
 
       setIsRespondingToHostRequest(true);
       try {
+        const rtcUpdated = await rtc.respondToPanelRequest(pendingHostRequestUserId, accepted);
+        if (!rtcUpdated) {
+          toast.error('Could not process request. Try again.');
+          return;
+        }
         await publishLiveHostRequestResponse({
-          liveId: currentLiveId,
+          liveId: subscriptionLiveId,
           targetUserId: pendingHostRequestUserId,
           accepted,
         });
@@ -916,25 +1101,37 @@ export default function LiveScreen() {
       }
     },
     [
-      currentLiveId,
       isRespondingToHostRequest,
       pendingHostRequestDisplayName,
       pendingHostRequestUserId,
+      rtc,
+      subscriptionLiveId,
     ],
   );
 
   const respondToHostInvite = useCallback(
     async (accepted: boolean) => {
-      if (!currentLiveId || !hasPendingHostInvite || isRespondingToHostInvite) {
+      if (!subscriptionLiveId || !hasPendingHostInvite || isRespondingToHostInvite) {
         return;
       }
 
       setIsRespondingToHostInvite(true);
       try {
-        await publishLiveInviteResponse({
-          liveId: currentLiveId,
-          accepted,
-        });
+        const rtcUpdated = await rtc.respondToPanelInvite(accepted);
+        if (!rtcUpdated) {
+          toast.error('Could not process invite. Try again.');
+          return;
+        }
+        try {
+          await publishLiveInviteResponse({
+            liveId: subscriptionLiveId,
+            accepted,
+          });
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('[live] RTC invite response applied, but response persistence failed', error);
+          }
+        }
         requestBackendRefresh({
           scopes: ['live'],
           source: 'manual',
@@ -954,8 +1151,73 @@ export default function LiveScreen() {
         setIsRespondingToHostInvite(false);
       }
     },
-    [currentLiveId, hasPendingHostInvite, isRespondingToHostInvite],
+    [hasPendingHostInvite, isRespondingToHostInvite, rtc, subscriptionLiveId],
   );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+    const shouldExposeQaBridge =
+      process.env.EXPO_PUBLIC_QA_SKIP_ONBOARDING?.trim().toLowerCase() === '1';
+    if (!shouldExposeQaBridge) {
+      return;
+    }
+
+    const target = window as typeof window & {
+      __VULU_QA_LIVE__?: {
+        inviteViewerFromQa: (targetUserId: string) => Promise<boolean>;
+        respondToHostInviteFromQa: (accepted: boolean) => Promise<void>;
+        hasPendingHostInviteFromQa: () => boolean;
+      };
+    };
+    target.__VULU_QA_LIVE__ = {
+      inviteViewerFromQa: async (targetUserId: string) => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          if (await sendLiveInvite(targetUserId)) {
+            return true;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        return false;
+      },
+      respondToHostInviteFromQa: async (accepted: boolean) => {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          if (hasPendingHostInvite) {
+            const rtcUpdated = await rtc.respondToPanelInvite(accepted);
+            if (rtcUpdated) {
+              if (subscriptionLiveId) {
+                try {
+                  await publishLiveInviteResponse({
+                    liveId: subscriptionLiveId,
+                    accepted,
+                  });
+                } catch (error) {
+                  if (__DEV__) {
+                    console.warn('[live] QA RTC invite response applied, but response persistence failed', error);
+                  }
+                }
+              }
+              requestBackendRefresh({
+                scopes: ['live'],
+                source: 'manual',
+                reason: accepted ? 'live_host_invite_accepted' : 'live_host_invite_declined',
+              });
+              return;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      },
+      hasPendingHostInviteFromQa: () => hasPendingHostInvite,
+    };
+
+    return () => {
+      delete target.__VULU_QA_LIVE__;
+    };
+  }, [hasPendingHostInvite, rtc, sendLiveInvite, subscriptionLiveId]);
 
   const handleCancelInvite = useCallback(() => {
     setActiveSheet(null);
@@ -967,13 +1229,18 @@ export default function LiveScreen() {
     setActiveSheet('kickConfirm');
   }, []);
 
-  const handleConfirmKick = useCallback(() => {
+  const handleConfirmKick = useCallback(async () => {
     if (userToKick) {
-      kickStreamer(userToKick);
+      const removed = await rtc.removePanelMember(userToKick.id);
+      if (removed) {
+        kickStreamer(userToKick);
+      } else {
+        toast.error(`Could not remove ${userToKick.name}. Try again.`);
+      }
     }
     setActiveSheet(null);
     setUserToKick(null);
-  }, [userToKick, kickStreamer]);
+  }, [userToKick, rtc, kickStreamer]);
 
   const handleBanUser = useCallback(
     (user: LiveUser) => {
@@ -982,10 +1249,20 @@ export default function LiveScreen() {
     [banUser],
   );
 
-  const handleBoost = useCallback((multiplier: BoostMultiplier) => {
+  const handleLeavePanel = useCallback(async () => {
+    const left = await rtc.leavePanel();
+    if (!left) {
+      toast.error('Could not leave panel. Try again.');
+      return;
+    }
+    removeFromStream(currentUser);
+    toast.success('You moved back to watching.');
+  }, [currentUser, removeFromStream, rtc]);
+
+  const handleBoost = useCallback(async (multiplier: BoostMultiplier) => {
     const cost = BOOST_COSTS[multiplier];
-    
-    if (spendCash(cost)) {
+
+    if (await spendCash(cost, { reason: 'Live boost', source: 'live_boost' })) {
       hapticImpact('heavy'); // Strong haptic on boost
       boostLive(multiplier);
       // Reset timer when boosting
@@ -1165,7 +1442,10 @@ export default function LiveScreen() {
     );
   }
 
-  const viewerCount = liveRoom.watchers.length + liveRoom.streamers.length;
+  const roomForUi = displayLiveRoom ?? liveRoom;
+  const viewerCount = roomForUi.watchers.length + roomForUi.streamers.length;
+  const currentRtcParticipant = userId ? rtc.state.participantsByUserId[userId] : undefined;
+  const canUseMediaControls = Boolean(isHost || isPanelMember);
   const chatBottomMargin =
     INPUT_BAR_HEIGHT +
     (keyboardHeight > 0 ? keyboardHeight : insets.bottom) +
@@ -1223,41 +1503,53 @@ export default function LiveScreen() {
             style={[styles.topBarWrapper, { opacity: uiOpacity }, styles.pointerEventsBoxNone]}
           >
             <LiveTopBar
-            viewerCount={viewerCount}
-            profileViewCount={1137}
-            onMinimize={handleMinimize}
-            onExitPress={() => {
-              hapticTap();
-              setActiveSheet('exitLive');
-            }}
-            onViewersPress={() => {
-              hapticTap();
-              setActiveSheet('participants');
-            }}
-            onProfileViewsPress={() => {
-              hapticTap();
-              setActiveSheet('profileViews');
-            }}
-            topInset={insets.top}
-            showMediaControls={true}
-            isMuted={!!currentUser?.isMuted}
-            onToggleMic={toggleMic}
-            isHost={isHost}
-            fuelMinutes={fuel}
-            isFuelDraining={true}
-            onFuelPress={() => {
-              hapticTap();
-              setActiveSheet('fuel');
-            }}
-          />
+              viewerCount={viewerCount}
+              profileViewCount={1137}
+              onMinimize={handleMinimize}
+              onExitPress={() => {
+                hapticTap();
+                setActiveSheet('exitLive');
+              }}
+              onViewersPress={() => {
+                hapticTap();
+                setActiveSheet('participants');
+              }}
+              onProfileViewsPress={() => {
+                hapticTap();
+                setActiveSheet('profileViews');
+              }}
+              topInset={insets.top}
+              showMediaControls={canUseMediaControls}
+              isMuted={currentRtcParticipant ? !currentRtcParticipant.micEnabled : !!currentUser?.isMuted}
+              isCameraEnabled={currentRtcParticipant?.cameraEnabled ?? currentUser?.cameraEnabled ?? true}
+              onToggleMic={() => {
+                toggleMic();
+                void rtc.toggleMic();
+              }}
+              onToggleCamera={() => {
+                toggleCamera();
+                void rtc.toggleCamera();
+              }}
+              showLeavePanel={!isHost && isPanelMember}
+              onLeavePanel={() => {
+                void handleLeavePanel();
+              }}
+              isHost={isHost}
+              fuelMinutes={fuel}
+              isFuelDraining={true}
+              onFuelPress={() => {
+                hapticTap();
+                setActiveSheet('fuel');
+              }}
+            />
           </Animated.View>
 
           {showLiveOverBanner && (
             <LiveEndedScreen
               onClose={handleCloseLiveEndedScreen}
-              hostName={liveRoom.hostUser.name}
+              hostName={roomForUi.hostUser.name}
               totalViewers={viewerCount}
-              totalBoosts={liveRoom.totalBoosts}
+              totalBoosts={roomForUi.totalBoosts}
               duration={`${liveOverSecondsLabel}s`}
             />
           )}
@@ -1267,12 +1559,14 @@ export default function LiveScreen() {
             {/* Main Full Screen Content - Fades OUT during minimize */}
             <Animated.View style={[{ opacity: mainContentOpacity }, styles.pointerEventsBoxNone]}>
               <StreamersDisplay
-                streamers={liveRoom.streamers}
+                streamers={roomForUi.streamers}
                 onStreamerTap={(user) => {
                   hapticTap();
                   showProfile(user);
                 }}
-                speakingUserIds={speakingUserIds}
+                speakingUserIds={rtc.state.speakingUserIds}
+                mediaByUserId={mediaByUserId}
+                showDebugState={rtc.state.debug.enabled}
               />
             </Animated.View>
             
@@ -1296,9 +1590,9 @@ export default function LiveScreen() {
                   borderRadius: radius.xl,
                 }}
               >
-                <MiniHostsGrid 
-                  hosts={liveRoom.streamers} 
-                  fallbackImage={liveRoom.streamers[0]?.avatarUrl} 
+                <MiniHostsGrid
+                  hosts={roomForUi.streamers}
+                  fallbackImage={roomForUi.streamers[0]?.avatarUrl}
                 />
               </View>
             </Animated.View>
@@ -1309,7 +1603,8 @@ export default function LiveScreen() {
             {/* Chat stays outside keyboard-dismiss pressable so it can scroll */}
             <Animated.View style={{ marginBottom: chatBottomMargin, opacity: uiOpacity }}>
               <LiveChat
-                messages={liveRoom.chatMessages}
+                messages={roomForUi.chatMessages}
+                focusMessageId={routeEventMessageId}
               />
             </Animated.View>
           </View>
@@ -1345,7 +1640,7 @@ export default function LiveScreen() {
               <LiveInputBar
                 onSend={handleSendMessage}
                 onRaiseHandRequest={handleRaiseHandRequest}
-                isHost={isHost}
+                isHost={isHost || isPanelMember}
                 bottomInset={keyboardHeight > 0 ? 0 : insets.bottom}
               />
             </Animated.View>
@@ -1359,6 +1654,21 @@ export default function LiveScreen() {
           />
         )}
 
+        {rtc.state.debug.enabled ? (
+          <View style={styles.rtcDebugOverlay}>
+            <AppText style={styles.rtcDebugText}>
+              role {rtc.state.debug.localRole} | socket {rtc.state.debug.socketConnected ? 'on' : 'off'}
+            </AppText>
+            <AppText style={styles.rtcDebugText}>
+              local a/v {rtc.state.debug.localAudioTrackPresent ? '1' : '0'}/
+              {rtc.state.debug.localVideoTrackPresent ? '1' : '0'}
+            </AppText>
+            {rtc.state.debug.lastError ? (
+              <AppText style={styles.rtcDebugText}>err {rtc.state.debug.lastError}</AppText>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Circular Boost Button - Inside animated container so drawer overlays it */}
         {!isAnySheetOpen && (
           <Animated.View style={[styles.boostButtonContainer, { opacity: uiOpacity }]}>
@@ -1369,8 +1679,8 @@ export default function LiveScreen() {
                 setActiveSheet('boost');
               }}
               onSwipeDown={handleMinimize}
-              boostCount={liveRoom.totalBoosts}
-              boostRank={liveRoom.boostRank}
+              boostCount={roomForUi.totalBoosts}
+              boostRank={roomForUi.boostRank}
               boostTimeLeft={boostTimeLeft}
               boostTotalTime={BOOST_DURATION}
               isBoosting={isBoosting}
@@ -1383,7 +1693,7 @@ export default function LiveScreen() {
         <ParticipantsDrawer
           visible={activeSheet === 'participants'}
           onClose={() => setActiveSheet(null)}
-          liveRoom={liveRoom}
+          liveRoom={roomForUi}
           isHost={isHost}
           onInviteToStream={handleInviteToStream}
           onKickStreamer={handleKickStreamer}
@@ -1410,8 +1720,8 @@ export default function LiveScreen() {
           visible={activeSheet === 'boost'}
           onClose={() => setActiveSheet(null)}
           onBoost={handleBoost}
-          currentRank={liveRoom.boostRank}
-          totalBoosts={liveRoom.totalBoosts}
+          currentRank={roomForUi.boostRank}
+          totalBoosts={roomForUi.totalBoosts}
           boostTimeLeft={boostTimeLeft}
           leaderboard={liveLeaderboard}
           onJoinLive={handleJoinLive}
@@ -1465,9 +1775,9 @@ export default function LiveScreen() {
         <ProfileViewsModal
           visible={activeSheet === 'profileViews'}
           onClose={() => setActiveSheet(null)}
-          viewers={liveRoom.streamers}
+          viewers={roomForUi.streamers}
           totalViews={1137}
-          isPremiumUser={true} // Set to true for testing
+          isPremiumUser={isPremiumUser}
         />
 
         <InviteToStreamModal
@@ -2035,6 +2345,10 @@ function ActionSheet({
 
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  const handleClose = useCallback(() => {
+    blurActiveWebElement();
+    onCloseRef.current();
+  }, []);
 
   const snapThresholdRef = useRef(snapThreshold);
   useEffect(() => { snapThresholdRef.current = snapThreshold; }, [snapThreshold]);
@@ -2090,7 +2404,7 @@ function ActionSheet({
           gestureState.dy > snapThresholdRef.current ||
           (gestureState.vy > 1.2 && gestureState.dy > 24);
         if (shouldClose) {
-          onCloseRef.current();
+          handleClose();
           return;
         }
         Animated.spring(translateY, {
@@ -2107,10 +2421,10 @@ function ActionSheet({
   if (!isVisible) return null;
 
   return (
-    <Modal visible={isVisible} transparent animationType={animationType} onRequestClose={onClose}>
+    <Modal visible={isVisible} transparent animationType={animationType} onRequestClose={handleClose}>
       <View style={styles.sheetOverlay}>
         <Animated.View style={[styles.sheetBackdrop, { opacity: backdropOpacity }]} />
-        <Pressable style={StyleSheet.absoluteFillObject} onPress={onClose} />
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={handleClose} />
         <Animated.View
           style={[
             styles.sheetContainer,
@@ -2251,6 +2565,22 @@ const styles = StyleSheet.create({
   keyboardDismissOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 150,
+  },
+  rtcDebugOverlay: {
+    position: 'absolute',
+    top: 110,
+    left: 16,
+    zIndex: 160,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    gap: 2,
+  },
+  rtcDebugText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
   },
   boostButtonContainer: {
     position: 'absolute',

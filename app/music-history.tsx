@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../src/auth/spacetimeSession';
+import { useAuth } from '../src/auth/clerkSession';
 
 import { AppScreen, AppText } from '../src/components';
 import type { Track } from '../src/features/music/types';

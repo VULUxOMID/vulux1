@@ -1,4 +1,4 @@
-import { spacetimeDb } from './spacetime';
+import { railwayDb } from './railwayRuntime';
 
 export type LiveMutationErrorCode =
   | 'unauthenticated'
@@ -14,6 +14,10 @@ export type LiveMutationErrorCode =
 export type LiveMutationResult =
   | { ok: true }
   | {
+      ok: true;
+      liveId: string;
+    }
+  | {
       ok: false;
       code: LiveMutationErrorCode;
       message: string;
@@ -21,6 +25,12 @@ export type LiveMutationResult =
     };
 
 type LiveMutationFailure = Extract<LiveMutationResult, { ok: false }>;
+export type StartLiveMutationResult =
+  | {
+      ok: true;
+      liveId: string;
+    }
+  | LiveMutationFailure;
 
 export type StartLiveInput = {
   liveId: string;
@@ -200,7 +210,7 @@ function logLiveMutationFailure(
 }
 
 function resolveReducer(reducerNames: string[]): ReducerCaller | null {
-  const reducers = spacetimeDb.reducers as Record<string, unknown> | null | undefined;
+  const reducers = railwayDb.reducers as Record<string, unknown> | null | undefined;
   if (!reducers) return null;
 
   for (const reducerName of reducerNames) {
@@ -240,7 +250,7 @@ async function runReducerMutation(
   }
 }
 
-function startLive(input: StartLiveInput): Promise<LiveMutationResult> {
+function startLive(input: StartLiveInput): Promise<StartLiveMutationResult> {
   const liveId = normalizeString(input.liveId);
   const ownerUserId = normalizeString(input.ownerUserId);
   if (!liveId || !ownerUserId) {
@@ -262,6 +272,11 @@ function startLive(input: StartLiveInput): Promise<LiveMutationResult> {
     viewers: normalizeInteger(input.viewers, 1),
     hosts: JSON.stringify(hosts),
     bannedUserIds: JSON.stringify(bannedUserIds),
+  }).then((result) => {
+    if (!result.ok) {
+      return result;
+    }
+    return { ok: true, liveId };
   });
 }
 

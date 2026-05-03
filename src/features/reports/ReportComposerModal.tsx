@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { AppText, AppTextInput } from '../../components';
 import { colors, radius, spacing } from '../../theme';
+import { blurActiveWebElement } from '../../utils/webRuntimeCompat';
 
 export const DEFAULT_REPORT_REASONS = [
   'Spam',
@@ -51,6 +52,10 @@ export function ReportComposerModal({
   const [reason, setReason] = useState<string | null>(initialReason);
   const [details, setDetails] = useState(initialDetails);
   const [errorMessage, setErrorMessage] = useState('');
+  const handleClose = () => {
+    blurActiveWebElement();
+    onClose();
+  };
 
   useEffect(() => {
     if (!visible) {
@@ -69,21 +74,24 @@ export function ReportComposerModal({
       visible={visible}
       animationType="fade"
       transparent
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.overlay}
       >
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable style={styles.backdrop} onPress={handleClose} />
 
-        <View style={styles.sheet}>
+        <View
+          onStartShouldSetResponder={() => true}
+          style={styles.sheet}
+        >
           <View style={styles.header}>
             <View style={styles.headerText}>
               <AppText style={styles.title}>{title}</AppText>
               <AppText style={styles.subtitle}>{subtitle}</AppText>
             </View>
-            <Pressable hitSlop={8} onPress={onClose}>
+            <Pressable hitSlop={8} onPress={handleClose}>
               <Ionicons name="close" size={22} color={colors.textSecondary} />
             </Pressable>
           </View>
@@ -160,6 +168,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'flex-end',
+  },
+  backdrop: {
+    flex: 1,
+    width: '100%',
   },
   sheet: {
     borderTopLeftRadius: radius.xl,

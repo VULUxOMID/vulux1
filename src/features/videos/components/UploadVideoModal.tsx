@@ -5,11 +5,11 @@ import { AppText } from '../../../components/AppText';
 import { colors } from '../../../theme';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../../auth/clerkSession';
 import { useVideo, type VideoCategory } from '../../../context/VideoContext';
 import { toast } from '../../../components/Toast';
 import { uploadMediaAsset } from '../../../utils/mediaUpload';
-import { publishVideoCatalogItem } from '../../../utils/spacetimePersistence';
+import { publishVideoCatalogItem } from '../../../utils/railwayPersistence';
 
 interface UploadVideoModalProps {
   visible: boolean;

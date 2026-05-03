@@ -68,6 +68,39 @@ function normalizeSearchIndex(
   };
 }
 
+function normalizeSearchIndexPatch(
+  rawPayload: unknown,
+  fallback: Partial<Pick<BackendSnapshot, 'socialUsers' | 'conversations' | 'lives'>>,
+): Partial<ListSearchIndexResponse> | undefined {
+  const payload = safeRecord(rawPayload);
+  if (!payload) {
+    return undefined;
+  }
+
+  const patch: Partial<ListSearchIndexResponse> = {};
+  if (hasOwn(payload, 'users')) {
+    patch.users = safeArray<ListSearchIndexResponse['users'][number]>(payload.users);
+  } else if (fallback.socialUsers) {
+    patch.users = fallback.socialUsers;
+  }
+
+  if (hasOwn(payload, 'conversations')) {
+    patch.conversations = safeArray<ListSearchIndexResponse['conversations'][number]>(
+      payload.conversations,
+    );
+  } else if (fallback.conversations) {
+    patch.conversations = fallback.conversations;
+  }
+
+  if (hasOwn(payload, 'lives')) {
+    patch.lives = safeArray<ListSearchIndexResponse['lives'][number]>(payload.lives);
+  } else if (fallback.lives) {
+    patch.lives = fallback.lives;
+  }
+
+  return patch;
+}
+
 function getSnapshotPayload(raw: unknown): UnknownRecord {
   const payload = safeRecord(raw);
   if (!payload) return {};
@@ -112,11 +145,14 @@ export type BackendSnapshot = {
   playlists: ListPlaylistsResponse;
   artists: ListArtistsResponse;
   searchIndex: ListSearchIndexResponse;
+  socialReadLoaded: boolean;
+  mediaReadLoaded: boolean;
+  messagesReadLoaded: boolean;
   wallet?: Record<string, unknown>;
 };
 
 export type BackendSnapshotPatch = Partial<Omit<BackendSnapshot, 'searchIndex'>> & {
-  searchIndex?: ListSearchIndexResponse;
+  searchIndex?: Partial<ListSearchIndexResponse>;
   wallet?: Record<string, unknown>;
 };
 
@@ -173,7 +209,98 @@ export const EMPTY_BACKEND_SNAPSHOT: BackendSnapshot = {
     conversations: [],
     lives: [],
   },
+  socialReadLoaded: false,
+  mediaReadLoaded: false,
+  messagesReadLoaded: false,
 };
+
+export async function loadBackendSocialSnapshotForUser(
+  client: BackendHttpClient | null,
+  viewerUserId: string | null = null,
+): Promise<BackendSnapshotPatch | null> {
+  if (!client || !viewerUserId) {
+    return null;
+  }
+
+  try {
+    const rawPayload = await client.get<unknown>('/api/social/snapshot', { userId: viewerUserId });
+    const payload = getSnapshotPayload(rawPayload);
+    return {
+      socialUsers: safeArray<ListSocialUsersResponse[number]>(payload.socialUsers),
+      acceptedFriendIds: safeArray<ListAcceptedFriendIdsResponse[number]>(payload.acceptedFriendIds),
+      notifications: safeArray<ListNotificationsResponse[number]>(payload.notifications),
+      socialReadLoaded: true,
+      searchIndex:
+        normalizeSearchIndexPatch(payload.searchIndex, {
+          socialUsers: safeArray<ListSocialUsersResponse[number]>(payload.socialUsers),
+        }) ?? {
+          users: safeArray<ListSocialUsersResponse[number]>(payload.socialUsers),
+        },
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[data/backend] Failed to load social snapshot', error);
+    }
+    return null;
+  }
+}
+
+export async function loadBackendMediaSnapshot(
+  client: BackendHttpClient | null,
+): Promise<BackendSnapshotPatch | null> {
+  if (!client) {
+    return null;
+  }
+
+  try {
+    const rawPayload = await client.get<unknown>('/api/media/snapshot');
+    const payload = getSnapshotPayload(rawPayload);
+    return {
+      videos: safeArray<ListVideosResponse[number]>(payload.videos),
+      tracks: safeArray<ListTracksResponse[number]>(payload.tracks),
+      playlists: safeArray<ListPlaylistsResponse[number]>(payload.playlists),
+      artists: safeArray<ListArtistsResponse[number]>(payload.artists),
+      mediaReadLoaded: true,
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[data/backend] Failed to load media snapshot', error);
+    }
+    return null;
+  }
+}
+
+export async function loadBackendMessagesSnapshot(
+  client: BackendHttpClient | null,
+  viewerUserId: string | null = null,
+): Promise<BackendSnapshotPatch | null> {
+  if (!client || !viewerUserId) {
+    return null;
+  }
+
+  try {
+    const rawPayload = await client.get<unknown>('/api/messages/snapshot', { userId: viewerUserId });
+    const payload = getSnapshotPayload(rawPayload);
+    return {
+      conversations: safeArray<ListConversationsResponse[number]>(payload.conversations),
+      threadSeedMessagesByUserId: parseThreadSeedMessagesByUserId(
+        payload.threadSeedMessagesByUserId,
+      ),
+      messagesReadLoaded: true,
+      searchIndex:
+        normalizeSearchIndexPatch(payload.searchIndex, {
+          conversations: safeArray<ListConversationsResponse[number]>(payload.conversations),
+        }) ?? {
+          conversations: safeArray<ListConversationsResponse[number]>(payload.conversations),
+        },
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[data/backend] Failed to load messages snapshot', error);
+    }
+    return null;
+  }
+}
 
 export async function loadBackendSnapshot(
   client: BackendHttpClient | null,
@@ -344,14 +471,23 @@ export async function loadBackendSnapshotPatchForUser(
       patch.artists = safeArray<ListArtistsResponse[number]>(patchPayload.artists);
     }
     if (hasOwn(patchPayload, 'searchIndex')) {
-      patch.searchIndex = normalizeSearchIndex(patchPayload.searchIndex, {
-        socialUsers: patch.socialUsers ?? EMPTY_BACKEND_SNAPSHOT.socialUsers,
-        conversations: patch.conversations ?? EMPTY_BACKEND_SNAPSHOT.conversations,
-        lives: patch.lives ?? EMPTY_BACKEND_SNAPSHOT.lives,
+      patch.searchIndex = normalizeSearchIndexPatch(patchPayload.searchIndex, {
+        socialUsers: patch.socialUsers,
+        conversations: patch.conversations,
+        lives: patch.lives,
       });
     }
     if (hasOwn(patchPayload, 'wallet')) {
       patch.wallet = safeRecord(patchPayload.wallet) ?? undefined;
+    }
+    if (hasOwn(patchPayload, 'socialReadLoaded')) {
+      patch.socialReadLoaded = patchPayload.socialReadLoaded === true;
+    }
+    if (hasOwn(patchPayload, 'mediaReadLoaded')) {
+      patch.mediaReadLoaded = patchPayload.mediaReadLoaded === true;
+    }
+    if (hasOwn(patchPayload, 'messagesReadLoaded')) {
+      patch.messagesReadLoaded = patchPayload.messagesReadLoaded === true;
     }
 
     return patch;
@@ -377,16 +513,20 @@ export function mergeBackendSnapshot(
   base: BackendSnapshot,
   patch: BackendSnapshotPatch,
 ): BackendSnapshot {
+  const nextSearchIndexPatch = patch.searchIndex ?? {};
   const merged: BackendSnapshot = {
     ...base,
     ...patch,
     threadSeedMessagesByUserId:
       patch.threadSeedMessagesByUserId ?? base.threadSeedMessagesByUserId,
-    searchIndex: normalizeSearchIndex(patch.searchIndex, {
-      socialUsers: patch.socialUsers ?? base.socialUsers,
-      conversations: patch.conversations ?? base.conversations,
-      lives: patch.lives ?? base.lives,
-    }),
+    searchIndex: {
+      users: nextSearchIndexPatch.users ?? base.searchIndex.users,
+      conversations: nextSearchIndexPatch.conversations ?? base.searchIndex.conversations,
+      lives: nextSearchIndexPatch.lives ?? base.searchIndex.lives,
+    },
+    socialReadLoaded: patch.socialReadLoaded ?? base.socialReadLoaded,
+    mediaReadLoaded: patch.mediaReadLoaded ?? base.mediaReadLoaded,
+    messagesReadLoaded: patch.messagesReadLoaded ?? base.messagesReadLoaded,
   };
 
   return merged;

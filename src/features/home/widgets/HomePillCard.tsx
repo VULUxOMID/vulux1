@@ -10,16 +10,17 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-const PILL_H = 54;
+const PILL_H = 58;
 const PILL_H_COMPACT = 44;
-const PILL_RADIUS = 18;
+const PILL_RADIUS = 16;
 const PILL_PAD_X = 16;
-const PILL_PAD_X_COMPACT = 0;
+const PILL_PAD_X_COMPACT = 10;
 
 type HomePillCardProps = {
   title: string;
   leftIcon?: keyof typeof Ionicons.glyphMap;
   leftIconBackground?: string;
+  leftIconSize?: number;
   rightContent?: ReactNode;
   collapsedContent?: ReactNode;
   onPress?: () => void;
@@ -38,6 +39,7 @@ export function HomePillCard({
   title,
   leftIcon,
   leftIconBackground,
+  leftIconSize,
   rightContent,
   collapsedContent,
   onPress,
@@ -55,6 +57,7 @@ export function HomePillCard({
   const defaultHeight = isCompact ? PILL_H_COMPACT : PILL_H;
   const height = headerHeight ?? defaultHeight;
   const paddingX = isCompact ? PILL_PAD_X_COMPACT : PILL_PAD_X;
+  const resolvedIconSize = leftIconSize ?? (isCompact ? 16 : 20);
 
   // Track previous expanded state to only animate on changes
   const wasExpanded = useRef(expanded);
@@ -82,43 +85,56 @@ export function HomePillCard({
     onPress?.();
   };
 
-  return (
-    <View style={[styles.container, style]}>
-      <Pressable
-        onPress={handlePress}
-        onPressIn={onPressIn}
-        style={({ pressed }) => [
-          styles.header,
-          { height, paddingHorizontal: paddingX },
-          pressed && onPress && styles.pressed,
-        ]}
-      >
-        <View style={styles.leftRow}>
-          {leftIcon && (
-            leftIconBackground ? (
-              <View style={[styles.iconBackground, { backgroundColor: leftIconBackground }]}>
-                <Ionicons name={leftIcon} size={isCompact ? 14 : 18} color="#FFFFFF" />
-              </View>
-            ) : (
-              <Ionicons name={leftIcon} size={isCompact ? 16 : 20} color="#FFFFFF" />
-            )
-          )}
-          <AppText style={[styles.titleText, isCompact && styles.titleTextCompact]}>{title}</AppText>
-          {titleSuffix}
-        </View>
+  const header = (
+    <View
+      style={[
+        styles.header,
+        { height, paddingHorizontal: paddingX },
+      ]}
+    >
+      <View style={styles.leftRow}>
+        {leftIcon && (
+          leftIconBackground ? (
+            <View style={[styles.iconBackground, { backgroundColor: leftIconBackground }]}>
+              <Ionicons name={leftIcon} size={resolvedIconSize} color="#FFFFFF" />
+            </View>
+          ) : (
+            <Ionicons name={leftIcon} size={resolvedIconSize} color="#FFFFFF" />
+          )
+        )}
+        <AppText style={[styles.titleText, isCompact && styles.titleTextCompact]}>{title}</AppText>
+        {titleSuffix}
+      </View>
 
-        <View style={styles.rightRow}>
-          {rightContent}
-          {showChevron && (
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={isCompact ? 14 : 16}
-              color={colors.textSecondary}
-              style={styles.chevron}
-            />
-          )}
-        </View>
-      </Pressable>
+      <View style={styles.rightRow}>
+        {rightContent}
+        {showChevron && (
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-forward'}
+            size={isCompact ? 14 : 16}
+            color={colors.textSecondary}
+            style={styles.chevron}
+          />
+        )}
+      </View>
+    </View>
+  );
+
+  const cardBody = (
+    <>
+      {expanded || !onPress ? (
+        <Pressable
+          onPress={handlePress}
+          onPressIn={onPressIn}
+          style={({ pressed }) => [
+            pressed && onPress && styles.pressed,
+          ]}
+        >
+          {header}
+        </Pressable>
+      ) : (
+        header
+      )}
 
       {!expanded && collapsedContent ? (
         <View style={styles.collapsedContent}>
@@ -127,36 +143,58 @@ export function HomePillCard({
       ) : null}
 
       {expanded && children ? (
-        <Animated.View 
+        <Animated.View
           style={[
-            styles.content, 
-            { 
-              paddingHorizontal: isCompact ? spacing.xs : paddingX, 
+            styles.content,
+            {
+              paddingHorizontal: isCompact ? spacing.xs : paddingX,
               paddingBottom: isCompact ? spacing.xs : paddingX,
               opacity: fadeAnim
-            }, 
+            },
             contentStyle
           ]}
         >
           {children}
         </Animated.View>
       ) : null}
+    </>
+  );
+
+  if (!expanded && onPress) {
+    return (
+      <Pressable
+        onPress={handlePress}
+        onPressIn={onPressIn}
+        style={({ pressed }) => [
+          styles.container,
+          style,
+          pressed && styles.pressed,
+        ]}
+      >
+        {cardBody}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.container, style]}>
+      {cardBody}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(17, 17, 19, 0.96)',
     borderRadius: PILL_RADIUS,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 4,
   },
   header: {
     flexDirection: 'row',
@@ -166,7 +204,7 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceAlt,
   },
   leftRow: {
     flexDirection: 'row',
@@ -178,6 +216,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 20,
     color: colors.textPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: -0.2,
   },
   titleTextCompact: {
     fontSize: 14,
@@ -196,15 +236,16 @@ const styles = StyleSheet.create({
   },
   collapsedContent: {
     paddingHorizontal: PILL_PAD_X,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.smPlus,
+    paddingTop: spacing.xs,
   },
   iconBackground: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
 });
-
-

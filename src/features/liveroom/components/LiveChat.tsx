@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { View, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,19 +10,47 @@ import { useProfile } from '../../../context/ProfileContext';
 type LiveChatProps = {
   messages: ChatMessage[];
   onUserTap?: (user: LiveUser) => void;
+  focusMessageId?: string | null;
 };
 
-export function LiveChat({ messages, onUserTap }: LiveChatProps) {
+export function LiveChat({ messages, onUserTap, focusMessageId = null }: LiveChatProps) {
   const scrollRef = useRef<ScrollView>(null);
+  const messageLayoutsRef = useRef(new Map<string, number>());
+  const handledFocusMessageIdRef = useRef<string | null>(null);
   const { showProfile } = useProfile();
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (focusMessageId && messages.some((message) => message.id === focusMessageId)) {
+      return;
+    }
     if (messages.length > 0) {
       setTimeout(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
       }, 100);
     }
-  }, [messages.length]);
+  }, [focusMessageId, messages]);
+
+  useEffect(() => {
+    handledFocusMessageIdRef.current = null;
+    setHighlightedMessageId(null);
+  }, [focusMessageId]);
+
+  const focusMessage = (messageId: string) => {
+    if (handledFocusMessageIdRef.current === messageId) {
+      return;
+    }
+    const y = messageLayoutsRef.current.get(messageId);
+    if (typeof y !== 'number') {
+      return;
+    }
+    handledFocusMessageIdRef.current = messageId;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 120), animated: true });
+    setHighlightedMessageId(messageId);
+    setTimeout(() => {
+      setHighlightedMessageId((current) => (current === messageId ? null : current));
+    }, 1200);
+  };
 
   return (
     <View style={styles.container}>
@@ -52,11 +80,21 @@ export function LiveChat({ messages, onUserTap }: LiveChatProps) {
           <AppText style={styles.emptyText}>No messages yet</AppText>
         ) : (
           messages.map((message) => (
-            <ChatMessageItem 
-              key={message.id} 
-              message={message} 
-              onUserTap={onUserTap}
-            />
+            <View
+              key={message.id}
+              onLayout={(event) => {
+                messageLayoutsRef.current.set(message.id, event.nativeEvent.layout.y);
+                if (focusMessageId === message.id) {
+                  focusMessage(message.id);
+                }
+              }}
+            >
+              <ChatMessageItem
+                message={message}
+                onUserTap={onUserTap}
+                isHighlighted={message.id === highlightedMessageId}
+              />
+            </View>
           ))
         )}
       </ScrollView>
@@ -66,10 +104,12 @@ export function LiveChat({ messages, onUserTap }: LiveChatProps) {
 
 function ChatMessageItem({ 
   message, 
-  onUserTap 
+  onUserTap,
+  isHighlighted = false,
 }: { 
   message: ChatMessage; 
   onUserTap?: (user: LiveUser) => void;
+  isHighlighted?: boolean;
 }) {
   const { showProfile } = useProfile();
   
@@ -87,7 +127,7 @@ function ChatMessageItem({
   const avatarUri = message.user?.avatarUrl?.trim();
 
   return (
-    <View style={styles.messageRow}>
+    <View style={[styles.messageRow, isHighlighted && styles.messageRowHighlighted]}>
       {message.user && (
         <Pressable 
           onPress={() => handleUserPress(message.user!)}
@@ -230,6 +270,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
+  },
+  messageRowHighlighted: {
+    borderRadius: radius.lg,
+    backgroundColor: 'rgba(123, 97, 255, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(123, 97, 255, 0.35)',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 4,
   },
   avatarContainer: {
     width: 24,

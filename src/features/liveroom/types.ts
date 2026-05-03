@@ -15,6 +15,14 @@ export type LiveUser = {
   roles?: UserRole[];
   // Media state
   isMuted?: boolean;
+  cameraEnabled?: boolean;
+  role?: 'host' | 'panel' | 'watcher';
+  connectionState?: 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed' | 'unknown';
+  isSpeaking?: boolean;
+  hasAudioTrack?: boolean;
+  hasVideoTrack?: boolean;
+  isLocal?: boolean;
+  isConnectedToRtc?: boolean;
   isFriend?: boolean;
   isSelfPreview?: boolean;
   // Music listening state

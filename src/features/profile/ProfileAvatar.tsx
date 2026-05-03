@@ -34,6 +34,7 @@ export function ProfileAvatar({
   const avatarUri = normalizeImageUri(imageUri);
   const statusConfig = status ? STATUS_CONFIG[status] : null;
   const statusLabel = statusMessage?.trim() || statusConfig?.label;
+  const displayName = name.trim().length > 0 ? name : 'Your profile';
 
   return (
     <View style={styles.container}>
@@ -66,7 +67,7 @@ export function ProfileAvatar({
         </Pressable>
       </View>
 
-      <AppText variant="h1" style={styles.name}>{name}</AppText>
+      <AppText variant="h2" style={styles.name}>{displayName}</AppText>
 
       {statusConfig ? (
         <Pressable
@@ -92,20 +93,20 @@ export function ProfileAvatar({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.md,
   },
   avatarWrapper: {
     position: 'relative',
     marginBottom: spacing.xs,
   },
   gradientRing: {
-    padding: 3,
+    padding: 4,
     borderRadius: 75, // larger than avatar
   },
   avatarContainer: {
-    width: 130,
-    height: 130,
-    borderRadius: 65,
+    width: 136,
+    height: 136,
+    borderRadius: 68,
     overflow: 'hidden',
     backgroundColor: colors.surfaceAlt,
     borderWidth: 4,
@@ -142,13 +143,14 @@ const styles = StyleSheet.create({
   name: {
     color: colors.textPrimary,
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.smMinus,
+    paddingHorizontal: spacing.mdPlus,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceAlt,
     borderWidth: 1,

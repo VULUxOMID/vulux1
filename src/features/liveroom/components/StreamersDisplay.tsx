@@ -6,22 +6,31 @@ import {
   Pressable,
   Dimensions,
   Animated,
-  type StyleProp,
-  type ImageStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '../../../components';
 import { colors, radius, spacing } from '../../../theme';
 import { LiveUser } from '../types';
 import { hapticTap } from '../../../utils/haptics';
+import { RtcMediaView } from '../../live/rtc/RtcMediaView';
 
 type StreamersDisplayProps = {
   streamers: LiveUser[];
   onStreamerTap: (user: LiveUser) => void;
   speakingUserIds?: string[]; // IDs of users currently speaking
+  mediaByUserId?: Record<
+    string,
+    {
+      stream?: unknown;
+      hasVideoTrack?: boolean;
+      connectionState?: string;
+      isLocal?: boolean;
+    }
+  >;
+  showDebugState?: boolean;
 };
 
-function AvatarSurface({ uri, style }: { uri?: string; style: StyleProp<ImageStyle> }) {
+function AvatarSurface({ uri, style }: { uri?: string; style: any }) {
   const normalizedUri = uri?.trim();
   if (!normalizedUri) {
     return (
@@ -33,10 +42,12 @@ function AvatarSurface({ uri, style }: { uri?: string; style: StyleProp<ImageSty
   return <Image source={{ uri: normalizedUri }} style={style} />;
 }
 
-export function StreamersDisplay({ 
-  streamers, 
+export function StreamersDisplay({
+  streamers,
   onStreamerTap,
   speakingUserIds = [],
+  mediaByUserId = {},
+  showDebugState = false,
 }: StreamersDisplayProps) {
   const count = streamers.length;
 
@@ -50,23 +61,27 @@ export function StreamersDisplay({
 
   if (count === 1) {
     return (
-      <SingleStreamer 
-        streamer={streamers[0]} 
-        onTap={() => onStreamerTap(streamers[0])}
-        isSpeaking={speakingUserIds.includes(streamers[0].id)}
-      />
-    );
+        <SingleStreamer
+          streamer={streamers[0]}
+          onTap={() => onStreamerTap(streamers[0])}
+          isSpeaking={speakingUserIds.includes(streamers[0].id)}
+          media={mediaByUserId[streamers[0].id]}
+          showDebugState={showDebugState}
+        />
+      );
   }
 
   if (count === 2) {
     return (
       <View style={styles.dualContainer}>
         {streamers.map((streamer) => (
-          <DualStreamer 
-            key={streamer.id} 
-            streamer={streamer} 
+          <DualStreamer
+            key={streamer.id}
+            streamer={streamer}
             onTap={() => onStreamerTap(streamer)}
             isSpeaking={speakingUserIds.includes(streamer.id)}
+            media={mediaByUserId[streamer.id]}
+            showDebugState={showDebugState}
           />
         ))}
       </View>
@@ -77,17 +92,47 @@ export function StreamersDisplay({
   return (
     <View style={styles.gridContainer}>
       {streamers.slice(0, 4).map((streamer, index) => (
-        <GridStreamer 
-          key={streamer.id} 
+        <GridStreamer
+          key={streamer.id}
           streamer={streamer}
           onTap={() => onStreamerTap(streamer)}
           showMore={index === 3 && count > 4}
           moreCount={count - 4}
           isSpeaking={speakingUserIds.includes(streamer.id)}
+          media={mediaByUserId[streamer.id]}
+          showDebugState={showDebugState}
         />
       ))}
     </View>
   );
+}
+
+function MediaSurface({
+  streamer,
+  media,
+  style,
+}: {
+  streamer: LiveUser;
+  media?: {
+    stream?: unknown;
+    hasVideoTrack?: boolean;
+    isLocal?: boolean;
+  };
+  style: any;
+}) {
+  if (media?.stream && media.hasVideoTrack) {
+    return (
+      <View style={style}>
+        <RtcMediaView
+          stream={media.stream}
+          mirror={Boolean(media.isLocal)}
+          isLocal={Boolean(media.isLocal)}
+        />
+      </View>
+    );
+  }
+
+  return <AvatarSurface uri={streamer.avatarUrl} style={style} />;
 }
 
 // Subtle border pulse animation hook
@@ -113,27 +158,41 @@ function useBorderPulse(isSpeaking: boolean) {
   return { opacityAnim };
 }
 
-function SingleStreamer({ 
-  streamer, 
+function SingleStreamer({
+  streamer,
   onTap,
   isSpeaking = false,
-}: { 
-  streamer: LiveUser; 
+  media,
+  showDebugState = false,
+}: {
+  streamer: LiveUser;
   onTap: () => void;
   isSpeaking?: boolean;
+  media?: {
+    stream?: unknown;
+    hasVideoTrack?: boolean;
+    connectionState?: string;
+    isLocal?: boolean;
+  };
+  showDebugState?: boolean;
 }) {
   const { opacityAnim } = useBorderPulse(isSpeaking);
 
   return (
     <Pressable style={styles.singleContainer} onPress={onTap}>
       <View style={styles.avatarWrapper}>
-        <AvatarSurface uri={streamer.avatarUrl} style={styles.avatarLargeBase} />
-        <Animated.View 
+        <MediaSurface streamer={streamer} media={media} style={styles.avatarLargeBase} />
+        <Animated.View
           style={[
-            styles.borderOverlayLarge, 
+            styles.borderOverlayLarge,
             { opacity: isSpeaking ? opacityAnim : 1 }
-          ]} 
+          ]}
         />
+        {showDebugState && media?.connectionState ? (
+          <View style={styles.debugBadgeLarge}>
+            <AppText style={styles.debugBadgeText}>{media.connectionState}</AppText>
+          </View>
+        ) : null}
         {streamer.isMuted && (
           <View style={styles.muteBadgeLarge}>
             <Ionicons name="mic-off" size={14} color="#fff" />
@@ -147,27 +206,41 @@ function SingleStreamer({
   );
 }
 
-function DualStreamer({ 
-  streamer, 
+function DualStreamer({
+  streamer,
   onTap,
   isSpeaking = false,
-}: { 
-  streamer: LiveUser; 
+  media,
+  showDebugState = false,
+}: {
+  streamer: LiveUser;
   onTap: () => void;
   isSpeaking?: boolean;
+  media?: {
+    stream?: unknown;
+    hasVideoTrack?: boolean;
+    connectionState?: string;
+    isLocal?: boolean;
+  };
+  showDebugState?: boolean;
 }) {
   const { opacityAnim } = useBorderPulse(isSpeaking);
 
   return (
     <Pressable style={styles.dualStreamer} onPress={onTap}>
       <View style={styles.avatarWrapperMedium}>
-        <AvatarSurface uri={streamer.avatarUrl} style={styles.avatarMediumBase} />
-        <Animated.View 
+        <MediaSurface streamer={streamer} media={media} style={styles.avatarMediumBase} />
+        <Animated.View
           style={[
-            styles.borderOverlayMedium, 
+            styles.borderOverlayMedium,
             { opacity: isSpeaking ? opacityAnim : 1 }
-          ]} 
+          ]}
         />
+        {showDebugState && media?.connectionState ? (
+          <View style={styles.debugBadgeMedium}>
+            <AppText style={styles.debugBadgeText}>{media.connectionState}</AppText>
+          </View>
+        ) : null}
         {streamer.isMuted && (
           <View style={styles.muteBadgeMedium}>
             <Ionicons name="mic-off" size={12} color="#fff" />
@@ -181,31 +254,45 @@ function DualStreamer({
   );
 }
 
-function GridStreamer({ 
-  streamer, 
+function GridStreamer({
+  streamer,
   onTap,
   showMore,
   moreCount,
   isSpeaking = false,
-}: { 
-  streamer: LiveUser; 
+  media,
+  showDebugState = false,
+}: {
+  streamer: LiveUser;
   onTap: () => void;
   showMore?: boolean;
   moreCount?: number;
   isSpeaking?: boolean;
+  media?: {
+    stream?: unknown;
+    hasVideoTrack?: boolean;
+    connectionState?: string;
+    isLocal?: boolean;
+  };
+  showDebugState?: boolean;
 }) {
   const { opacityAnim } = useBorderPulse(isSpeaking);
 
   return (
     <Pressable style={styles.gridStreamer} onPress={onTap}>
       <View style={styles.avatarWrapperSmall}>
-        <AvatarSurface uri={streamer.avatarUrl} style={styles.avatarSmallBase} />
-        <Animated.View 
+        <MediaSurface streamer={streamer} media={media} style={styles.avatarSmallBase} />
+        <Animated.View
           style={[
-            styles.borderOverlaySmall, 
+            styles.borderOverlaySmall,
             { opacity: isSpeaking ? opacityAnim : 1 }
-          ]} 
+          ]}
         />
+        {showDebugState && media?.connectionState ? (
+          <View style={styles.debugBadgeSmall}>
+            <AppText style={styles.debugBadgeText}>{media.connectionState}</AppText>
+          </View>
+        ) : null}
         {streamer.isMuted && (
           <View style={styles.muteBadgeSmall}>
             <Ionicons name="mic-off" size={10} color="#fff" />
@@ -254,6 +341,15 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#fff',
   },
+  debugBadgeLarge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
   namePill: {
     backgroundColor: 'rgba(0,0,0,0.5)',
     paddingHorizontal: spacing.md,
@@ -295,6 +391,15 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 2,
     borderColor: '#fff',
+  },
+  debugBadgeMedium: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
   },
   namePillSmall: {
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -338,6 +443,20 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 2,
     borderColor: '#fff',
+  },
+  debugBadgeSmall: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  debugBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
   },
   nameTextTiny: {
     color: '#fff',

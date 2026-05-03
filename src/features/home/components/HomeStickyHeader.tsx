@@ -45,12 +45,14 @@ const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
-    paddingBottom: 0,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 0,
+    borderBottomColor: 'transparent',
+    zIndex: 10,
   },
   searchBarContainer: {
     overflow: 'hidden',
     justifyContent: 'center',
-    marginTop: spacing.xs,
-    marginBottom: spacing.xs,
+    marginTop: spacing.sm,
   },
 });

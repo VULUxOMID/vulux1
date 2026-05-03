@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { AppText, CashIcon, SectionCard, ToggleRow } from '../../components';
 import { colors, radius, spacing } from '../../theme';
-import { GemPlusWidget } from '../home/widgets/GemPlusWidget';
 import {
   FUEL_COSTS,
   FuelFillAmount,
@@ -12,11 +11,6 @@ import {
 } from '../liveroom/types';
 
 type ShopBuyTabProps = {
-  isSubscribed: boolean;
-  autoRenew: boolean;
-  onSubscribe: () => void;
-  onCancelSubscription: () => void;
-  onResumeSubscription: () => void;
   onWatchAd: () => void;
   isLoadingAd: boolean;
   onBuyGems: (amount: number, price: string) => void;
@@ -29,11 +23,6 @@ type ShopBuyTabProps = {
 };
 
 export const ShopBuyTab = React.memo(function ShopBuyTab({
-  isSubscribed,
-  autoRenew,
-  onSubscribe,
-  onCancelSubscription,
-  onResumeSubscription,
   onWatchAd,
   isLoadingAd,
   onBuyGems,
@@ -83,15 +72,6 @@ export const ShopBuyTab = React.memo(function ShopBuyTab({
 
   return (
     <View style={styles.container}>
-      <GemPlusWidget
-        isSubscriber={isSubscribed}
-        autoRenew={autoRenew}
-        onSubscribe={onSubscribe}
-        onCancelSubscription={onCancelSubscription}
-        onResumeSubscription={onResumeSubscription}
-        variant="shop"
-      />
-
       <SectionCard title="Get Gems" contentStyle={styles.sectionContent}>
         <Pressable
           style={[styles.watchAdCard, isLoadingAd && styles.cardDisabled]}

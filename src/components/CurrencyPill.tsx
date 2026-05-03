@@ -10,6 +10,8 @@ export type CurrencyPillProps = {
   label: string;
   color: string;
   onPress?: () => void;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
   showDot?: boolean;
   style?: StyleProp<ViewStyle>;
   size?: 'regular' | 'small';
@@ -20,6 +22,8 @@ export function CurrencyPill({
   label,
   color,
   onPress,
+  accessibilityLabel,
+  accessibilityHint,
   showDot = false,
   style,
   size = 'regular',
@@ -32,6 +36,8 @@ export function CurrencyPill({
     <Pressable
       onPress={onPress}
       disabled={!onPress}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
       style={[styles.container, isSmall && styles.containerSmall, style]}
     >
       {icon === 'cash' ? (
@@ -60,13 +66,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: radius.xl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     position: 'relative',
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   containerSmall: {
     gap: spacing.xxs,

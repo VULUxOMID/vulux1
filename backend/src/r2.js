@@ -1,4 +1,4 @@
-// R2 configuration for Cloudflare R2 storage
+// R2 blob storage configuration for the Railway backend.
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 

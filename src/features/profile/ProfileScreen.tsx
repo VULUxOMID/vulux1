@@ -1,26 +1,29 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LayoutAnimation, Platform, StyleSheet, UIManager, View } from 'react-native';
+import { LayoutAnimation, Platform, ScrollView, StyleSheet, UIManager, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppScreen, PillTabs } from '../../components';
+import { AppScreen, AppText, PillTabs } from '../../components';
 import type { PillTabItem } from '../../components';
 import { useAuth, useFriends, useWallet } from '../../context';
 import { useUserProfile } from '../../context/UserProfileContext';
 import { useLeaderboardRepo, useNotificationsRepo, useSocialRepo } from '../../data/provider';
 import { requestBackendRefresh } from '../../data/adapters/backend/refreshBus';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
 import { useAppIsActive } from '../../hooks/useAppIsActive';
-import { spacetimeDb, subscribeBootstrap } from '../../lib/spacetime';
+import { railwayDb, subscribeProfile } from '../../lib/railwayRuntime';
 import { hasAuthoritativeWallet } from '../../context/walletHydration';
-import { colors, spacing } from '../../theme';
+import { colors, radius, spacing } from '../../theme';
 import { hapticTap } from '../../utils/haptics';
+import { NAV_BAR_HEIGHT } from '../../components/navigation/layoutConstants';
 import { GemsBalanceCard } from './GemsBalanceCard';
 import { MusicWidget } from './MusicWidget';
 import { ProfileAvatar } from './ProfileAvatar';
 import { ProfileHeader } from './ProfileHeader';
 import { ProfileStats } from './ProfileStats';
 import { PresenceStatusModal } from './PresenceStatusModal';
+import { NOTIFICATION_FEED_LIMIT } from '../notifications/constants';
 
 if (
   Platform.OS === 'android' &&
@@ -35,6 +38,7 @@ const PROFILE_DIAGNOSTIC_THROTTLE_MS = 15_000;
 export default function ProfileScreen() {
   const isFocused = useIsFocused();
   const isAppActive = useAppIsActive();
+  const insets = useSafeAreaInsets();
   const { userId, isLoaded: isAuthLoaded, isSignedIn } = useSessionAuth();
   const queriesEnabled = isAuthLoaded && isSignedIn && !!userId && isFocused && isAppActive;
   const { user } = useAuth();
@@ -43,7 +47,7 @@ export default function ProfileScreen() {
   const leaderboardRepo = useLeaderboardRepo();
   const socialRepo = useSocialRepo();
   const { userProfile, updateUserProfile } = useUserProfile();
-  const { gems, cash, fuel, walletHydrated, walletStateAvailable } = useWallet();
+  const { gems, cash, fuel, walletHydrated, walletStateAvailable, cashTransferHistory } = useWallet();
   const router = useRouter();
   const [isRankPublic, setIsRankPublic] = useState(true);
   const [activeTab, setActiveTab] = useState<TabOption>('wallet');
@@ -59,11 +63,11 @@ export default function ProfileScreen() {
     if (!queriesEnabled) {
       return;
     }
-    return subscribeBootstrap();
+    return subscribeProfile();
   }, [queriesEnabled]);
 
   const notifications = useMemo(
-    () => notificationsRepo.listNotifications({ limit: 120 }),
+    () => notificationsRepo.listNotifications({ limit: NOTIFICATION_FEED_LIMIT }),
     [notificationsRepo],
   );
   const leaderboardItems = useMemo(
@@ -71,7 +75,7 @@ export default function ProfileScreen() {
     [leaderboardRepo],
   );
 
-  const profileName = userProfile.name || user?.displayName || userProfile.username || '';
+  const profileName = userProfile.name || user?.displayName || userProfile.username || 'Your profile';
   const profileImageUri = userProfile.avatarUrl || user?.photoURL || undefined;
 
   const profileStats = useMemo(() => {
@@ -91,20 +95,10 @@ export default function ProfileScreen() {
       }
     });
 
-    const dbView = spacetimeDb.db as any;
-    const metricsRows: any[] = Array.from(
-      dbView?.myProfileViewMetrics?.iter?.() ?? dbView?.my_profile_view_metrics?.iter?.() ?? [],
-    );
-    const metricsRow = metricsRows[0] ?? null;
-    const correctedViewedYouRaw = Number(metricsRow?.correctedTotalCount);
-    const correctedViewedYou = Number.isFinite(correctedViewedYouRaw)
-      ? Math.max(0, Math.floor(correctedViewedYouRaw))
-      : legacyViewedYou;
-
     return {
       friends: friends.length,
       addedYou,
-      viewedYou: correctedViewedYou,
+      viewedYou: legacyViewedYou,
     };
   }, [friends.length, notifications]);
 
@@ -208,6 +202,7 @@ export default function ProfileScreen() {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActiveTab(tab as TabOption);
   }, []);
+  const bottomContentPadding = NAV_BAR_HEIGHT + insets.bottom + spacing.screenBottom + spacing.xl;
 
   const renderTabContent = () => {
     const showAuthoritativeWallet = hasAuthoritativeWallet(
@@ -229,6 +224,33 @@ export default function ProfileScreen() {
               onToggleRankPrivacy={setIsRankPublic}
               onPress={handleBalancePress}
             />
+            <View style={styles.transferCard}>
+              <AppText variant="h3" style={styles.transferTitle}>
+                Recent Transfers
+              </AppText>
+              {cashTransferHistory.length > 0 ? (
+                cashTransferHistory.slice(0, 5).map((transfer) => (
+                  <View key={transfer.id} style={styles.transferRow}>
+                    <View style={styles.transferCopy}>
+                      <AppText variant="bodyBold" style={styles.transferAmount}>
+                        {transfer.direction === 'sent' ? '-' : '+'}${transfer.amountCash}
+                      </AppText>
+                      <AppText variant="tiny" secondary numberOfLines={1}>
+                        {transfer.direction === 'sent' ? 'To' : 'From'} @{transfer.otherHandle}
+                        {transfer.note ? ` • ${transfer.note}` : ''}
+                      </AppText>
+                    </View>
+                    <AppText variant="micro" secondary>
+                      {new Date(transfer.createdAt).toLocaleDateString()}
+                    </AppText>
+                  </View>
+                ))
+              ) : (
+                <AppText variant="small" secondary>
+                  No cash transfers yet.
+                </AppText>
+              )}
+            </View>
           </View>
         );
       case 'music':
@@ -246,41 +268,47 @@ export default function ProfileScreen() {
     <AppScreen noPadding style={styles.container}>
       <ProfileHeader onSettingsPress={handleSettings} />
 
-      <View style={styles.topSection}>
-        <View style={styles.avatarSection}>
-          <ProfileAvatar
-            imageUri={profileImageUri}
-            name={profileName}
-            onPress={handleEditProfile}
-            status={userProfile.presenceStatus}
-            statusMessage={userProfile.statusMessage}
-            onStatusPress={handleStatusPress}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomContentPadding }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.topSection}>
+          <View style={styles.avatarSection}>
+            <ProfileAvatar
+              imageUri={profileImageUri}
+              name={profileName}
+              onPress={handleEditProfile}
+              status={userProfile.presenceStatus}
+              statusMessage={userProfile.statusMessage}
+              onStatusPress={handleStatusPress}
+            />
+          </View>
+
+          <View style={styles.statsContainer}>
+            <ProfileStats
+              friends={profileStats.friends}
+              addedYou={profileStats.addedYou}
+              viewedYou={profileStats.viewedYou}
+              onPressFriends={handleFriendsPress}
+              onPressAddedYou={handleFriendRequestsPress}
+              onPressViewedYou={handleViewedYouPress}
+            />
+          </View>
+        </View>
+
+        <View style={styles.tabBar}>
+          <PillTabs
+            items={tabItems}
+            value={activeTab}
+            onChange={handleTabChange}
+            style={styles.tabPillContainer}
+            tabItemStyle={styles.tabPillItem}
           />
         </View>
 
-        <View style={styles.statsContainer}>
-          <ProfileStats
-            friends={profileStats.friends}
-            addedYou={profileStats.addedYou}
-            viewedYou={profileStats.viewedYou}
-            onPressFriends={handleFriendsPress}
-            onPressAddedYou={handleFriendRequestsPress}
-            onPressViewedYou={handleViewedYouPress}
-          />
-        </View>
-      </View>
-
-      <View style={styles.tabBar}>
-        <PillTabs
-          items={tabItems}
-          value={activeTab}
-          onChange={handleTabChange}
-          style={styles.tabPillContainer}
-          tabItemStyle={styles.tabPillItem}
-        />
-      </View>
-
-      <View style={styles.contentArea}>{renderTabContent()}</View>
+        <View style={styles.contentArea}>{renderTabContent()}</View>
+      </ScrollView>
 
       <PresenceStatusModal
         visible={showStatusModal}
@@ -298,14 +326,26 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingTop: spacing.xs,
+  },
   topSection: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.md,
+    gap: spacing.md,
   },
   avatarSection: {
     alignItems: 'center',
-    marginBottom: spacing.md,
     marginTop: spacing.xs,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
   statsContainer: {
     marginBottom: spacing.sm,
@@ -322,13 +362,39 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   tabPillItem: {
-    paddingVertical: spacing.smMinus,
+    paddingVertical: spacing.sm,
   },
   contentArea: {
-    flex: 1,
     paddingHorizontal: spacing.lg,
   },
   tabContent: {
+    flexGrow: 0,
+  },
+  transferCard: {
+    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  transferTitle: {
+    marginBottom: spacing.xs,
+  },
+  transferRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.borderSubtle,
+  },
+  transferCopy: {
     flex: 1,
+    paddingRight: spacing.md,
+  },
+  transferAmount: {
+    color: colors.textPrimary,
   },
 });

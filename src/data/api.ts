@@ -15,7 +15,7 @@ const backendClient = createBackendHttpClientFromEnv();
 function ensureBackendClient() {
   if (!backendClient) {
     throw new Error(
-      'Admin API is not configured. Set EXPO_PUBLIC_ADMIN_API_BASE_URL only if you still run the legacy admin service.',
+      'Railway API is not configured. Set EXPO_PUBLIC_RAILWAY_API_BASE_URL.',
     );
   }
   return backendClient;

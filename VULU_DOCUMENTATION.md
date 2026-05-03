@@ -1,73 +1,55 @@
-# VuluGO Documentation
+# Vulu Documentation
 
-This document is the current source of truth for VuluGO runtime setup during the SpacetimeDB migration.
+## Current Stack
 
-## 1. Architecture & Deployment Rules
+- Expo powers the native and web app surfaces.
+- Clerk owns authentication and session tokens.
+- Railway owns the TypeScript API, Postgres data, background jobs, upload signing, and WebSocket signaling.
+- WebRTC carries live audio/video media.
+- R2 stores uploaded blobs; Railway records metadata and signs uploads.
 
-### Non-Negotiable Runtime Rules
-1. **SpacetimeDB is the primary real-time data platform.**
-2. **Railway deployment is retired** for this repo.
-3. Optional HTTP API support is treated as **legacy compatibility only** for not-yet-migrated features.
-4. Do not hardcode production endpoints or credentials in code/scripts.
+## Environment
 
-### Platform Responsibilities
-- **Codex / local dev**: main development environment for app and migration work.
-- **Replit**: frontend/static preview only.
-- **SpacetimeDB maincloud**: primary real-time backend target.
-- **Legacy API runtime** (if used): self-managed and configured by env vars, not tied to Railway.
+App env:
 
-## 2. Environment Variables
-
-### Required App Variables
-```env
-EXPO_PUBLIC_SPACETIMEDB_URI=wss://maincloud.spacetimedb.com
-EXPO_PUBLIC_SPACETIMEDB_NAME=vulu
+```bash
+EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=
+EXPO_PUBLIC_RAILWAY_API_BASE_URL=
+EXPO_PUBLIC_RAILWAY_WS_BASE_URL=
+EXPO_PUBLIC_RTC_ENABLE=1
 ```
 
-### Strongly Recommended App Variables
-```env
-EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE=vulu-backend
-EXPO_PUBLIC_ENABLE_REALTIME=true
-EXPO_PUBLIC_APP_ENV=production
-EXPO_PUBLIC_DATA_SOURCE=backend
+Railway backend env:
+
+```bash
+DATABASE_URL=
+CLERK_JWKS_URL=
+CLERK_JWT_ISSUER=
+CLERK_JWT_AUDIENCE=
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+R2_PUBLIC_BASE_URL=
+RTC_STUN_URLS=
+RTC_TURN_URLS=
+RTC_TURN_SECRET=
 ```
 
-### Optional Legacy API Variables (Compatibility Mode)
-```env
-EXPO_PUBLIC_API_BASE_URL=https://your-api.example.com
-EXPO_PUBLIC_BACKEND_TIMEOUT_MS=15000
-EXPO_PUBLIC_BACKEND_REHYDRATE_MS=30000
-EXPO_PUBLIC_FAST_FALLBACK_REFRESH_MS=800
-EXPO_PUBLIC_FULL_FALLBACK_REFRESH_MS=45000
+## Commands
+
+```bash
+npm start
+npm run ios
+npm run web
+npm run env:check
+npx tsc --noEmit
 ```
 
-### Verification Commands
-Run from repo root:
-- `npm run env:check` - app + SpacetimeDB focused checks
-- `npm run env:check:legacy-api` - optional legacy API checks
+Backend:
 
-## 3. Authentication (SpacetimeDB)
-
-VuluGO uses SpacetimeDB-native authentication. Client identity and auth token are managed by the SpacetimeDB connection and persisted locally for session continuity.
-
-## 4. QA & Deployment Workflow
-
-### Go Live Regression Checklist
-- GL-07 QA matrix: [docs/qa/GL-07-go-live-qa-matrix.md](docs/qa/GL-07-go-live-qa-matrix.md)
-
-### Freshness Checklist
-1. Commit and push changes.
-2. Confirm deploy/build completed.
-3. Use incognito/private window.
-4. In DevTools Network tab, enable "Disable cache" and hard refresh.
-5. Verify latest bundles are being served.
-
-### Replit Static Preview
-Use frontend/static flow only:
-1. `npm run build`
-2. `npx --yes serve dist -l 5000 --no-clipboard --cors --single`
-
-### Triage Guidance
-1. If Spacetime data is stale/missing, verify WebSocket connectivity and active subscriptions.
-2. If a legacy API request fails, verify `EXPO_PUBLIC_API_BASE_URL` and auth token template.
-3. For auth issues, verify SpacetimeDB URI/database env values and reconnect the client.
+```bash
+cd backend
+npm start
+npm run smoke
+```

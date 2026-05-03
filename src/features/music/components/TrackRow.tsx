@@ -26,6 +26,14 @@ export const TrackRow = ({ track, onPress, isPlaying }: TrackRowProps) => {
         <AppText style={styles.artist} numberOfLines={1}>
           {track.artist}
         </AppText>
+        {track.availability === 'region_blocked' ? (
+          <View style={styles.availabilityRow}>
+            <Ionicons name="earth-outline" size={14} color={colors.textMuted} />
+            <AppText style={styles.availabilityText} numberOfLines={1}>
+              May be unavailable in your region
+            </AppText>
+          </View>
+        ) : null}
       </View>
 
       <TouchableOpacity 
@@ -68,6 +76,17 @@ const styles = StyleSheet.create({
   artist: {
     fontSize: 14,
     color: colors.textMuted,
+  },
+  availabilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  availabilityText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    flex: 1,
   },
   moreButton: {
     padding: 8,

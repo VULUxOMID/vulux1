@@ -59,6 +59,7 @@ export function ProfileStats({
           >
             <AppText variant="h1" style={styles.value}>{formatValue(stat.value)}</AppText>
             <AppText variant="micro" secondary style={styles.label}>{stat.label}</AppText>
+            {handlers[index] ? <AppText variant="micro" style={styles.hint}>Open</AppText> : null}
           </Pressable>
           {index < stats.length - 1 && <View style={styles.divider} />}
         </View>
@@ -72,12 +73,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    marginHorizontal: spacing.sm,
+    marginHorizontal: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
@@ -94,9 +95,14 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 88,
+    borderRadius: radius.lgMinus,
+    marginHorizontal: spacing.xxs,
+    paddingHorizontal: spacing.xs,
   },
   statItemPressed: {
-    opacity: 0.6,
+    opacity: 0.92,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   value: {
     color: colors.textPrimary,
@@ -106,6 +112,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     textAlign: 'center',
+  },
+  hint: {
+    marginTop: spacing.xs,
+    color: colors.accentPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   divider: {
     width: 1,

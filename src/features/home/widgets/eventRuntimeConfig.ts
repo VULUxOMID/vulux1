@@ -25,7 +25,7 @@ function readTableRows(table: UnknownRecord): Iterable<unknown> {
         return iterated;
       }
     } catch {
-      // Spacetime table iterators can throw while rows are still hydrating.
+      // Railway table iterators can throw while rows are still hydrating.
     }
   }
 

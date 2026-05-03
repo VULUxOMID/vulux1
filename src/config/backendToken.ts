@@ -5,7 +5,7 @@ function normalize(value: string | undefined): string | undefined {
 
 export function getBackendTokenTemplate(): string | undefined {
   return (
-    normalize(process.env.EXPO_PUBLIC_BACKEND_TOKEN_TEMPLATE) ??
-    normalize(process.env.EXPO_PUBLIC_BACKEND_AUTH_TOKEN_TEMPLATE)
+    normalize(process.env.EXPO_PUBLIC_CLERK_TOKEN_TEMPLATE) ??
+    normalize(process.env.EXPO_PUBLIC_CLERK_BACKEND_TOKEN_TEMPLATE)
   );
 }

@@ -27,7 +27,13 @@ import { NotificationItem } from './components/NotificationItem';
 import { AnnouncementModal } from './components/AnnouncementModal';
 import { NotificationSettingsModal } from './components/NotificationSettingsModal';
 import { NotificationPageSkeleton } from './components/SkeletonLoader';
+import { getActivityContextKey } from './activityGrouping';
+import { shouldMarkNotificationReadBeforeNavigation } from './navigationReadState';
+import { getUnreadProfileViewNotificationIds } from './profileViewReadState';
+import { resolveActivityNotificationNavigation } from './notificationNavigation';
+import { countsTowardUnreadNotificationBadges } from './unreadBadgeState';
 import { ProfileViewsModal } from '../liveroom/components/ProfileViewsModal';
+import { getProfileViewsPillAccessibilityLabel } from './profileViewAccessibility';
 import { ProfileViewData } from '../liveroom/types';
 import { useProfile } from '../../context/ProfileContext';
 import { TopBar } from '../home/TopBar';
@@ -50,17 +56,6 @@ const formatBadgeCount = (count: number) => (count > 99 ? '99+' : `${count}`);
 const formatTopCounterCount = (count: number) => (count >= 1000 ? `${(count / 1000).toFixed(1)}k` : `${count}`);
 const SIX_HOURS = 1000 * 60 * 60 * 6;
 
-const ACTIVITY_GROUP_CONTEXT_KEYS = [
-  'chatId',
-  'roomId',
-  'postId',
-  'threadId',
-  'commentId',
-  'contextId',
-  'conversationId',
-  'streamId',
-] as const;
-
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -69,21 +64,6 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
     return error;
   }
   return fallbackMessage;
-}
-
-function getActivityContextKey(metadata?: Record<string, any>): string {
-  if (!metadata || typeof metadata !== 'object') {
-    return 'none';
-  }
-
-  for (const key of ACTIVITY_GROUP_CONTEXT_KEYS) {
-    const value = metadata[key];
-    if (value !== undefined && value !== null && `${value}`.trim().length > 0) {
-      return `${key}:${value}`;
-    }
-  }
-
-  return 'none';
 }
 
 function getActivityGroupingKey(notification: ActivityNotification): string {
@@ -124,7 +104,10 @@ export function NotificationPage({
   );
   const hasAnyNotifications = visibleNotifications.length > 0;
   const unreadCount = useMemo(
-    () => visibleNotifications.reduce((count, notification) => count + (notification.read ? 0 : 1), 0),
+    () => visibleNotifications.reduce(
+      (count, notification) => count + (countsTowardUnreadNotificationBadges(notification) ? 1 : 0),
+      0,
+    ),
     [visibleNotifications]
   );
   const canRetry = Boolean(onRetry || onRefresh);
@@ -135,7 +118,7 @@ export function NotificationPage({
     let activity = 0;
 
     visibleNotifications.forEach((notification) => {
-      if (notification.read) return;
+      if (!countsTowardUnreadNotificationBadges(notification)) return;
       if (notification.type === 'friend_request') {
         if (notification.status === 'pending') {
           requests += 1;
@@ -193,6 +176,7 @@ export function NotificationPage({
 
   const [undoItem, setUndoItem] = useState<{ id: string; timeout: ReturnType<typeof setTimeout> } | null>(null);
   const undoOpacity = useRef(new Animated.Value(0)).current;
+  const attemptedProfileViewReadIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setHiddenIds(prev => prev.filter(id => notifications.some(n => n.id === id)));
@@ -220,8 +204,13 @@ export function NotificationPage({
     if (!openProfileViewsOnMount) return;
     setShowProfileViews(true);
   }, [openProfileViewsOnMount]);
-  
-  const { showProfile } = useProfile();
+
+  const unreadProfileViewNotificationIds = useMemo(
+    () => getUnreadProfileViewNotificationIds(visibleNotifications),
+    [visibleNotifications],
+  );
+
+  const { showProfile, isPremiumUser } = useProfile();
 
   const { profileViewData, totalProfileViews } = useMemo(() => {
     const views = visibleNotifications.filter((n): n is ProfileViewNotification => n.type === 'profile_view');
@@ -347,28 +336,32 @@ export function NotificationPage({
   const emptyStateContent = useMemo(() => {
     if (!hasAnyNotifications) {
       return {
-        title: 'No notifications yet',
-        subtitle: "When you get new activity, it'll show up here",
+        title: 'Nothing new yet',
+        subtitle: 'Friend requests, mentions, replies, and live activity will appear here once people interact with you.',
+        ctaLabel: 'Explore live and activity',
       };
     }
 
     if (activeTab === 'requests') {
       return {
         title: 'No friend requests',
-        subtitle: 'New requests will appear here.',
+        subtitle: 'When someone wants to connect with you, this tab is where you will approve or decline it.',
+        ctaLabel: 'Find people to follow',
       };
     }
 
     if (activeTab === 'mentions') {
       return {
         title: 'No mentions',
-        subtitle: "Mentions and replies to you will appear here.",
+        subtitle: 'Replies, mentions, and direct activity that needs your attention will collect here.',
+        ctaLabel: 'Join the conversation',
       };
     }
 
     return {
       title: 'No activity updates',
-      subtitle: 'Announcements and non-mention activity will appear here.',
+      subtitle: 'Announcements, profile views, accepted requests, and other account activity will show up here.',
+      ctaLabel: 'Browse live activity',
     };
   }, [activeTab, hasAnyNotifications]);
 
@@ -390,6 +383,33 @@ export function NotificationPage({
       return false;
     }
   }, [onNotificationAction]);
+
+  useEffect(() => {
+    if (!showProfileViews || unreadProfileViewNotificationIds.length === 0) {
+      return;
+    }
+
+    const pendingIds = unreadProfileViewNotificationIds.filter((id) => {
+      if (attemptedProfileViewReadIdsRef.current.has(id)) {
+        return false;
+      }
+      attemptedProfileViewReadIdsRef.current.add(id);
+      return true;
+    });
+
+    for (const notificationId of pendingIds) {
+      void runNotificationAction(
+        'mark_read',
+        notificationId,
+        null,
+        "Couldn't mark profile views as read.",
+      ).then((success) => {
+        if (!success) {
+          attemptedProfileViewReadIdsRef.current.delete(notificationId);
+        }
+      });
+    }
+  }, [runNotificationAction, showProfileViews, unreadProfileViewNotificationIds]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshError(null);
@@ -424,8 +444,11 @@ export function NotificationPage({
   }, [onRetry, onRefresh]);
 
   const handleAction = useCallback((type: string, id: string, action: any) => {
+    if (shouldMarkNotificationReadBeforeNavigation(type, id, visibleNotifications)) {
+      void runNotificationAction('mark_read', id, null, "Couldn't mark notification as read.");
+    }
     void runNotificationAction(type, id, action, 'Action failed. Please try again.');
-  }, [runNotificationAction]);
+  }, [runNotificationAction, visibleNotifications]);
 
   const handleItemPress = useCallback((item: Notification) => {
     // Always mark as read if not already
@@ -453,44 +476,41 @@ export function NotificationPage({
           });
         }
         break;
+
+      case 'profile_view':
+        if (!isPremiumUser) {
+          setShowProfileViews(true);
+          break;
+        }
+
+        showProfile({
+          id: item.viewer.id,
+          name: item.viewer.name,
+          username: item.viewer.name.toLowerCase().replace(/\s/g, ''),
+          avatarUrl: item.viewer.avatar || '',
+          age: 0,
+          verified: false,
+          country: '',
+          bio: '',
+        });
+        break;
         
       case 'activity':
-        if (item.activityType === 'money_received') {
-          // Navigate to DM with specific cash message
-          void runNotificationAction('navigation', item.id, { 
-            type: 'open_dm', 
-            userId: item.fromUser?.id,
-            userName: item.fromUser?.name,
-            messageId: item.metadata?.messageId
-          }, "Couldn't open this conversation.");
-        } else if (item.activityType === 'mention' || item.activityType === 'reply') {
-          // Request navigation to Chat
-          void runNotificationAction('navigation', item.id, { 
-            type: 'open_chat', 
-            chatId: item.metadata?.chatId,
-            messageId: item.metadata?.messageId,
-            metadata: {
-              chatId: item.metadata?.chatId,
-              messageId: item.metadata?.messageId,
-            },
-          }, "Couldn't open this chat.");
-        } else if (item.activityType === 'live_invite') {
-          const liveId = item.metadata?.liveId ?? item.metadata?.roomId ?? item.metadata?.streamId;
-          if (typeof liveId === 'string' && liveId.trim().length > 0) {
-            void runNotificationAction(
-              'navigation',
-              item.id,
-              {
-                type: 'open_live',
-                liveId: liveId.trim(),
-              },
-              "Couldn't open this live.",
-            );
+        {
+          const navigation = resolveActivityNotificationNavigation(item, 'open');
+          if (navigation) {
+            const fallbackMessage =
+              navigation.type === 'open_live'
+                ? "Couldn't open this live."
+                : navigation.type === 'open_dm'
+                  ? "Couldn't open this conversation."
+                  : "Couldn't open this chat.";
+            void runNotificationAction('navigation', item.id, navigation, fallbackMessage);
           }
         }
         break;
     }
-  }, [runNotificationAction, showProfile]);
+  }, [isPremiumUser, runNotificationAction, showProfile]);
 
   const handleDelete = useCallback((id: string) => {
     setHiddenIds(prev => (prev.includes(id) ? prev : [...prev, id]));
@@ -534,8 +554,15 @@ export function NotificationPage({
     void runNotificationAction('mark_read', id, null, "Couldn't mark notification as read.");
   }, [runNotificationAction]);
 
+  const handleClearAll = useCallback(() => {
+    if (!onClearAll || unreadCount <= 0) {
+      return;
+    }
 
-
+    void Promise.resolve(onClearAll()).catch((clearError) => {
+      toast.error(getErrorMessage(clearError, "Couldn't mark all notifications as read."));
+    });
+  }, [onClearAll, unreadCount]);
   const handleTabChange = useCallback((tab: NotificationTab) => {
     setActiveTab(tab);
   }, []);
@@ -572,6 +599,7 @@ export function NotificationPage({
       <View style={styles.header} onLayout={handleHeaderLayout}>
         <TopBar
           title="Notifications"
+          variant="page"
           actions={
             <>
               <CurrencyPill
@@ -579,7 +607,24 @@ export function NotificationPage({
                 label={formatTopCounterCount(totalProfileViews)}
                 color={colors.accentPremium}
                 onPress={() => setShowProfileViews(true)}
+                accessibilityLabel={getProfileViewsPillAccessibilityLabel(
+                  totalProfileViews,
+                  unreadProfileViewNotificationIds.length,
+                )}
+                accessibilityHint="Opens the profile views list."
+                showDot={unreadProfileViewNotificationIds.length > 0}
               />
+              {onClearAll && unreadCount > 0 ? (
+                <Pressable
+                  style={styles.markAllPill}
+                  onPress={handleClearAll}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Mark all notifications as read"
+                >
+                  <AppText style={styles.markAllPillText}>Mark all</AppText>
+                </Pressable>
+              ) : null}
               <Pressable
                 style={styles.settingsPill}
                 onPress={() => setShowSettings(true)}
@@ -705,7 +750,7 @@ export function NotificationPage({
                     void runNotificationAction('navigation', '', { type: 'explore' }, "Couldn't open Live Rooms.");
                   }}
                 >
-                  <AppText style={styles.emptyCtaText}>Explore Live Rooms</AppText>
+                  <AppText style={styles.emptyCtaText}>{emptyStateContent.ctaLabel}</AppText>
                 </Pressable>
               ) : null}
             </View>
@@ -719,7 +764,7 @@ export function NotificationPage({
         onClose={() => setShowProfileViews(false)}
         totalViews={totalProfileViews}
         profileViewData={profileViewData}
-        isPremiumUser={true}
+        isPremiumUser={isPremiumUser}
       />
 
       {/* Announcement Modal */}
@@ -755,12 +800,12 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
     zIndex: 10,
   },
   settingsPill: {
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
@@ -770,13 +815,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  markAllPill: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markAllPillText: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
   listContent: {
     paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.xl * 2,
   },
   rowWrapper: {
     marginHorizontal: spacing.sm,
-    marginBottom: 2,
+    marginBottom: spacing.xs,
   },
   sectionHeader: {
     paddingHorizontal: spacing.md,
@@ -851,7 +912,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 100,
-    gap: spacing.sm,
+    gap: spacing.smPlus,
   },
   emptyText: {
     color: colors.textPrimary,
@@ -863,6 +924,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     paddingHorizontal: spacing.xl,
+    maxWidth: 320,
+    lineHeight: 20,
   },
   emptyCta: {
     marginTop: spacing.lg,
@@ -885,10 +948,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     padding: spacing.xxs,
     paddingHorizontal: spacing.sm,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: colors.borderSubtle,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   tabItem: {
     flex: 1,
@@ -902,10 +965,12 @@ const styles = StyleSheet.create({
   },
   tabItemActive: {
     backgroundColor: colors.surface,
-    shadowColor: colors.background,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    shadowColor: colors.accentPrimary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
     elevation: 2,
   },
   tabLabel: {
@@ -915,6 +980,7 @@ const styles = StyleSheet.create({
   },
   tabLabelActive: {
     color: colors.textPrimary,
+    fontWeight: '700',
   },
   tabBadge: {
     minWidth: 20,

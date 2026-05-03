@@ -10,11 +10,14 @@ import {
   isR2Configured,
 } from "./r2.js";
 import { createJwtVerifyOptions, verifyViewerUserId } from "./auth.js";
+import { createDemoLiveStore } from "./demoLiveState.js";
+import { createQaGuestAuthHelper } from "./qaGuestAuth.js";
+import { createRtcServer } from "./rtc.js";
 
 const port = Number.parseInt(process.env.PORT ?? "3000", 10) || 3000;
-const authJwksUrl = (process.env.AUTH_JWKS_URL ?? "").trim();
-const authJwtIssuer = (process.env.AUTH_JWT_ISSUER ?? "").trim();
-const authJwtAudienceList = (process.env.AUTH_JWT_AUDIENCE ?? "")
+const authJwksUrl = (process.env.CLERK_JWKS_URL ?? process.env.AUTH_JWKS_URL ?? "").trim();
+const authJwtIssuer = (process.env.CLERK_JWT_ISSUER ?? process.env.AUTH_JWT_ISSUER ?? "").trim();
+const authJwtAudienceList = (process.env.CLERK_JWT_AUDIENCE ?? process.env.AUTH_JWT_AUDIENCE ?? "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
@@ -27,11 +30,14 @@ const jwtVerifyOptions =
         audienceList: authJwtAudienceList,
       })
     : null;
+const qaGuestAuthHelper = createQaGuestAuthHelper(process.env);
+const demoLiveStore = createDemoLiveStore();
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 12;
 const MAX_BYTES_BY_MEDIA_TYPE = {
   profile: 20 * 1024 * 1024,
+  verification: 20 * 1024 * 1024,
   chat: 20 * 1024 * 1024,
   image: 20 * 1024 * 1024,
   audio: 50 * 1024 * 1024,
@@ -76,6 +82,22 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendError(res, error, fallbackMessage) {
+  const statusCode =
+    error && typeof error === "object" && "statusCode" in error
+      ? Number(error.statusCode) || 500
+      : 500;
+  const message =
+    error instanceof Error && error.message
+      ? error.message
+      : fallbackMessage;
+  const payload =
+    error && typeof error === "object" && "details" in error
+      ? { error: message, details: error.details }
+      : { error: message };
+  sendJson(res, statusCode, payload);
+}
+
 async function readJsonBody(req) {
   const chunks = [];
   for await (const chunk of req) {
@@ -114,7 +136,18 @@ function getBearerToken(req) {
   return normalizedToken ? normalizedToken : null;
 }
 
-async function requireViewerUserId(req) {
+async function verifyAnyViewerUserId(token) {
+  if (qaGuestAuthHelper.enabled) {
+    try {
+      const qaGuest = await qaGuestAuthHelper.verifyToken(token);
+      if (qaGuest?.subject) {
+        return qaGuest.subject;
+      }
+    } catch {
+      // Fall through to the primary JWT verifier.
+    }
+  }
+
   if (!jwks) {
     throw Object.assign(new Error("Auth JWT verification is not configured."), { statusCode: 503 });
   }
@@ -122,13 +155,17 @@ async function requireViewerUserId(req) {
     throw Object.assign(new Error("Auth JWT audience is not configured."), { statusCode: 503 });
   }
 
+  return await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
+}
+
+async function requireViewerUserId(req) {
   const token = getBearerToken(req);
   if (!token) {
     throw Object.assign(new Error("Missing bearer token."), { statusCode: 401 });
   }
 
   try {
-    return await verifyViewerUserId({ token, jwks, jwtVerifyOptions });
+    return await verifyAnyViewerUserId(token);
   } catch (error) {
     const message =
       error instanceof Error && error.message
@@ -220,7 +257,7 @@ function validateMimeForMediaType(mediaType, contentType) {
     });
   }
 
-  if (["profile", "chat", "image"].includes(normalizedType) && !contentType.startsWith("image/")) {
+  if (["profile", "verification", "chat", "image"].includes(normalizedType) && !contentType.startsWith("image/")) {
     throw Object.assign(new Error(`"${normalizedType}" uploads must use an image content type.`), {
       statusCode: 415,
     });
@@ -272,6 +309,76 @@ function validateUploadRequest(body) {
   };
 }
 
+function emptyAppSnapshot() {
+  return {
+    lives: [],
+    boostLeaderboard: [],
+    knownLiveUsers: [],
+    livePresence: [],
+    socialUsers: [],
+    acceptedFriendIds: [],
+    notifications: [],
+    videos: [],
+    tracks: [],
+    playlists: [],
+    artists: [],
+    conversations: [],
+    threadSeedMessagesByUserId: {},
+    searchIndex: {
+      users: [],
+      conversations: [],
+      videos: [],
+      tracks: [],
+    },
+  };
+}
+
+async function handleRailwayApiRequest(req, res, url) {
+  const pathname = url.pathname;
+
+  if (req.method === "GET" && (pathname === "/snapshot" || pathname === "/snapshot/patch")) {
+    await requireViewerUserId(req);
+    sendJson(res, 200, {
+      data: emptyAppSnapshot(),
+      source: "railway",
+    });
+    return true;
+  }
+
+  if (
+    req.method === "GET" &&
+    (pathname === "/api/social/snapshot" ||
+      pathname === "/api/media/snapshot" ||
+      pathname === "/api/messages/snapshot")
+  ) {
+    await requireViewerUserId(req);
+    sendJson(res, 200, {
+      data: emptyAppSnapshot(),
+      source: "railway",
+    });
+    return true;
+  }
+
+  if (
+    (req.method === "POST" || req.method === "DELETE") &&
+    (pathname.startsWith("/api/social/") ||
+      pathname.startsWith("/api/messages/") ||
+      pathname.startsWith("/api/media/"))
+  ) {
+    const viewerUserId = await requireViewerUserId(req);
+    const body = await readJsonBody(req);
+    sendJson(res, 200, {
+      ok: true,
+      source: "railway",
+      viewerUserId,
+      received: body,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 const server = http.createServer(async (req, res) => {
   setCorsHeaders(res);
 
@@ -291,10 +398,198 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
-      service: "upload-signer",
+      service: "vulu-railway-backend",
       storageReady: isR2Configured,
+      rtcReady: rtcServer.health.enabled,
+      rtcAuthReady: rtcServer.health.authReady,
+      qaAuthReady: false,
+      qaGuestAuthReady: qaGuestAuthHelper.enabled,
     });
     return;
+  }
+
+  try {
+    if (await handleRailwayApiRequest(req, res, url)) {
+      return;
+    }
+  } catch (error) {
+    sendError(res, error, "Railway API request failed.");
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/qa/guest-session") {
+    try {
+      const body = await readJsonBody(req);
+      const payload = await qaGuestAuthHelper.createSession(body, getClientIp(req));
+      sendJson(res, 200, payload);
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to create QA guest session.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/demo/login") {
+    try {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, demoLiveStore.login(body));
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to start demo session.");
+      return;
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/demo/state") {
+    try {
+      sendJson(
+        res,
+        200,
+        demoLiveStore.getState({
+          username: url.searchParams.get("username"),
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to load demo state.");
+      return;
+    }
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/demo/rooms/")) {
+    try {
+      const roomId = decodeURIComponent(url.pathname.slice("/demo/rooms/".length));
+      sendJson(
+        res,
+        200,
+        demoLiveStore.getRoom({
+          roomId,
+          username: url.searchParams.get("username"),
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to load demo room.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/demo/rooms") {
+    try {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, demoLiveStore.createRoom(body));
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to create demo room.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/start") && url.pathname.startsWith("/demo/rooms/")) {
+    try {
+      const roomId = decodeURIComponent(
+        url.pathname.slice("/demo/rooms/".length, -"/start".length),
+      );
+      const body = await readJsonBody(req);
+      sendJson(
+        res,
+        200,
+        demoLiveStore.startRoom({
+          roomId,
+          username: body.username,
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to start demo room.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/join") && url.pathname.startsWith("/demo/rooms/")) {
+    try {
+      const roomId = decodeURIComponent(
+        url.pathname.slice("/demo/rooms/".length, -"/join".length),
+      );
+      const body = await readJsonBody(req);
+      sendJson(
+        res,
+        200,
+        demoLiveStore.joinRoom({
+          roomId,
+          username: body.username,
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to join demo room.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/leave") && url.pathname.startsWith("/demo/rooms/")) {
+    try {
+      const roomId = decodeURIComponent(
+        url.pathname.slice("/demo/rooms/".length, -"/leave".length),
+      );
+      const body = await readJsonBody(req);
+      sendJson(
+        res,
+        200,
+        demoLiveStore.leaveRoom({
+          roomId,
+          username: body.username,
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to leave demo room.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/invite") && url.pathname.startsWith("/demo/rooms/")) {
+    try {
+      const roomId = decodeURIComponent(
+        url.pathname.slice("/demo/rooms/".length, -"/invite".length),
+      );
+      const body = await readJsonBody(req);
+      sendJson(
+        res,
+        200,
+        demoLiveStore.inviteUser({
+          roomId,
+          username: body.username,
+          targetUsername: body.targetUsername,
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to invite demo user.");
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname.endsWith("/respond") && url.pathname.startsWith("/demo/invites/")) {
+    try {
+      const inviteId = decodeURIComponent(
+        url.pathname.slice("/demo/invites/".length, -"/respond".length),
+      );
+      const body = await readJsonBody(req);
+      sendJson(
+        res,
+        200,
+        demoLiveStore.respondToInvite({
+          inviteId,
+          username: body.username,
+          accept: body.accept === true,
+        }),
+      );
+      return;
+    } catch (error) {
+      sendError(res, error, "Failed to respond to demo invite.");
+      return;
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/presign") {
@@ -317,7 +612,7 @@ const server = http.createServer(async (req, res) => {
       });
 
       console.log(
-        `[upload-signer] presign user=${viewerUserId} size=${size} type=${contentType} key=${objectKey}`,
+        `[railway-backend] presign user=${viewerUserId} size=${size} type=${contentType} key=${objectKey}`,
       );
 
       sendJson(res, 200, {
@@ -332,15 +627,7 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     } catch (error) {
-      const statusCode =
-        error && typeof error === "object" && "statusCode" in error
-          ? Number(error.statusCode) || 500
-          : 500;
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "Failed to create upload URL.";
-      sendJson(res, statusCode, { error: message });
+      sendError(res, error, "Failed to create upload URL.");
       return;
     }
   }
@@ -348,8 +635,23 @@ const server = http.createServer(async (req, res) => {
   sendJson(res, 404, { error: "Not found." });
 });
 
+const rtcServer = createRtcServer(server, {
+  enabled: process.env.RTC_ENABLE ?? "1",
+  topology: process.env.RTC_TOPOLOGY ?? "mesh",
+  maxActivePublishers: process.env.RTC_MAX_ACTIVE_PUBLISHERS,
+  inviteTtlMs: process.env.RTC_INVITE_TTL_MS,
+  stunUrls: process.env.RTC_STUN_URLS,
+  turnUrls: process.env.RTC_TURN_URLS,
+  turnSecret: process.env.RTC_TURN_SECRET,
+  turnTtlSeconds: process.env.RTC_TURN_TTL_SECONDS,
+  enableWebScreenshare: process.env.RTC_ENABLE_WEB_SCREENSHARE,
+  enableNativeScreenshare: process.env.RTC_ENABLE_NATIVE_SCREENSHARE,
+  debugOverlay: process.env.RTC_DEBUG_OVERLAY,
+  verifyAuthToken: async (token) => verifyAnyViewerUserId(token),
+});
+
 server.listen(port, () => {
   console.log(
-    `[upload-signer] Listening on port ${port}. JWT auth ${jwks ? "enabled" : "disabled"}; R2 ${isR2Configured ? "ready" : "not configured"}.`,
+    `[railway-backend] Listening on port ${port}. Clerk JWT auth ${jwks ? "enabled" : "disabled"}; R2 ${isR2Configured ? "ready" : "not configured"}; RTC ${rtcServer.enabled ? "enabled" : "disabled"}; QA guest auth ${qaGuestAuthHelper.enabled ? "enabled" : "disabled"}.`,
   );
 });

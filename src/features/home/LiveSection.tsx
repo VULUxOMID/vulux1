@@ -48,6 +48,9 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
 
   const handleOpenLive = (item: LiveItem) => {
     hapticTap();
+    if (item.id.startsWith('preview-live-')) {
+      return;
+    }
     const didJoinLive = switchLiveRoom(item); // Set global state
     if (!didJoinLive) {
       return;
@@ -63,8 +66,9 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
   return (
     <View style={styles.liveSection}>
       <View style={styles.liveHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-          <AppText variant="h3">Live now</AppText>
+        <View style={styles.headerTitleRow}>
+          <AppText variant="h3" style={styles.headerTitle}>Live now</AppText>
+          <View style={styles.headerDot} />
         </View>
       </View>
       {loading ? (
@@ -81,6 +85,12 @@ export function LiveSection({ lives, loading = false }: { lives: LiveItem[]; loa
       )}
     </View>
   );
+}
+
+function formatViewerCount(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return `${value}`;
 }
 
 function LivePreviewGallery({ images, height, width }: { images: string[]; height: number; width: number }) {
@@ -235,9 +245,10 @@ function BoostedLightning({ size }: { size: number }) {
 }
 
 function FeaturedLiveCard({ item, onPress }: { item: LiveItem; onPress: () => void }) {
-  const displayImages = (item.hosts?.length > 0 ? item.hosts.map((h) => h.avatar) : item.images).filter(
+  const displayImages = item.images.filter(
     (image) => typeof image === 'string' && image.trim().length > 0,
   );
+  const host = item.hosts[0];
   const animatedValue = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -276,16 +287,27 @@ function FeaturedLiveCard({ item, onPress }: { item: LiveItem; onPress: () => vo
       <Pressable onPress={onPress}>
         <View style={styles.cardImageContainer}>
           <LivePreviewGallery images={displayImages} height={220} width={FEATURED_WIDTH} />
-        </View>
-        
-        <View style={styles.featuredFooter}>
-          <AppText style={styles.featuredTitle} numberOfLines={1}>{item.title}</AppText>
-          <View style={styles.footerRow}>
-            <View style={styles.viewerBadge}>
-              <Ionicons name="people" size={19} color={item.boosted ? colors.accentDanger : colors.textSecondary} />
-              <AppText style={[styles.featuredViewerText, item.boosted && { color: colors.accentDanger }]}>{item.viewers}</AppText>
+          <View style={styles.cardOverlay} />
+          <View style={styles.cardTopBadges}>
+            <View style={styles.liveBadge}>
+              <View style={styles.liveBadgeDot} />
+              <AppText variant="micro" style={styles.liveBadgeText}>LIVE</AppText>
             </View>
-            {item.boosted && <BoostedLightning size={16} />}
+            <View style={styles.viewerPill}>
+              <Ionicons name="eye-outline" size={12} color={colors.textPrimary} />
+              <AppText variant="micro" style={styles.viewerPillText}>{formatViewerCount(item.viewers)}</AppText>
+            </View>
+          </View>
+          <View style={styles.featuredContent}>
+            <AppText style={styles.featuredTitle} numberOfLines={2}>{item.title}</AppText>
+            <View style={styles.hostRow}>
+              <View style={styles.hostAvatarWrap}>
+                {host?.avatar ? <Image source={{ uri: host.avatar }} style={styles.hostAvatar} /> : null}
+              </View>
+              <AppText variant="tinyBold" style={styles.hostHandle}>
+                @{(host?.username || host?.name || 'live').toLowerCase()}
+              </AppText>
+            </View>
           </View>
         </View>
       </Pressable>
@@ -294,9 +316,10 @@ function FeaturedLiveCard({ item, onPress }: { item: LiveItem; onPress: () => vo
 }
 
 function LiveGridCard({ item, onPress }: { item: LiveItem; onPress: () => void }) {
-  const displayImages = (item.hosts?.length > 0 ? item.hosts.map((h) => h.avatar) : item.images).filter(
+  const displayImages = item.images.filter(
     (image) => typeof image === 'string' && image.trim().length > 0,
   );
+  const host = item.hosts[0];
   const animatedValue = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -335,18 +358,27 @@ function LiveGridCard({ item, onPress }: { item: LiveItem; onPress: () => void }
       <Pressable onPress={onPress}>
         <View style={styles.cardImageContainer}>
           <LivePreviewGallery images={displayImages} height={160} width={CARD_WIDTH} />
-        </View>
-        
-        <View style={styles.gridFooter}>
-          <AppText style={styles.gridTitle} numberOfLines={1}>
-            {item.title}
-          </AppText>
-          <View style={styles.footerRow}>
-            <View style={styles.viewerBadge}>
-              <Ionicons name="people" size={14} color={item.boosted ? colors.accentDanger : colors.textSecondary} />
-              <AppText style={[styles.gridViewerText, item.boosted && { color: colors.accentDanger }]}>{item.viewers}</AppText>
+          <View style={styles.cardOverlay} />
+          <View style={styles.gridCardContent}>
+            <View style={styles.gridBadgeRow}>
+              <AppText variant="micro" style={styles.gridTag}>
+                Live
+              </AppText>
+              <View style={styles.viewerMini}>
+                <Ionicons name="eye-outline" size={10} color={colors.textPrimary} />
+                <AppText variant="micro" style={styles.viewerPillText}>
+                  {formatViewerCount(item.viewers)}
+                </AppText>
+              </View>
             </View>
-            {item.boosted && <BoostedLightning size={12} />}
+            <View>
+              <AppText style={styles.gridTitle} numberOfLines={1}>
+                {item.title}
+              </AppText>
+              <AppText variant="micro" style={styles.gridHandle}>
+                @{(host?.username || host?.name || 'live').toLowerCase()}
+              </AppText>
+            </View>
           </View>
         </View>
       </Pressable>
@@ -370,6 +402,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: spacing.xs,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  headerTitle: {
+    textTransform: 'uppercase',
+  },
+  headerDot: {
+    width: 10,
+    height: 10,
+    backgroundColor: colors.accentDanger,
   },
   
   // Gallery
@@ -416,17 +461,11 @@ const styles = StyleSheet.create({
   cardImageContainer: {
     borderRadius: radius.xl,
     overflow: 'hidden',
+    position: 'relative',
   },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginTop: 4,
-  },
-  viewerBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3.5,
+  cardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.24)',
   },
   featuredCard: {
     width: FEATURED_WIDTH,
@@ -434,26 +473,92 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     overflow: 'hidden',
     marginBottom: spacing.md,
-    borderWidth: 2,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
-  featuredFooter: {
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    gap: 4,
+  cardTopBadges: {
+    position: 'absolute',
+    top: spacing.md,
+    left: spacing.md,
+    right: spacing.md,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(0, 0, 0, 0.76)',
+    borderWidth: 1,
+    borderColor: colors.accentDanger,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  liveBadgeDot: {
+    width: 6,
+    height: 6,
+    backgroundColor: colors.accentDanger,
+  },
+  liveBadgeText: {
+    color: colors.accentDanger,
+  },
+  viewerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(0,0,0,0.76)',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  viewerMini: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  viewerPillText: {
+    color: colors.textPrimary,
+  },
+  featuredContent: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.lg,
+    gap: spacing.sm,
   },
   featuredTitle: {
     fontWeight: '800',
-    fontSize: 16,
+    fontSize: 28,
     color: colors.textPrimary,
-    lineHeight: 20,
+    lineHeight: 30,
     letterSpacing: -0.3,
   },
-  featuredViewerText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '700',
+  hostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  hostAvatarWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceAlt,
+  },
+  hostAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+  hostHandle: {
+    color: colors.textOnDarkStrong,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   gridCard: {
     width: CARD_WIDTH,
@@ -461,26 +566,37 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     overflow: 'hidden',
     marginBottom: spacing.sm,
-    borderWidth: 2,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
   },
-  gridFooter: {
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
-    paddingHorizontal: spacing.md,
-    gap: 2,
+  gridCardContent: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    top: spacing.md,
+    bottom: spacing.md,
+    justifyContent: 'space-between',
+  },
+  gridBadgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  gridTag: {
+    color: colors.accentDanger,
+    textTransform: 'uppercase',
   },
   gridTitle: {
     fontWeight: '800',
-    fontSize: 16,
+    fontSize: 13,
     color: colors.textPrimary,
-    lineHeight: 20,
+    lineHeight: 16,
     letterSpacing: -0.3,
   },
-  gridViewerText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '700',
+  gridHandle: {
+    color: colors.textOnDarkMuted,
+    marginTop: 2,
+    textTransform: 'uppercase',
   },
   
   // Badges

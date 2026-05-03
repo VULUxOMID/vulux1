@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef, useMemo } from 'react';
-import { useAuth as useSessionAuth } from '../../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../../auth/clerkSession';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import type { AudioPlayer } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import { Track, Playlist, Artist } from '../types';
 import { useMusicCatalogRepo } from '../../../data/provider';
@@ -10,6 +11,9 @@ import {
   fetchAccountState as fetchBackendAccountState,
   upsertAccountState as upsertBackendAccountState,
 } from '../../../data/adapters/backend/accountState';
+import { formatPlaybackErrorForUser, resolveYoutubeTrackPlaybackUrl } from '../services/youtubeAudioApi';
+import { recordRecentYoutubePlay } from '../searchHistory';
+import { toast } from '../../../components/Toast';
 
 const PLAYLISTS_STORAGE_KEY = '@vulu_music_playlists';
 const LIKED_SONGS_STORAGE_KEY = '@vulu_music_liked_songs';
@@ -134,7 +138,32 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
 
   const playerRef = useRef<AudioPlayer | null>(null);
+  /** Bumps when starting new playback so overlapping async work cannot leave two players playing. */
+  const playbackSessionRef = useRef(0);
   const backendPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const beginPlaybackSession = () => {
+    playbackSessionRef.current += 1;
+    return playbackSessionRef.current;
+  };
+
+  const isCurrentPlaybackSession = (session: number) => session === playbackSessionRef.current;
+
+  const disposeCurrentPlayer = () => {
+    const player = playerRef.current;
+    if (!player) return;
+    try {
+      player.pause();
+    } catch {
+      // ignore
+    }
+    try {
+      player.remove();
+    } catch {
+      // ignore
+    }
+    playerRef.current = null;
+  };
 
   // Initialize Audio
   useEffect(() => {
@@ -173,9 +202,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
     loadData();
 
     return () => {
-      if (playerRef.current) {
-        playerRef.current.remove();
-      }
+      disposeCurrentPlayer();
     };
   }, []);
 
@@ -335,18 +362,22 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
     userId,
   ]);
 
-  const loadAndPlaySound = async (track: Track, shouldPlay = true) => {
+  const resolvePlayableTrack = async (track: Track): Promise<Track> => {
+    if (track.url?.trim()) {
+      return track;
+    }
+    if (track.source === 'youtube-audio' || track.id.startsWith('yt:')) {
+      return resolveYoutubeTrackPlaybackUrl(track);
+    }
+    return track;
+  };
+
+  const loadAndPlaySound = async (track: Track, shouldPlay = true, session?: number): Promise<boolean> => {
+    if (session !== undefined && !isCurrentPlaybackSession(session)) {
+      return false;
+    }
     try {
-      if (playerRef.current) {
-        try {
-          playerRef.current.remove();
-        } catch (e) {
-          if (__DEV__) {
-            console.warn('Failed to cleanup previous player:', e instanceof Error ? e.message : 'Unknown error');
-          }
-        }
-        playerRef.current = null;
-      }
+      disposeCurrentPlayer();
 
       // If track URL is missing, skip playback.
       if (!track.url) {
@@ -354,7 +385,7 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
           console.warn('No URL for track:', track.title);
         }
         setIsPlaying(false);
-        return;
+        return false;
       }
 
       // Check if track is offline
@@ -363,31 +394,74 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
       if (offlineTrackIds.has(track.id) && fs.documentDirectory) {
         const fileUri = `${fs.documentDirectory}track_${track.id}.mp3`;
         const fileInfo = await fs.getInfoAsync(fileUri);
+        if (session !== undefined && !isCurrentPlaybackSession(session)) {
+          return false;
+        }
         if (fileInfo.exists) {
           sourceUrl = fileUri;
         }
       }
 
+      if (session !== undefined && !isCurrentPlaybackSession(session)) {
+        return false;
+      }
+
       const player = createAudioPlayer(sourceUrl);
+
+      if (session !== undefined && !isCurrentPlaybackSession(session)) {
+        try {
+          player.remove();
+        } catch {
+          // ignore
+        }
+        return false;
+      }
+
       playerRef.current = player;
-      
+
       if (player) {
         player.loop = repeatMode === 'one';
         if (shouldPlay) {
           player.play();
         }
         setIsPlaying(shouldPlay);
+        return true;
       }
+      return false;
     } catch (error) {
       if (__DEV__) {
         console.error('Error loading sound:', error instanceof Error ? error.message : 'Unknown error');
       }
       setIsPlaying(false);
+      return false;
     }
   };
 
   const playTrack = async (track: Track, contextQueue?: Track[]) => {
+    const session = beginPlaybackSession();
+    disposeCurrentPlayer();
     try {
+      setIsBuffering(true);
+
+      if (track.availability === 'region_blocked') {
+        const proceed = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'May be unavailable in your region',
+            'YouTube data suggests this video might be blocked where you are. Try playing anyway?',
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Play', onPress: () => resolve(true) },
+            ],
+          );
+        });
+        if (!proceed) {
+          if (isCurrentPlaybackSession(session)) {
+            setIsBuffering(false);
+          }
+          return;
+        }
+      }
+
       // Determine new queue
       let newQueue = queue;
       if (contextQueue) {
@@ -430,22 +504,53 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
       setCurrentIndex(index !== -1 ? index : 0);
       setCurrentTrack(track);
       setMinimized(false); // Open full player on new track
-      
-      await loadAndPlaySound(track, true);
+
+      const playableTrack = await resolvePlayableTrack(track);
+      if (!isCurrentPlaybackSession(session)) {
+        return;
+      }
+      if (playableTrack.id === track.id) {
+        if (
+          playableTrack.url &&
+          playableTrack.url !== track.url &&
+          (contextQueue || newQueue.length > 0)
+        ) {
+          const updatedQueue = (contextQueue ? [...newQueue] : [...newQueue]).map((item) =>
+            item.id === track.id ? { ...item, ...playableTrack } : item,
+          );
+          setQueue(updatedQueue);
+        }
+      }
+      setCurrentTrack(playableTrack);
+      const started = await loadAndPlaySound(playableTrack, true, session);
+      if (
+        started &&
+        isCurrentPlaybackSession(session) &&
+        playableTrack.source === 'youtube-audio' &&
+        playableTrack.videoId
+      ) {
+        void recordRecentYoutubePlay({
+          videoId: playableTrack.videoId,
+          title: playableTrack.title,
+          artist: playableTrack.artist,
+        });
+      }
     } catch (error) {
       if (__DEV__) {
-        console.error('Error in playTrack:', error instanceof Error ? error.message : 'Unknown error');
+        console.error('Error in playTrack:', error);
+      }
+      toast.error(formatPlaybackErrorForUser(error));
+    } finally {
+      if (isCurrentPlaybackSession(session)) {
+        setIsBuffering(false);
       }
     }
   };
 
   const stopPlayback = () => {
+    beginPlaybackSession();
     try {
-      if (playerRef.current) {
-        playerRef.current.pause();
-        playerRef.current.remove();
-        playerRef.current = null;
-      }
+      disposeCurrentPlayer();
       setCurrentTrack(null);
       setIsPlaying(false);
       setPosition(0);
@@ -501,10 +606,31 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
-    const nextTrack = queue[nextIndex];
-    setCurrentIndex(nextIndex);
-    setCurrentTrack(nextTrack);
-    await loadAndPlaySound(nextTrack, true);
+    const session = beginPlaybackSession();
+    disposeCurrentPlayer();
+    try {
+      setIsBuffering(true);
+      const nextTrack = queue[nextIndex];
+      setCurrentIndex(nextIndex);
+      const playableTrack = await resolvePlayableTrack(nextTrack);
+      if (!isCurrentPlaybackSession(session)) {
+        return;
+      }
+      setCurrentTrack(playableTrack);
+      setQueue((prev) =>
+        prev.map((item, idx) => (idx === nextIndex ? { ...item, ...playableTrack } : item)),
+      );
+      await loadAndPlaySound(playableTrack, true, session);
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Error in playNext:', error);
+      }
+      toast.error(formatPlaybackErrorForUser(error));
+    } finally {
+      if (isCurrentPlaybackSession(session)) {
+        setIsBuffering(false);
+      }
+    }
   };
 
   const playPrevious = async () => {
@@ -531,10 +657,31 @@ export const MusicProvider = ({ children }: { children: ReactNode }) => {
        }
     }
 
-    const prevTrack = queue[prevIndex];
-    setCurrentIndex(prevIndex);
-    setCurrentTrack(prevTrack);
-    await loadAndPlaySound(prevTrack, true);
+    const session = beginPlaybackSession();
+    disposeCurrentPlayer();
+    try {
+      setIsBuffering(true);
+      const prevTrack = queue[prevIndex];
+      setCurrentIndex(prevIndex);
+      const playableTrack = await resolvePlayableTrack(prevTrack);
+      if (!isCurrentPlaybackSession(session)) {
+        return;
+      }
+      setCurrentTrack(playableTrack);
+      setQueue((prev) =>
+        prev.map((item, idx) => (idx === prevIndex ? { ...item, ...playableTrack } : item)),
+      );
+      await loadAndPlaySound(playableTrack, true, session);
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Error in playPrevious:', error);
+      }
+      toast.error(formatPlaybackErrorForUser(error));
+    } finally {
+      if (isCurrentPlaybackSession(session)) {
+        setIsBuffering(false);
+      }
+    }
   };
 
   const toggleShuffle = () => {

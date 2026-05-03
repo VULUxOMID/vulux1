@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 import { useAppIsActive } from '../hooks/useAppIsActive';
 import { useVideoRepo } from '../data/provider';
 import { requestBackendRefresh } from '../data/adapters/backend/refreshBus';
-import { publishVideoCatalogItem } from '../utils/spacetimePersistence';
+import { publishVideoCatalogItem } from '../utils/railwayPersistence';
 
 // --- Types ---
 
@@ -91,7 +91,7 @@ interface VideoContextType {
 const VideoContext = createContext<VideoContextType | undefined>(undefined);
 
 export function VideoProvider({ children }: { children: React.ReactNode }) {
-  const { user, initializing } = useAuth();
+  const { user, initializing, roles } = useAuth();
   const isAppActive = useAppIsActive();
   const videoRepo = useVideoRepo();
   const queriesEnabled =
@@ -102,7 +102,6 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
     [queriesEnabled, videoRepo],
   );
   const [videos, setVideos] = useState<Video[]>([]);
-  const [isCreator, setIsCreator] = useState(false);
   const [likedVideoIds, setLikedVideoIds] = useState<Set<string>>(new Set());
 
   // Mini-player state
@@ -124,13 +123,9 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
     () => Array.from(new Set(videos.map((video) => video.category))) as VideoCategory[],
     [videos],
   );
+  const isCreator = useMemo(() => roles.includes('CREATOR'), [roles]);
 
   // Effects
-  useEffect(() => {
-    // Creator status should come from backend role/flag, not email heuristic.
-    // Use becomeCreator() for manual opt-in.
-  }, [user]);
-
   useEffect(() => {
     if (!user?.uid) {
       setVideos([]);
@@ -221,7 +216,7 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
       requestBackendRefresh({
         scopes: ['videos'],
         source: 'manual',
-        reason: 'video_uploaded_spacetimedb',
+        reason: 'video_uploaded_railway',
       });
     } catch (error) {
       setVideos((prev) => prev.filter((video) => video.id !== optimisticId));
@@ -249,8 +244,7 @@ export function VideoProvider({ children }: { children: React.ReactNode }) {
   }, [likedVideoIds]);
 
   const becomeCreator = async () => {
-    setIsCreator(true);
-    // In real app, API call to update user role
+    throw new Error('Creator access must be enabled by the backend profile role.');
   };
 
   const getVideosByCategory = (category: VideoCategory) => {

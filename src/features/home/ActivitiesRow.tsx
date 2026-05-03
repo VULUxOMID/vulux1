@@ -69,7 +69,7 @@ export function ActivitiesRow({
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
-        snapToInterval={72 + 12} // Width + Gap (72 + 12)
+        snapToInterval={64 + spacing.md}
         snapToAlignment="start"
         decelerationRate="fast"
         scrollEnabled={true}
@@ -159,47 +159,50 @@ function ActivityItem({ friend, onPress }: { friend: Friend; onPress?: () => voi
 const styles = StyleSheet.create({
   container: {
     position: 'relative',
-    marginHorizontal: -spacing.lg,
+    marginTop: spacing.xs,
     zIndex: 1,
   },
   scrollContent: {
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     alignItems: 'flex-start',
   },
   itemContainer: {
     alignItems: 'center',
-    width: 72,
-    gap: 4,
+    width: 60,
+    gap: spacing.xs,
   },
   avatarWrapper: {
-    width: 72,
-    height: 72,
+    width: 60,
+    height: 60,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarContainer: {
-    width: 68,
-    height: 68,
-    borderRadius: 18, // Rounded square
-    borderWidth: 2.5,
-    padding: 2, // Space between border and image
-    backgroundColor: 'transparent',
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    borderWidth: 2,
+    padding: 2,
+    backgroundColor: 'rgba(255,255,255,0.03)',
     overflow: 'hidden',
   },
   avatarImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 14, // Slightly less to fit inside
+    borderRadius: 8,
     backgroundColor: colors.surfaceAlt,
   },
   avatarFallback: {
     backgroundColor: colors.surfaceAlt,
   },
   nameText: {
-    fontSize: 12,
+    fontSize: 10,
+    fontWeight: '600',
     textAlign: 'center',
     width: '100%',
-    color: colors.textSecondary,
-    marginTop: 2,
+    color: colors.textMuted,
+    marginTop: 1,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
   },
 });

@@ -16,7 +16,7 @@ import { ShopEarnTab } from '../../src/features/shop/ShopEarnTab';
 import { ShopWalletTab } from '../../src/features/shop/ShopWalletTab';
 import { WithdrawalModal } from '../../src/features/shop/WithdrawalModal';
 import { ShopTab } from '../../src/features/shop/types';
-import { useAuth as useSessionAuth } from '../../src/auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../src/auth/clerkSession';
 import {
   claimAdReward,
   convertCashToGems,
@@ -38,8 +38,6 @@ export default function ShopScreen() {
 
   const [activeTab, setActiveTab] = useState<ShopTab>('buy');
   const [fuelPaymentType, setFuelPaymentType] = useState<'gems' | 'cash'>('gems');
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [autoRenew, setAutoRenew] = useState(true);
   const [isLoadingAd, setIsLoadingAd] = useState(false);
 
   // Withdrawal Form State
@@ -148,21 +146,6 @@ export default function ShopScreen() {
       },
     });
   };
-
-  const handleSubscribe = () => {
-    setIsSubscribed(true);
-    setAutoRenew(true);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    toast.success('Welcome to Gem+. Enjoy your weekly rewards.');
-  };
-
-  const handleCancelSubscription = useCallback(() => {
-    setAutoRenew(false);
-  }, []);
-
-  const handleResumeSubscription = useCallback(() => {
-    setAutoRenew(true);
-  }, []);
 
   const handleFuelPaymentTypeChange = useCallback(
     (value: 'gems' | 'cash') => {
@@ -322,11 +305,6 @@ export default function ShopScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {activeTab === 'buy' && (
           <ShopBuyTab
-            isSubscribed={isSubscribed}
-            autoRenew={autoRenew}
-            onSubscribe={handleSubscribe}
-            onCancelSubscription={handleCancelSubscription}
-            onResumeSubscription={handleResumeSubscription}
             onWatchAd={handleWatchAd}
             isLoadingAd={isLoadingAd}
             onBuyGems={handleBuyGems}
@@ -378,15 +356,13 @@ export default function ShopScreen() {
 }
 const styles = StyleSheet.create({
   stickyHeader: {
-    backgroundColor: colors.background,
     paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
     paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
   },
   tabContainer: {
     paddingHorizontal: spacing.lg,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
   tabItemTight: {
     paddingVertical: spacing.smMinus,

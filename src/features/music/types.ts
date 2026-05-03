@@ -6,6 +6,10 @@ export interface Track {
   duration: number;
   url: string;
   lyrics?: string;
+  source?: 'youtube-audio' | 'catalog';
+  videoId?: string;
+  /** Set for YouTube rows when videos.list indicates region restrictions (optional UI). */
+  availability?: 'ok' | 'region_blocked' | 'unknown';
 }
 
 export interface Playlist {

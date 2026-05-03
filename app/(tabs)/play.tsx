@@ -27,7 +27,7 @@ const getSlotDimensions = () => {
   const minWidth = 320;
   const maxWidth = 500;
   const clampedWidth = Math.min(Math.max(SCREEN_WIDTH, minWidth), maxWidth);
-  
+
   // Reserve space for side indicators and padding
   const indicatorSpace = 40; // 20px each side
   const paddingSpace = 8; // 4px each side
@@ -38,7 +38,7 @@ const getSlotDimensions = () => {
   const itemHeight = Math.floor(reelHeight / 3);
   const gap = Math.floor(Math.max(2, reelWidth * 0.1)); // Min 2px gap
   const padding = Math.floor(reelWidth * 0.06); // Smaller padding
-  
+
   return { reelWidth, reelHeight, itemHeight, gap, padding, screenWidth: SCREEN_WIDTH };
 };
 
@@ -150,7 +150,7 @@ const useSlotSounds = () => {
 
         const loadedSounds: Record<string, AudioPlayer> = {};
         let successCount = 0;
-        
+
         for (const [key, source] of Object.entries(soundFiles)) {
           try {
             const player = createAudioPlayer(source, { keepAudioSessionActive: true });
@@ -164,7 +164,7 @@ const useSlotSounds = () => {
             }
           }
         }
-        
+
         // Store in ref for cleanup access
         soundsRef.current = loadedSounds;
         if (__DEV__) {
@@ -204,7 +204,7 @@ const useSlotSounds = () => {
       }
       return;
     }
-    
+
     // Use ref to avoid stale closure - sounds state may not be updated yet
     const sound = soundsRef.current[soundName];
     if (sound) {
@@ -302,10 +302,10 @@ export default function PlayScreen() {
     try {
       const lastClaim = await AsyncStorage.getItem(STORAGE_KEYS.LAST_DAILY_CLAIM);
       const storedStreak = await AsyncStorage.getItem(STORAGE_KEYS.STREAK_COUNT);
-      
+
       const today = new Date();
       const streakCount = storedStreak ? parseInt(storedStreak, 10) : 0;
-      
+
       // Validate streak count
       if (isNaN(streakCount) || streakCount < 0) {
         console.warn('Invalid streak count found, resetting to 0');
@@ -321,7 +321,7 @@ export default function PlayScreen() {
           const lastDate = parseISO(lastClaim);
           if (!isSameDay(lastDate, today)) {
             setCanClaimDaily(true);
-            
+
             // Check if streak is broken (more than 1 day difference)
             if (differenceInDays(today, lastDate) > 1) {
               setStreak(0);
@@ -417,10 +417,10 @@ export default function PlayScreen() {
                   </Pressable>
                 </View>
               }>
-                <SlotsGame 
-                  cash={cash} 
-                  onPlay={(bet) => spendCash(bet)} 
-                  onWin={(amount) => addCash(amount)} 
+                <SlotsGame
+                  cash={cash}
+                  onPlay={(bet) => spendCash(bet, { reason: 'Slots play', source: 'slots_game' })}
+                  onWin={(amount) => addCash(amount)}
                   onBack={() => setActiveGame(null)}
                   config={SLOTS_CONFIG}
                 />
@@ -489,29 +489,29 @@ const generateReelStrip = () => {
     { s: 'skull', c: 1 }, { s: 'nuclear', c: 2 }, { s: 'cross', c: 3 },
     { s: 'smile', c: 4 }, { s: 'bug', c: 5 }, { s: 'flash', c: 8 }
   ];
-  
+
   distribution.forEach(({s, c}) => {
     for(let i=0; i<c; i++) strip.push(s);
   });
-  
+
   // Shuffle
   return strip.sort(() => Math.random() - 0.5);
 };
 
 const REEL_STRIPS = Array(5).fill(null).map(() => generateReelStrip());
 
-function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensions }: { 
-  symbols: string[], 
-  spinning: boolean, 
-  delay: number, 
-  stopDelay: number, 
+function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensions }: {
+  symbols: string[],
+  spinning: boolean,
+  delay: number,
+  stopDelay: number,
   winningIndices: boolean[],
   dimensions: ReturnType<typeof getSlotDimensions>
 }) {
   const { itemHeight, reelWidth, reelHeight } = dimensions;
   const translateY = useRef(new Animated.Value(0)).current;
   const [visualSpinning, setVisualSpinning] = useState(false);
-  
+
   const winPulse = useRef(new Animated.Value(1)).current;
   const glowOpacity = useRef(new Animated.Value(0)).current;
   const burstScale = useRef(new Animated.Value(1)).current;
@@ -617,42 +617,42 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
 
   const renderSymbol = (symbol: string, index: number) => {
     const iconData = SLOT_ICONS[symbol as keyof typeof SLOT_ICONS] || SLOT_ICONS['flash'];
-    const isWinning = !visualSpinning && winningIndices[index]; 
+    const isWinning = !visualSpinning && winningIndices[index];
     // Scale icon size based on reel width
     const iconSize = Math.min(48, Math.max(32, Math.floor(reelWidth * 0.65)));
-    
+
     return (
       <View key={index} style={[styles.reelItem, { height: itemHeight }]}>
         <Animated.View style={isWinning ? { transform: [{ scale: winPulse }] } : {}}>
           {/* Primary Glow */}
           <Animated.View style={isWinning ? { opacity: glowOpacity, position: 'absolute' } : { display: 'none' }}>
-            <Ionicons 
-              name={iconData.icon} 
-              size={iconSize} 
-              color={iconData.color} 
+            <Ionicons
+              name={iconData.icon}
+              size={iconSize}
+              color={iconData.color}
               style={{ opacity: 0.5, ...shadowStyle(iconData.color, 20, 1) }}
             />
           </Animated.View>
-          
+
           {/* Burst Glow Layer */}
           <Animated.View style={isWinning ? { opacity: Animated.multiply(glowOpacity, 0.3), transform: [{ scale: burstScale }], position: 'absolute' } : { display: 'none' }}>
-            <Ionicons 
-              name={iconData.icon} 
-              size={iconSize} 
-              color={iconData.color} 
+            <Ionicons
+              name={iconData.icon}
+              size={iconSize}
+              color={iconData.color}
               style={shadowStyle(iconData.color, 30, 1)}
             />
           </Animated.View>
 
-          <Ionicons 
-            name={iconData.icon} 
-            size={iconSize} 
-            color={iconData.color} 
+          <Ionicons
+            name={iconData.icon}
+            size={iconSize}
+            color={iconData.color}
             style={[
-              styles.iconGlow, 
+              styles.iconGlow,
               isWinning && styles.winningSymbol,
               isWinning && { ...shadowStyle(iconData.color, 10, 1), ...textShadowStyle(iconData.color, 10) }
-            ]} 
+            ]}
           />
         </Animated.View>
       </View>
@@ -681,7 +681,7 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
           </View>
         )}
       </Animated.View>
-      
+
       {/* 3D Depth Overlays - Reduced thickness */}
       <LinearGradient
         colors={['rgba(0,0,0,0.9)', 'rgba(0,0,0,0.4)', 'transparent']}
@@ -691,7 +691,7 @@ function SlotReel({ symbols, spinning, delay, stopDelay, winningIndices, dimensi
         colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.9)']}
         style={[styles.reelGradientBottom, styles.pointerEventsNone]}
       />
-      
+
       {/* Glass reflection effect */}
       <View style={[styles.reelGlass, styles.pointerEventsNone]} />
     </View>
@@ -706,7 +706,7 @@ function SlotsGame({
   config,
 }: {
   cash: number;
-  onPlay: (amount: number) => boolean;
+  onPlay: (amount: number) => Promise<boolean>;
   onWin: (amount: number) => void;
   onBack: () => void;
   config: typeof SLOTS_CONFIG;
@@ -724,10 +724,10 @@ function SlotsGame({
     bigWinMultiplier,
     historyWindow,
   } = config;
-  
+
   // Sound effects
   const { playSound, stopSound } = useSlotSounds();
-  
+
   // Get responsive dimensions
   const dimensions = getSlotDimensions();
   const { reelWidth, gap, padding, itemHeight } = dimensions;
@@ -806,12 +806,12 @@ function SlotsGame({
     setFreeSpins(0);
     setBonusTotalWin(0);
     setOverlay({ type: 'none', message: '' });
-    
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     playSound('button');
   }, [playSound]);
 
-  const handleBuyBonus = () => {
+  const handleBuyBonus = async () => {
     if (buyBonusMultiplier <= 0 || freeSpinAward <= 0) {
       toast.info('Bonus mode is not configured.');
       return;
@@ -822,9 +822,9 @@ function SlotsGame({
       toast.warning(`Need ${bonusCost} cash to buy bonus!`);
       return;
     }
-    
+
     // Deduct cost immediately
-    const success = onPlay(bonusCost);
+    const success = await onPlay(bonusCost);
     if (!success) return;
 
     setBonusTotalWin(0);
@@ -868,12 +868,12 @@ function SlotsGame({
   // Add spinning state ref to prevent race conditions
   const isSpinningRef = useRef(false);
 
-  const spin = () => {
+  const spin = async () => {
     // Prevent concurrent spin calls
     if (isSpinningRef.current || spinning) {
       return;
     }
-    
+
     isSpinningRef.current = true;
 
     // Check funds only if NOT in free spins
@@ -883,7 +883,7 @@ function SlotsGame({
         isSpinningRef.current = false;
         return;
       }
-      const success = onPlay(totalBet);
+      const success = await onPlay(totalBet);
       if (!success) {
         isSpinningRef.current = false;
         return;
@@ -895,12 +895,12 @@ function SlotsGame({
     setWinningCells(Array(5).fill(null).map(() => [false, false, false]));
     // Removed heavy haptic feedback
     // Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    
+
     // Start looping spin sound
     playSound('spinLoop', true);
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    
+
     // Spin duration before stopping reels
     timeoutRef.current = setTimeout(() => {
       finalizeSpin();
@@ -919,10 +919,10 @@ function SlotsGame({
         strip[(stopIndex + 2) % strip.length]
       ];
     });
-    
+
     setGrid(newGrid);
     setSpinning(false);
-    
+
     // Schedule stopping sounds relative to when spinning set to false
     // Reels stop at i * 300ms - track timeouts for cleanup
     reelStopTimeoutsRef.current.forEach(t => clearTimeout(t));
@@ -932,7 +932,7 @@ function SlotsGame({
             // Removed reel stop sound and haptic feedback
             // playSound('reelStop');
             // Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            
+
             // Stop the loop when the last reel stops
             if (i === 4) {
                 stopSound('spinLoop');
@@ -964,7 +964,7 @@ function SlotsGame({
         const multiplier = SLOT_ICONS[s0 as keyof typeof SLOT_ICONS].multiplier;
         // Simple win calc: BetPerLine * Multiplier * (MatchCount - 2)
         // Adjust multiplier logic as needed
-        const lineWin = betPerLine * multiplier * (matchCount - 2); 
+        const lineWin = betPerLine * multiplier * (matchCount - 2);
         totalWin += lineWin;
         newWinningLines.push(i + 1);
 
@@ -983,10 +983,10 @@ function SlotsGame({
       onWin(totalWin);
       // Removed success haptic feedback
       // Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      
+
       // Removed win sound effect
       // playSound('win');
-      
+
       if (totalWin > totalBet * bigWinMultiplier) {
          // Only alert big win if not in bonus (interferes with flow)
          if (freeSpins === 0) {
@@ -1008,10 +1008,10 @@ function SlotsGame({
     if (freeSpins > 0) {
         const currentBonusWin = bonusTotalWin + totalWin;
         setBonusTotalWin(currentBonusWin);
-        
+
         const remaining = freeSpins - 1;
         setFreeSpins(remaining);
-        
+
         if (remaining === 0) {
             // Bonus Finished - track timeout for cleanup
             if (bonusEndTimeoutRef.current) clearTimeout(bonusEndTimeoutRef.current);
@@ -1029,10 +1029,10 @@ function SlotsGame({
   const showGraph = SCREEN_WIDTH > 350;
 
   return (
-    <ScrollView 
+    <ScrollView
       style={styles.chaosScrollView}
       contentContainerStyle={[
-        styles.chaosContainer, 
+        styles.chaosContainer,
         { paddingBottom: Math.max(insets.bottom, spacing.sm) }
       ]}
       showsVerticalScrollIndicator={false}
@@ -1046,7 +1046,7 @@ function SlotsGame({
         bonusFreeSpins={freeSpinAward}
         buyBonusMultiplier={buyBonusMultiplier}
       />
-      
+
       {/* Header */}
       <SlotsHeader
         onBack={onBack}
@@ -1079,7 +1079,7 @@ function SlotsGame({
             <View style={[styles.machineTextureLine, { top: '25%' }]} />
             <View style={[styles.machineTextureLine, { top: '50%' }]} />
             <View style={[styles.machineTextureLine, { top: '75%' }]} />
-            
+
             {/* Vertical Highlights */}
             <View style={styles.machineTextureVertical} />
             <View style={[styles.machineTextureVertical, { left: '25%' }]} />
@@ -1112,9 +1112,9 @@ function SlotsGame({
                         const y = padding + row * itemHeight + itemHeight / 2;
                         return `${x},${y}`;
                       }).join(' ');
-                      
+
                       return (
-                      <Polyline 
+                      <Polyline
                           key={lineIdx}
                           points={points}
                           stroke={NEON_GREEN}
@@ -1128,12 +1128,12 @@ function SlotsGame({
               </View>
               )}
               {grid.map((reelSymbols, i) => (
-              <SlotReel 
-                  key={i} 
-                  symbols={reelSymbols} 
-                  spinning={spinning} 
-                  delay={i * 50} 
-                  stopDelay={i * 300} 
+              <SlotReel
+                  key={i}
+                  symbols={reelSymbols}
+                  spinning={spinning}
+                  delay={i * 50}
+                  stopDelay={i * 300}
                   winningIndices={winningCells[i]}
                   dimensions={dimensions}
               />
@@ -1175,8 +1175,8 @@ function SlotsGame({
 
       {/* Bonus Buy Button */}
       {freeSpins === 0 && (
-        <Pressable 
-          onPress={handleBuyBonus} 
+        <Pressable
+          onPress={handleBuyBonus}
           style={({ pressed }) => [
             styles.buyBonusBtn,
             pressed && styles.buyBonusBtnPressed

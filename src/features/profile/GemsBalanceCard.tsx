@@ -141,7 +141,7 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     borderRadius: radius.xl,
     paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -155,12 +155,18 @@ const styles = StyleSheet.create({
   balancesRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   balanceItem: {
     flex: 1,
     alignItems: 'center',
     gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.lgMinus,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   iconContainer: {
     width: 40,

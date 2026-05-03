@@ -1,20 +1,9 @@
+import { getConfiguredBackendBaseUrl } from '../../../config/backendBaseUrl';
+
 const DEFAULT_BACKEND_TIMEOUT_MS = 15_000;
 
-function trim(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
-function getBackendBaseUrlFromEnv(): string {
-  return (
-    trim(process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL) ??
-    trim(process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL) ??
-    ''
-  );
-}
-
 function getBackendTimeoutMsFromEnv(): number {
-  const raw = trim(process.env.EXPO_PUBLIC_BACKEND_TIMEOUT_MS);
+  const raw = process.env.EXPO_PUBLIC_RAILWAY_TIMEOUT_MS?.trim();
   if (!raw) return DEFAULT_BACKEND_TIMEOUT_MS;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BACKEND_TIMEOUT_MS;
@@ -61,7 +50,7 @@ export type BackendHttpClient = {
 };
 
 export function createBackendHttpClientFromEnv(): BackendHttpClient | null {
-  const baseUrl = getBackendBaseUrlFromEnv();
+  const baseUrl = getConfiguredBackendBaseUrl();
   if (!baseUrl) {
     return null;
   }

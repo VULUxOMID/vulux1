@@ -1,3 +1,5 @@
+import { getConfiguredRealtimeWsBaseUrl } from '../../../config/backendBaseUrl';
+
 type DataChangedEvent = {
   type: 'data_changed';
   eventId?: string;
@@ -27,20 +29,12 @@ type ConnectOptions = {
   onStatusChange?: (status: BackendRealtimeStatus) => void;
 };
 
-function trim(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
 function getRealtimeBaseUrlFromEnv(): string | null {
-  const httpBaseUrl =
-    trim(process.env.EXPO_PUBLIC_ADMIN_API_BASE_URL) ??
-    trim(process.env.EXPO_PUBLIC_LEGACY_API_BASE_URL);
-  if (!httpBaseUrl) return null;
+  const wsBaseUrl = getConfiguredRealtimeWsBaseUrl().trim();
+  if (!wsBaseUrl) return null;
 
   try {
-    const url = new URL(httpBaseUrl);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = new URL(wsBaseUrl);
     const normalizedPath = url.pathname.replace(/\/+$/, '');
     url.pathname = `${normalizedPath}/realtime`.replace(/\/{2,}/g, '/');
     url.search = '';

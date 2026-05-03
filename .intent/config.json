@@ -1,0 +1,76 @@
+{
+  "scripts": [
+    {
+      "name": "start",
+      "command": "npm run start",
+      "mode": "service",
+      "category": "dev"
+    },
+    {
+      "name": "android",
+      "command": "npm run android",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ios",
+      "command": "npm run ios",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "web",
+      "command": "npm run web",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "build",
+      "command": "npm run build",
+      "mode": "command",
+      "category": "build"
+    },
+    {
+      "name": "dev",
+      "command": "npm run dev",
+      "mode": "service",
+      "category": "dev"
+    },
+    {
+      "name": "test:live-regression",
+      "command": "npm run test:live-regression",
+      "mode": "command",
+      "category": "test"
+    },
+    {
+      "name": "test:event-runtime",
+      "command": "npm run test:event-runtime",
+      "mode": "command",
+      "category": "test"
+    },
+    {
+      "name": "env:check",
+      "command": "npm run env:check",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "env:check:legacy-api",
+      "command": "npm run env:check:legacy-api",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "spacetime:watch",
+      "command": "npm run spacetime:watch",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "smoke:web:auth",
+      "command": "npm run smoke:web:auth",
+      "mode": "command",
+      "category": "other"
+    }
+  ]
+}

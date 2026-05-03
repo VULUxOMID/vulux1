@@ -27,7 +27,7 @@ type WithdrawalModalProps = {
     amountGems: number,
     details: WithdrawalRequest['details'],
     method: WithdrawalMethod
-  ) => boolean;
+  ) => Promise<boolean>;
   minWithdrawalGems?: number;
 };
 
@@ -128,19 +128,27 @@ export const WithdrawalModal = React.memo(function WithdrawalModal({
     setIsSubmitting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    submitTimeoutRef.current = setTimeout(() => {
-      const success = onSubmit(
-        parsedAmount,
-        { fullName, email, phoneNumber },
-        withdrawMethod
-      );
-      setIsSubmitting(false);
+    submitTimeoutRef.current = setTimeout(async () => {
+      try {
+        const success = await onSubmit(
+          parsedAmount,
+          { fullName, email, phoneNumber },
+          withdrawMethod
+        );
+        setIsSubmitting(false);
+        submitTimeoutRef.current = null;
 
-      if (success) {
-        handleClose();
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        toast.success('Withdrawal submitted! Funds will arrive in 2-3 business days.');
-      } else {
+        if (success) {
+          handleClose();
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          toast.success('Withdrawal submitted! Funds will arrive in 2-3 business days.');
+        } else {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          toast.error('Something went wrong. Please try again.');
+        }
+      } catch {
+        setIsSubmitting(false);
+        submitTimeoutRef.current = null;
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         toast.error('Something went wrong. Please try again.');
       }

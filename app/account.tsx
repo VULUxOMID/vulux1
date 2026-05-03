@@ -1,36 +1,34 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Image, ScrollView, StyleSheet, View } from 'react-native';
 
-import { AppScreen, AppText } from '../src/components';
+import { AppScreen, AppText, PageHeader, SectionCard } from '../src/components';
 import { EditValueModal } from '../src/components/EditValueModal';
 import { SettingsRow } from '../src/components/SettingsRow';
 import { toast } from '../src/components/Toast';
 import { useAuth } from '../src/context';
 import { useUserProfile } from '../src/context/UserProfileContext';
-import { colors, spacing } from '../src/theme';
+import { colors, radius, spacing } from '../src/theme';
 import { normalizeImageUri } from '../src/utils/imageSource';
 
-function AccountHeader({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <View style={styles.header}>
-      <Pressable onPress={onBack} style={styles.backButton} hitSlop={12}>
-        <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
-      </Pressable>
-      <AppText variant="h3" style={styles.headerTitle}>{title}</AppText>
-      <View style={styles.headerRight} />
-    </View>
-  );
-}
-
-type FieldType = 'username' | 'name' | 'email' | 'password' | null;
+type FieldType = 'username' | 'name' | null;
 type FieldValidator = (value: string) => string | null;
+type ModalConfig = {
+  title: string;
+  initialValue: string;
+  placeholder?: string;
+  keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'numeric';
+  validate?: FieldValidator;
+};
 
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, updateUserEmail, updateUserPassword, deleteUserAccount } = useAuth();
+  const { user, initializing, deleteUserAccount } = useAuth();
   const { userProfile, updateUserProfile } = useUserProfile();
+
+  if (!initializing && !user) {
+    return <Redirect href="/(auth)/login" />;
+  }
 
   const [editingField, setEditingField] = useState<FieldType>(null);
   
@@ -58,25 +56,6 @@ export default function AccountScreen() {
     return null;
   };
 
-  const validateEmail: FieldValidator = (value) => {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return 'Email is required.';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-      return 'Enter a valid email address.';
-    }
-    return null;
-  };
-
-  const validatePassword: FieldValidator = (value) => {
-    const normalized = value.trim();
-    if (!normalized) return 'Password is required.';
-    if (normalized.length < 8) return 'Password must be at least 8 characters.';
-    if (!/[A-Za-z]/.test(normalized) || !/[0-9]/.test(normalized)) {
-      return 'Password must include letters and numbers.';
-    }
-    return null;
-  };
-
   const handleSaveField = async (value: string) => {
     try {
       if (editingField === 'username') {
@@ -95,21 +74,6 @@ export default function AccountScreen() {
         }
         updateUserProfile({ name: normalized });
         toast.success('Display name updated successfully');
-      } else if (editingField === 'email') {
-        const normalized = value.trim().toLowerCase();
-        const validationError = validateEmail(normalized);
-        if (validationError) {
-          throw new Error(validationError);
-        }
-        await updateUserEmail(normalized);
-        toast.success('Email updated successfully');
-      } else if (editingField === 'password') {
-        const validationError = validatePassword(value);
-        if (validationError) {
-          throw new Error(validationError);
-        }
-        await updateUserPassword(value);
-        toast.success('Password updated successfully');
       }
     } catch (error: any) {
       toast.error(error.message || 'Failed to update');
@@ -119,20 +83,19 @@ export default function AccountScreen() {
 
   const handleDeleteAccount = () => {
     Alert.alert(
-      'Delete Account',
-      'Are you sure you want to delete your account? This action cannot be undone.',
+      'Deactivate Account',
+      'This will mark your account as deactivated and sign you out. Contact support if you need permanent deletion.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Deactivate',
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteUserAccount();
               router.replace('/');
             } catch (error: any) {
-              // Re-authentication might be required
-              toast.error(error.message || 'Failed to delete account. You may need to sign out and sign in again.');
+              toast.error(error.message || 'Failed to deactivate your account.');
             }
           },
         },
@@ -140,12 +103,7 @@ export default function AccountScreen() {
     );
   };
 
-  const handleRestorePurchases = () => {
-    // Restore flow placeholder
-    toast.success('Purchases restored successfully.');
-  };
-
-  const getModalProps = () => {
+  const getModalProps = (): ModalConfig => {
     switch (editingField) {
       case 'username':
         return {
@@ -161,21 +119,6 @@ export default function AccountScreen() {
           placeholder: 'Enter display name',
           validate: validateDisplayName,
         };
-      case 'email':
-        return {
-          title: 'Edit Email',
-          initialValue: user?.email || '',
-          placeholder: 'Enter email',
-          keyboardType: 'email-address' as const,
-          validate: validateEmail,
-        };
-      case 'password':
-        return {
-          title: 'Change Password',
-          initialValue: '',
-          placeholder: 'Enter new password',
-          validate: validatePassword,
-        };
       default:
         return { title: '', initialValue: '', validate: undefined };
     }
@@ -185,10 +128,14 @@ export default function AccountScreen() {
 
   return (
     <AppScreen noPadding style={styles.container}>
-      <AccountHeader 
-        title="Account" 
-        onBack={() => router.back()} 
-      />
+      <View style={styles.headerWrap}>
+        <PageHeader
+          eyebrow="Identity"
+          title="Account"
+          subtitle="Manage the profile details tied to your Vulu account."
+          onBack={() => router.back()}
+        />
+      </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.avatarSection}>
@@ -206,11 +153,7 @@ export default function AccountScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <AppText variant="small" style={styles.sectionTitle}>
-            Account Information
-          </AppText>
-          <View style={styles.sectionContent}>
+        <SectionCard title="Account information" subtitle="Core identity and contact details.">
             <SettingsRow
               label="Username"
               icon="at-outline"
@@ -227,7 +170,8 @@ export default function AccountScreen() {
               label="Email"
               icon="mail-outline"
               value={user?.email || ''}
-              onPress={() => setEditingField('email')}
+              onPress={() => toast.info('Email changes are not available in this build.')}
+              showArrow={false}
             />
             <SettingsRow
               label="Phone"
@@ -236,61 +180,35 @@ export default function AccountScreen() {
               onPress={() => toast.info('Phone number cannot be changed currently.')}
               showArrow={false}
             />
-          </View>
-        </View>
+        </SectionCard>
 
-        <View style={styles.section}>
-          <AppText variant="small" style={styles.sectionTitle}>
-            How you sign into your account
-          </AppText>
-          <View style={styles.sectionContent}>
+        <SectionCard title="Sign-in methods" subtitle="Authentication and password access.">
             <SettingsRow
               label="Password"
               icon="lock-closed-outline"
-              onPress={() => setEditingField('password')}
+              onPress={() => toast.info('Password changes are not available in this build.')}
+              showArrow={false}
             />
-          </View>
-        </View>
+        </SectionCard>
 
-        <View style={styles.section}>
-          <AppText variant="small" style={styles.sectionTitle}>
-            Users
-          </AppText>
-          <View style={styles.sectionContent}>
+        <SectionCard title="People" subtitle="Moderation and blocked user controls.">
             <SettingsRow
               label="Blocked Users"
               icon="remove-circle-outline"
               onPress={() => router.push('/blocked-users')}
             />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <AppText variant="small" style={styles.sectionTitle}>
-            Shop
-          </AppText>
-          <View style={styles.sectionContent}>
-            <SettingsRow
-              label="Restore Purchases"
-              icon="refresh-outline"
-              onPress={handleRestorePurchases}
-            />
-          </View>
-        </View>
+        </SectionCard>
 
         <View style={styles.deleteSection}>
-          <AppText variant="small" style={styles.sectionTitle}>
-            Account Management
-          </AppText>
-          <View style={styles.sectionContent}>
+          <SectionCard title="Danger zone" subtitle="Sensitive account actions.">
             <SettingsRow
-              label="Delete Account"
+              label="Deactivate Account"
               icon="trash-outline"
               onPress={handleDeleteAccount}
               variant="destructive"
               showArrow={false}
             />
-          </View>
+          </SectionCard>
         </View>
       </ScrollView>
 
@@ -300,9 +218,9 @@ export default function AccountScreen() {
         initialValue={modalProps.initialValue}
         placeholder={modalProps.placeholder}
         keyboardType={modalProps.keyboardType || 'default'}
-        secureTextEntry={editingField === 'password'}
+        secureTextEntry={false}
         autoCapitalize={
-          editingField === 'password' || editingField === 'email' || editingField === 'username'
+          editingField === 'username'
             ? 'none'
             : 'sentences'
         }
@@ -318,61 +236,34 @@ export default function AccountScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  headerWrap: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.background,
-  },
-  backButton: {
-    padding: spacing.xs,
-    marginLeft: -spacing.xs,
-  },
-  headerTitle: {
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  headerRight: {
-    width: 32,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   content: {
     padding: spacing.lg,
     gap: spacing.xl,
-  },
-  section: {
-    gap: spacing.sm,
-  },
-  sectionTitle: {
-    color: colors.textMuted,
-    marginLeft: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  sectionContent: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.md,
-    overflow: 'hidden',
+    paddingBottom: spacing.xxxl,
   },
   deleteSection: {
-    marginTop: spacing.md,
-    marginBottom: spacing.xl,
-    gap: spacing.sm,
+    paddingBottom: spacing.md,
   },
   avatarSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.md,
+    backgroundColor: 'rgba(17, 17, 19, 0.9)',
+    borderRadius: radius.xl,
     padding: spacing.lg,
     gap: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: colors.surfaceAlt,
   },
   avatarFallback: {
@@ -384,12 +275,12 @@ const styles = StyleSheet.create({
     gap: spacing.xxs,
   },
   avatarName: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: '700',
     color: colors.textPrimary,
   },
   avatarUsername: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.accentPrimary,
   },
 });

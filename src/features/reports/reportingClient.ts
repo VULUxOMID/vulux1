@@ -1,4 +1,5 @@
-import { spacetimeDb } from '../../lib/spacetime';
+import { readCurrentAuthAccessToken } from '../../auth/currentAuthAccessToken';
+import { getConfiguredBackendBaseUrl } from '../../config/backendBaseUrl';
 
 export type ReportTargetType = 'user' | 'message' | 'live';
 export type ReportReviewStatus = 'open' | 'triaged' | 'resolved' | 'dismissed';
@@ -30,6 +31,9 @@ function normalizeString(value: unknown): string | null {
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
   if (typeof value !== 'string' || value.trim().length === 0) {
     return {};
   }
@@ -79,20 +83,64 @@ function toTimestampMs(value: unknown): number {
   return 0;
 }
 
-function makeClientReportId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+function getReportsBaseUrl(): string {
+  const baseUrl = getConfiguredBackendBaseUrl().trim();
+  if (!baseUrl) {
+    throw new Error('Backend API is not configured.');
+  }
+  return baseUrl.replace(/\/+$/, '');
 }
 
-function getReducer(aliasNames: string[]): ((args: Record<string, unknown>) => Promise<unknown>) {
-  const reducers = spacetimeDb.reducers as Record<string, unknown> | null | undefined;
-  for (const alias of aliasNames) {
-    const reducer = reducers?.[alias];
-    if (typeof reducer === 'function') {
-      return reducer as (args: Record<string, unknown>) => Promise<unknown>;
-    }
+async function readBackendToken(): Promise<string> {
+  const token = normalizeString(await readCurrentAuthAccessToken());
+  if (!token) {
+    throw new Error('Missing auth token.');
+  }
+  return token;
+}
+
+async function parseJsonSafely(response: Response): Promise<Record<string, unknown> | null> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    return null;
   }
 
-  throw new Error(`SpacetimeDB reducer is unavailable: ${aliasNames[0]}`);
+  try {
+    const parsed = await response.json();
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function requestReports<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const token = await readBackendToken();
+  const response = await fetch(`${getReportsBaseUrl()}${path}`, {
+    method,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const payload = await parseJsonSafely(response);
+  if (!response.ok) {
+    const message =
+      payload && typeof payload.message === 'string'
+        ? payload.message
+        : `Reports request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return (payload ?? {}) as T;
 }
 
 function normalizeReportRecord(row: Record<string, unknown>): ReportRecord | null {
@@ -112,37 +160,23 @@ function normalizeReportRecord(row: Record<string, unknown>): ReportRecord | nul
     surface: normalizeString(row.surface) ?? '',
     reason: normalizeString(row.reason) ?? '',
     details: normalizeString(row.details),
-    context: parseJsonRecord(row.contextJson),
+    context: parseJsonRecord(row.context ?? row.contextJson),
     status,
     reviewedBy: normalizeString(row.reviewedBy),
     reviewNotes: normalizeString(row.reviewNotes),
-    reviewedAtIsoUtc: normalizeString(row.reviewedAtIsoUtc),
-    createdAtMs: toTimestampMs(row.createdAt),
-    updatedAtMs: toTimestampMs(row.updatedAt),
+    reviewedAtIsoUtc: normalizeString(row.reviewedAtIsoUtc ?? row.reviewedAt),
+    createdAtMs: toTimestampMs(row.createdAtMs ?? row.createdAt),
+    updatedAtMs: toTimestampMs(row.updatedAtMs ?? row.updatedAt),
   };
 }
 
-function readRowsFromView(viewAliases: string[]): ReportRecord[] {
-  const dbView = spacetimeDb.db as Record<string, unknown>;
-
-  for (const alias of viewAliases) {
-    const table = dbView[alias] as { iter?: () => Iterable<Record<string, unknown>> } | undefined;
-    if (!table || typeof table.iter !== 'function') {
-      continue;
-    }
-
-    return Array.from(table.iter())
-      .map((row) => normalizeReportRecord(row))
-      .filter((row): row is ReportRecord => Boolean(row));
-  }
-
-  return [];
-}
-
-export function readAdminReportQueue(): ReportRecord[] {
-  return readRowsFromView(['adminReportQueue', 'admin_report_queue']).sort(
-    (left, right) => right.updatedAtMs - left.updatedAtMs,
-  );
+export async function listAdminReportQueue(): Promise<ReportRecord[]> {
+  const payload = await requestReports<{ reports?: unknown }>('GET', '/api/reports');
+  const rows = Array.isArray(payload.reports) ? payload.reports : [];
+  return rows
+    .map((row) => (row && typeof row === 'object' ? normalizeReportRecord(row as Record<string, unknown>) : null))
+    .filter((row): row is ReportRecord => Boolean(row))
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
 }
 
 export async function submitReport(input: {
@@ -152,16 +186,16 @@ export async function submitReport(input: {
   reason: string;
   details?: string | null;
   context?: Record<string, unknown>;
+  reportedUserId?: string | null;
 }): Promise<void> {
-  const reducer = getReducer(['submitReport', 'submit_report']);
-  await reducer({
-    id: makeClientReportId('report'),
+  await requestReports('POST', '/api/reports', {
     targetType: input.targetType,
     targetId: input.targetId,
     surface: input.surface,
     reason: input.reason,
     details: normalizeString(input.details) ?? null,
-    contextJson: JSON.stringify(input.context ?? {}),
+    context: input.context ?? {},
+    reportedUserId: normalizeString(input.reportedUserId) ?? null,
   });
 }
 
@@ -170,8 +204,7 @@ export async function reviewReport(input: {
   status: ReportReviewStatus;
   reviewNotes?: string | null;
 }): Promise<void> {
-  const reducer = getReducer(['reviewReport', 'review_report']);
-  await reducer({
+  await requestReports('POST', '/api/reports/review', {
     reportId: input.reportId,
     status: input.status,
     reviewNotes: normalizeString(input.reviewNotes) ?? null,

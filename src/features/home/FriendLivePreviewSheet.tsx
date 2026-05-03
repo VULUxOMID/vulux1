@@ -25,7 +25,7 @@ import { useLive } from '../../context/LiveContext';
 import { FUEL_COSTS, FuelFillAmount, MAX_FUEL_MINUTES } from '../liveroom/types';
 import { hapticTap } from '../../utils/haptics';
 import { normalizeImageUri } from '../../utils/imageSource';
-import { useAuth as useSessionAuth } from '../../auth/spacetimeSession';
+import { useAuth as useSessionAuth } from '../../auth/clerkSession';
 import { purchaseFuelPack } from '../../data/adapters/backend/walletMutations';
 
 // Base screen width for scaling (iPhone 12/13 width)
