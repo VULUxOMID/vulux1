@@ -53,3 +53,10 @@ cd backend
 npm start
 npm run smoke
 ```
+
+Railway backend deploy:
+
+```bash
+npm run railway:deploy:backend
+npm run railway:migrate:backend
+```

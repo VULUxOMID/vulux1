@@ -14,7 +14,9 @@
     "test:dm-regression": "tsx --test src/data/adapters/backend/messagesRepository.regression.test.ts",
     "test:event-runtime": "tsx --test src/features/home/widgets/eventRuntimeConfig.test.ts",
     "env:check": "bash ./scripts/env-check.sh",
-    "smoke:web:auth": "node --env-file=.env.local scripts/qa/run-authenticated-web-smoke.mjs"
+    "smoke:web:auth": "node --env-file=.env.local scripts/qa/run-authenticated-web-smoke.mjs",
+    "railway:deploy:backend": "cd backend && railway up --path-as-root .",
+    "railway:migrate:backend": "cd backend && railway ssh npm run migrate"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.19.31",

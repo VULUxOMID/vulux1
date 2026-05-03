@@ -77,6 +77,15 @@ cd /Users/omid/vulux1/backend
 npm run smoke
 ```
 
+Deploy the Railway backend from the repo root with the guarded backend-root command:
+
+```bash
+npm run railway:deploy:backend
+npm run railway:migrate:backend
+```
+
+Do not run plain `railway up` from the repo root for `vulu-api`; that deploys the Expo app package instead of the backend service.
+
 ## Migration Rule
 
 New product work should target Clerk and Railway only. Do not add new app dependencies on removed platform names or env variables. If a legacy import is still present, treat it as staged migration debt and replace it behind a Railway-backed seam before deleting it.
